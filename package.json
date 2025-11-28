@@ -1,0 +1,23 @@
+{
+  "name": "galactiquebot",
+  "version": "1.0.0",
+  "description": "Bot Discord multi-serveurs pour INTER GALACTIQUE / XIG - gestion dispos, compo, annonces, etc.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "galactiquebot",
+    "inter-galactique"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.0"
+  }
+}
