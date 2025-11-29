@@ -12,9 +12,11 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { getConfigFromInteraction } = require('../utils/config');
 
-const VERSION = 'disponibilites v3.1 FR+snapshot+verrouiller (no-ID)';
+const VERSION = 'disponibilites v3.2 FR+snapshot+verrouiller (no-ID+config)';
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
+const COULEUR = 0xff4db8;
 
 // 🧹 Anti-mentions accidentelles dans les textes
 const sanitize = (t) =>
@@ -76,7 +78,7 @@ module.exports = {
     // 🧵 Salon des rapports / rappels (optionnel)
     .addChannelOption(o =>
       o.setName('salon')
-        .setDescription('Salon où envoyer le rapport/rappel (défaut : salon courant)')
+        .setDescription('Salon où envoyer le rapport/rappel (défaut : salon des rapports ou salon courant)')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
@@ -112,15 +114,31 @@ module.exports = {
     const mode = interaction.options.getString('mode', true);
     const guild = interaction.guild;
 
+    // 🔧 Config dynamique serveur
+    const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
+    const cfgRoles = guildConfig?.roles || {};
+    const rapportChannelId =
+      guildConfig?.channels?.rapport ||
+      guildConfig?.rapportChannelId ||
+      null;
+
+    // Salon cible (rapport / rappel)
     const targetChannel =
       interaction.options.getChannel('salon') ||
+      (rapportChannelId ? guild.channels.cache.get(rapportChannelId) : null) ||
       interaction.channel;
 
     const dispoChannel = interaction.options.getChannel('salon_dispos');
     const messageId = interaction.options.getString('message_id', true);
 
-    const roleJoueur = interaction.options.getRole('role_joueur') || null;
-    const roleEssai  = interaction.options.getRole('role_essai') || null;
+    // Rôles : option > config > null
+    let roleJoueur =
+      interaction.options.getRole('role_joueur') ||
+      (cfgRoles.joueur ? guild.roles.cache.get(cfgRoles.joueur) : null);
+
+    let roleEssai =
+      interaction.options.getRole('role_essai') ||
+      (cfgRoles.essai ? guild.roles.cache.get(cfgRoles.essai) : null);
 
     if (!dispoChannel) {
       return interaction.reply({
@@ -131,7 +149,7 @@ module.exports = {
 
     if (!roleJoueur && !roleEssai) {
       return interaction.reply({
-        content: '❌ Tu dois préciser au moins un rôle (`role_joueur` ou `role_essai`) pour savoir qui est concerné par les dispos.',
+        content: '❌ Aucun rôle joueur/essai trouvé. Fournis `role_joueur` ou `role_essai`, ou configure-les via `/config roles`.',
         flags: MessageFlags.Ephemeral
       });
     }
@@ -153,6 +171,8 @@ module.exports = {
       });
     }
 
+    await guild.members.fetch().catch(() => {});
+
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     // 🔎 Récupération du message de disponibilités
@@ -164,9 +184,6 @@ module.exports = {
         content: `❌ Message de disponibilités introuvable pour **${jour}** (vérifie l’ID et le salon).`
       });
     }
-
-    // Pré-charger les membres
-    await guild.members.fetch().catch(() => {});
 
     const dispoChannelId = dispoChannel.id;
 
@@ -196,7 +213,7 @@ module.exports = {
       });
     }
 
-    // 🎯 Membres éligibles : Joueurs + Essais (selon rôles fournis)
+    // 🎯 Membres éligibles : Joueurs + Essais (selon rôles fournis / config)
     const eligibles = guild.members.cache.filter(m => {
       if (m.user.bot) return false;
       const hasJoueur = roleJoueur ? m.roles.cache.has(roleJoueur.id) : false;
@@ -213,7 +230,7 @@ module.exports = {
     /* --- 🔹 EMBED SIMPLE --- */
     if (mode === 'embed_simple') {
       const embed = new EmbedBuilder()
-        .setColor(0xff4db8)
+        .setColor(COULEUR)
         .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
         .setDescription(
           nonRepondus.size === 0
@@ -239,7 +256,7 @@ module.exports = {
       const absentsAll  = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
 
       const embed = new EmbedBuilder()
-        .setColor(0xff4db8)
+        .setColor(COULEUR)
         .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
         .addFields(
           { name: `✅ Présents (${presentsAll.size})`, value: idsLine(presentsAll) },
