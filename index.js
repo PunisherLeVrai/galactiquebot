@@ -1,0 +1,162 @@
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const {
+  Client,
+  Collection,
+  GatewayIntentBits,
+  ActivityType,
+  EmbedBuilder
+} = require('discord.js');
+
+const { getGlobalConfig, getGuildConfig } = require('./utils/config');
+
+// --- Initialisation du client Discord ---
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// --- Nom du bot depuis la config globale ---
+const globalConfig = getGlobalConfig();
+const BOT_NAME = globalConfig.botName || 'GalactiqueBot';
+
+// --- Chargement des commandes ---
+client.commands = new Collection();
+const commandsPath = path.join(__dirname, 'commands');
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
+for (const file of commandFiles) {
+  const filePath = path.join(commandsPath, file);
+  const command = require(filePath);
+  if (!command?.data?.name) {
+    console.warn(`⚠️ Commande ignorée (pas de data.name) : ${file}`);
+    continue;
+  }
+  client.commands.set(command.data.name, command);
+}
+
+// --- Quand le bot est prêt ---
+client.once('ready', async () => {
+  console.log(`✅ Connecté en tant que ${client.user.tag}`);
+
+  // Statut du bot (visible partout)
+  client.user.setPresence({
+    activities: [{
+      name: `${BOT_NAME} — surveillance des disponibilités`,
+      type: ActivityType.Watching
+    }],
+    status: 'online'
+  });
+
+  console.log(`🟢 ${BOT_NAME} prêt et en ligne !`);
+
+  // Embed "base" de démarrage
+  const baseStartEmbed = new EmbedBuilder()
+    .setColor(0xff4db8)
+    .setTitle(`🚀 ${BOT_NAME.toUpperCase()} EN LIGNE`)
+    .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
+    .setTimestamp();
+
+  // Message de démarrage dans le salon de logs de CHAQUE serveur configuré
+  for (const guild of client.guilds.cache.values()) {
+    const gConfig = getGuildConfig(guild.id);
+    const logChannelId = gConfig?.logChannelId;
+    if (!logChannelId) continue;
+
+    try {
+      const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
+      if (!logChannel) continue;
+
+      const embed = EmbedBuilder.from(baseStartEmbed).setDescription(
+        `Le bot est opérationnel et connecté.\n\n🌌 **Serveur :** ${guild.name}`
+      );
+
+      await logChannel.send({ embeds: [embed] });
+      console.log(`📨 Message de démarrage envoyé pour ${guild.name} (${guild.id}).`);
+    } catch (err) {
+      console.error(`⚠️ Erreur lors de l’envoi du message de démarrage pour ${guild.id} :`, err);
+    }
+  }
+});
+
+// --- Message de shutdown (arrêt propre) ---
+async function sendShutdownLog() {
+  const embed = new EmbedBuilder()
+    .setColor(0x2f3136)
+    .setTitle(`🛑 ${BOT_NAME.toUpperCase()} HORS LIGNE`)
+    .setDescription(
+      `Le bot a été arrêté ou redémarre.\n\n🕓 **Heure :** <t:${Math.floor(Date.now() / 1000)}:F>`
+    )
+    .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
+    .setTimestamp();
+
+  for (const guild of client.guilds.cache.values()) {
+    const gConfig = getGuildConfig(guild.id);
+    const logChannelId = gConfig?.logChannelId;
+    if (!logChannelId) continue;
+
+    try {
+      const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
+      if (!logChannel) continue;
+
+      await logChannel.send({ embeds: [embed] });
+      console.log(`📴 Message de shutdown envoyé pour ${guild.name} (${guild.id}).`);
+    } catch (err) {
+      console.error(`⚠️ Erreur lors de l’envoi du shutdown pour ${guild.id} :`, err);
+    }
+  }
+}
+
+// Gestion de l'arrêt propre
+client.on('shardDisconnect', sendShutdownLog);
+client.on('shardDestroy', sendShutdownLog);
+process.on('SIGINT', async () => { await sendShutdownLog(); process.exit(0); });
+process.on('SIGTERM', async () => { await sendShutdownLog(); process.exit(0); });
+
+// --- Gestion des interactions slash ---
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
+
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    console.error('❌ Erreur lors de l’exécution d’une commande :', error);
+
+    const replyPayload = {
+      content: '❌ Une erreur est survenue lors de l’exécution de la commande.',
+      ephemeral: true
+    };
+
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(replyPayload).catch(() => {});
+    } else {
+      await interaction.reply(replyPayload).catch(() => {});
+    }
+  }
+});
+
+// --- Logs d'erreurs globales ---
+process.on('unhandledRejection', error =>
+  console.error('🚨 Erreur non gérée :', error)
+);
+process.on('uncaughtException', error =>
+  console.error('💥 Exception non interceptée :', error)
+);
+
+// --- Connexion du bot ---
+const token = process.env.TOKEN;
+if (!token) {
+  console.error('❌ Erreur : TOKEN manquant dans le .env');
+  process.exit(1);
+}
+
+client.login(token);
