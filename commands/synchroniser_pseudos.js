@@ -1,170 +1,170 @@
+// commands/synchroniser_pseudos.js
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   MessageFlags
 } = require('discord.js');
 
-const SEP_MAIN = ' ';
-const SEP_PARTS = ' | ';
-const MAX_LEN = 32;
-const SLEEP_MS = 350;
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
 /* =========================
-   RÔLES HIÉRARCHIQUES XIG
+   CONFIG ROLES (TES IDS)
 ========================= */
-const HIERARCHY_ROLES = [
-  { id: '1393784275853246666', label: 'PRÉSIDENT', prio: 100 },
-  { id: '1393891243368386641', label: 'GM', prio: 95 },
-  { id: '1393891684752031814', label: 'coGM', prio: 90 },
-  { id: '1393892611382575185', label: 'STAFF', prio: 80 },
-  { id: '1393892474170114169', label: 'HoF', prio: 70 },
-  { id: '1393892334613172275', label: 'DEP', prio: 60 },
-  { id: '1393785087132172429', label: 'NEW', prio: 50 },
-  { id: '1393784530124668988', label: 'IGA', prio: 40 },
-  { id: '1393784904809975850', label: 'TEST', prio: 30 }
+
+// Rôles hiérarchiques (un seul sera pris)
+const ROLE_HIERARCHY = [
+  { id: '1393784275853246666', label: 'PRÉSIDENT' },
+  { id: '1393891243368386641', label: 'GM' },
+  { id: '1393891684752031814', label: 'coGM' },
+  { id: '1393892611382575185', label: 'STAFF' },
+  { id: '1393892474170114169', label: 'HoF' },
+  { id: '1393892334613172275', label: 'DEP' },
+  { id: '1393785087132172429', label: 'NEW' },
+  { id: '1393784530124668988', label: 'IGA' },
+  { id: '1393784904809975850', label: 'TEST' }
 ];
 
-/* =========================
-   RÔLES ÉQUIPES A / B / C
-========================= */
+// Équipes
 const TEAM_ROLES = [
   { id: '1423016118448296056', label: 'A' },
   { id: '1423016177751429191', label: 'B' },
   { id: '1423016222659706992', label: 'C' }
 ];
 
-/* =========================
-   RÔLES POSTES (MAX 3)
-========================= */
+// Postes (max 3)
 const POSTE_ROLES = [
-  { id: '1429389198531498085', label: 'GK', prio: 100 },
-  { id: '1429389245935779953', label: 'DC', prio: 95 },
-  { id: '1429389286742036560', label: 'DG', prio: 90 },
-  { id: '1444317466468810854', label: 'DD', prio: 90 },
-  { id: '1429389418958946346', label: 'MDC', prio: 85 },
-  { id: '1429389494863532062', label: 'MC', prio: 80 },
-  { id: '1429389702842290206', label: 'MG', prio: 75 },
-  { id: '1444317534084923392', label: 'MD', prio: 75 },
-  { id: '1429389840767516794', label: 'MOC', prio: 70 },
-  { id: '1429389901157236806', label: 'AG', prio: 65 },
-  { id: '1444317591781769217', label: 'AD', prio: 65 },
-  { id: '1429389946183090377', label: 'BU', prio: 60 },
-  { id: '1444317669859004518', label: 'ATG', prio: 55 },
-  { id: '1444317741505974333', label: 'ATD', prio: 55 }
+  { id: '1429389198531498085', label: 'GK' },
+  { id: '1429389245935779953', label: 'DC' },
+  { id: '1429389286742036560', label: 'DG' },
+  { id: '1444317466468810854', label: 'DD' },
+  { id: '1429389418958946346', label: 'MDC' },
+  { id: '1429389494863532062', label: 'MC' },
+  { id: '1429389702842290206', label: 'MG' },
+  { id: '1444317534084923392', label: 'MD' },
+  { id: '1429389840767516794', label: 'MOC' },
+  { id: '1429389901157236806', label: 'AG' },
+  { id: '1444317591781769217', label: 'AD' },
+  { id: '1429389946183090377', label: 'BU' },
+  { id: '1444317669859004518', label: 'ATG' },
+  { id: '1444317741505974333', label: 'ATD' }
 ];
 
 /* =========================
-   OUTILS
+   UTILITAIRES
 ========================= */
-function getHighestRole(member) {
-  return HIERARCHY_ROLES
-    .filter(r => member.roles.cache.has(r.id))
-    .sort((a, b) => b.prio - a.prio)[0]?.label || 'JOUEUR';
+
+function getHierarchy(member) {
+  const found = ROLE_HIERARCHY.find(r => member.roles.cache.has(r.id));
+  return found ? found.label : null;
 }
 
 function getTeam(member) {
-  return TEAM_ROLES.find(t => member.roles.cache.has(t.id))?.label || null;
+  const found = TEAM_ROLES.find(r => member.roles.cache.has(r.id));
+  return found ? found.label : null;
 }
 
 function getPostes(member) {
-  const postes = POSTE_ROLES
+  return POSTE_ROLES
     .filter(p => member.roles.cache.has(p.id))
-    .sort((a, b) => b.prio - a.prio)
-    .slice(0, 3)
-    .map(p => p.label);
-  return postes;
+    .map(p => p.label)
+    .slice(0, 3);
 }
 
-function cleanUsername(username, room) {
-  let clean = username.replace(/[^A-Za-z]/g, '');
-  clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
-  if (clean.length > room) clean = clean.slice(0, room - 1);
-  return clean || 'XIG';
+function cleanUsername(username) {
+  return username.replace(/[^A-Za-z0-9]/g, '');
 }
 
-function buildNick({ role, username, postes, team }) {
-  const base = `XIG${SEP_MAIN}${role}`;
-  const after = [
-    postes.length ? postes.join('/') : null,
-    team
-  ].filter(Boolean).join(SEP_PARTS);
+function buildNickname(member) {
+  const hierarchy = getHierarchy(member);
+  const team = getTeam(member);
+  const postes = getPostes(member);
+  const pseudo = cleanUsername(member.user.username);
 
-  const fixedLen = base.length + SEP_MAIN.length + SEP_PARTS.length + after.length;
-  const roomForPseudo = Math.max(3, MAX_LEN - fixedLen);
-  const pseudo = cleanUsername(username, roomForPseudo);
+  const parts = [];
 
-  return `${base}${SEP_MAIN}${pseudo}${SEP_PARTS}${after}`.slice(0, MAX_LEN);
+  parts.push('XIG');
+
+  if (hierarchy) parts.push(hierarchy);
+  parts.push(pseudo);
+
+  if (postes.length) parts.push(`| ${postes.join('/')}`);
+  if (team) parts.push(`| ${team}`);
+
+  return parts.join(' ').slice(0, 32); // limite Discord
 }
 
 /* =========================
    COMMANDE
 ========================= */
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('synchroniser_pseudos')
-    .setDescription('Synchronise les pseudos au format XIG RÔLE Pseudo | Postes | A/B/C')
+    .setDescription('Synchronise les pseudos au format XIG RÔLE Pseudo | Poste | Team')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
     .addBooleanOption(o =>
       o.setName('simulation')
-        .setDescription('Aperçu sans appliquer (défaut : oui)')
+        .setDescription('Simulation seulement (true par défaut)')
         .setRequired(false)
     ),
 
   async execute(interaction) {
     const simulation = interaction.options.getBoolean('simulation') ?? true;
+
+    const me = interaction.guild.members.me;
+    if (!me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
+      return interaction.reply({
+        content: '❌ Je n’ai pas la permission de gérer les pseudos.',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
     await interaction.reply({
       content: simulation ? '🧪 Simulation en cours…' : '🔧 Synchronisation en cours…',
       flags: MessageFlags.Ephemeral
     });
 
-    await interaction.guild.members.fetch().catch(() => {});
+    await interaction.guild.members.fetch();
+
     const members = interaction.guild.members.cache.filter(m => !m.user.bot);
 
-    const changes = [];
-    let ok = 0;
+    let changes = [];
+    let unchanged = [];
+    let blocked = [];
 
-    for (const m of members.values()) {
-      const role = getHighestRole(m);
-      const team = getTeam(m);
-      const postes = getPostes(m);
-      if (!team || !postes.length) continue;
+    for (const member of members.values()) {
+      const newNick = buildNickname(member);
+      const current = member.nickname || member.user.username;
 
-      const newNick = buildNick({
-        role,
-        username: m.user.username,
-        postes,
-        team
-      });
-
-      const current = m.nickname || m.user.username;
-      if (current !== newNick) {
-        changes.push({ member: m, from: current, to: newNick });
+      if (current === newNick) {
+        unchanged.push(member);
+        continue;
       }
-    }
 
-    if (simulation) {
-      const preview = changes.slice(0, 20)
-        .map(c => `• ${c.member.user.tag} → ${c.to}`)
-        .join('\n') || 'Aucun changement';
+      if (!member.manageable) {
+        blocked.push(member);
+        continue;
+      }
 
-      return interaction.followUp({
-        content: `🧪 ${changes.length} pseudos seraient modifiés\n\`\`\`\n${preview}\n\`\`\``,
-        flags: MessageFlags.Ephemeral
-      });
-    }
+      if (!simulation) {
+        try {
+          await member.setNickname(newNick, 'Synchronisation XIG');
+        } catch {
+          blocked.push(member);
+          continue;
+        }
+      }
 
-    for (const c of changes) {
-      if (!c.member.manageable) continue;
-      try {
-        await c.member.setNickname(c.to, 'Sync pseudos XIG');
-        ok++;
-        await sleep(SLEEP_MS);
-      } catch {}
+      changes.push(`${member.user.tag} → ${newNick}`);
     }
 
     return interaction.followUp({
-      content: `✅ Synchronisation terminée — ${ok} pseudos modifiés.`,
+      content: [
+        simulation ? '🧪 **SIMULATION TERMINÉE**' : '✅ **SYNCHRONISATION TERMINÉE**',
+        `✅ Modifiés : ${changes.length}`,
+        `⏭️ Déjà conformes : ${unchanged.length}`,
+        `🔒 Non modifiables : ${blocked.length}`,
+        '',
+        changes.slice(0, 20).join('\n')
+      ].join('\n'),
       flags: MessageFlags.Ephemeral
     });
   }
