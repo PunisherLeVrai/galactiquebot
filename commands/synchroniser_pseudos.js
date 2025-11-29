@@ -9,7 +9,7 @@ const {
    CONFIG ROLES (TES IDS)
 ========================= */
 
-// Rôles hiérarchiques (un seul sera pris)
+// Rôles hiérarchiques
 const ROLE_HIERARCHY = [
   { id: '1393784275853246666', label: 'PRÉSIDENT' },
   { id: '1393891243368386641', label: 'GM' },
@@ -29,7 +29,7 @@ const TEAM_ROLES = [
   { id: '1423016222659706992', label: 'C' }
 ];
 
-// Postes (max 3)
+// Postes
 const POSTE_ROLES = [
   { id: '1429389198531498085', label: 'GK' },
   { id: '1429389245935779953', label: 'DC' },
@@ -51,6 +51,21 @@ const POSTE_ROLES = [
    UTILITAIRES
 ========================= */
 
+// ✅ NOUVELLE FONCTION PSEUDO PROPRE
+function cleanPseudo(username) {
+  if (!username) return 'Joueur';
+
+  // Supprime chiffres + caractères spéciaux
+  let clean = username.replace(/[^a-zA-Z]/g, '');
+
+  if (!clean.length) return 'Joueur';
+
+  // Première lettre en MAJ, le reste en minuscule
+  clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+
+  return clean;
+}
+
 function getHierarchy(member) {
   const found = ROLE_HIERARCHY.find(r => member.roles.cache.has(r.id));
   return found ? found.label : null;
@@ -68,15 +83,11 @@ function getPostes(member) {
     .slice(0, 3);
 }
 
-function cleanUsername(username) {
-  return username.replace(/[^A-Za-z0-9]/g, '');
-}
-
 function buildNickname(member) {
   const hierarchy = getHierarchy(member);
   const team = getTeam(member);
   const postes = getPostes(member);
-  const pseudo = cleanUsername(member.user.username);
+  const pseudo = cleanPseudo(member.user.username);
 
   const parts = [];
 
@@ -88,7 +99,7 @@ function buildNickname(member) {
   if (postes.length) parts.push(`| ${postes.join('/')}`);
   if (team) parts.push(`| ${team}`);
 
-  return parts.join(' ').slice(0, 32); // limite Discord
+  return parts.join(' ').slice(0, 32);
 }
 
 /* =========================
