@@ -6,10 +6,12 @@ const {
   MessageFlags
 } = require('discord.js');
 
+const { getConfigFromInteraction } = require('../utils/config');
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('bienvenue')
-    .setDescription('Souhaite la bienvenue avec un message professionnel INTER GALACTIQUE.')
+    .setDescription('Souhaite la bienvenue avec un message professionnel du club.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     // 👤 Membre ciblé
@@ -57,6 +59,13 @@ module.exports = {
     const presentationChan  = interaction.options.getChannel('presentation') || null;
     const disposChan        = interaction.options.getChannel('disponibilites') || null;
 
+    // 🔧 Récup clubName depuis la config serveur
+    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
+    const clubName =
+      guildCfg?.clubName ||
+      interaction.guild?.name ||
+      'INTER GALACTIQUE';
+
     // 🔐 Vérifie les permissions d’écriture
     const me = interaction.guild.members.me;
     if (!channel.permissionsFor?.(me)?.has(['ViewChannel', 'SendMessages'])) {
@@ -88,9 +97,9 @@ module.exports = {
     }
 
     const contenu =
-`# 🪐 INTER GALACTIQUE — NOUVEL ARRIVANT
+`# 🪐 ${clubName} — NOUVEL ARRIVANT
 
-Bienvenue ${user} dans la galaxie ! 🌌  
+Bienvenue ${user} dans la galaxie **${clubName}** ! 🌌  
 Ta présence marque une nouvelle étape pour l’équipe.
 
 ### 📘 Étapes essentielles
