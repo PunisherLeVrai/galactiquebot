@@ -5,11 +5,13 @@ const {
   MessageFlags
 } = require('discord.js');
 
+const { getConfigFromInteraction } = require('../utils/config');
+
 /* =========================
    CONFIG ROLES (TES IDS)
 ========================= */
 
-// Rôles hiérarchiques
+// Rôles hiérarchiques (du plus haut au plus bas)
 const ROLE_HIERARCHY = [
   { id: '1393784275853246666', label: 'PRÉSIDENT' },
   { id: '1393891243368386641', label: 'GM' },
@@ -47,22 +49,27 @@ const POSTE_ROLES = [
   { id: '1444317741505974333', label: 'ATD' }
 ];
 
+const MAX_LEN = 32;
+const SLEEP_MS = 350;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 /* =========================
    UTILITAIRES
 ========================= */
 
-// ✅ NOUVELLE FONCTION PSEUDO PROPRE
-function cleanPseudo(username) {
+// Pseudo : première lettre en majuscule, pas de chiffres/caractères spéciaux
+function cleanPseudo(username, room = MAX_LEN) {
   if (!username) return 'Joueur';
 
-  // Supprime chiffres + caractères spéciaux
-  let clean = username.replace(/[^a-zA-Z]/g, '');
-
+  // Supprime tout sauf lettres
+  let clean = username.replace(/[^A-Za-z]/g, '');
   if (!clean.length) return 'Joueur';
 
-  // Première lettre en MAJ, le reste en minuscule
   clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
 
+  if (clean.length > room) {
+    clean = clean.slice(0, room - 1) + '…';
+  }
   return clean;
 }
 
@@ -83,23 +90,46 @@ function getPostes(member) {
     .slice(0, 3);
 }
 
-function buildNickname(member) {
+/**
+ * Construit le pseudo :
+ * TAG RÔLE Pseudo | Poste1/Poste2/Poste3 | A/B/C
+ */
+function buildNickname(member, tagFromConfig) {
+  const tag = tagFromConfig || 'XIG';
   const hierarchy = getHierarchy(member);
   const team = getTeam(member);
   const postes = getPostes(member);
-  const pseudo = cleanPseudo(member.user.username);
 
-  const parts = [];
+  // On prépare d'abord sans se soucier de la taille
+  const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
+  let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
 
-  parts.push('XIG');
+  let suffixParts = [];
+  if (postes.length) suffixParts.push(postes.join('/'));
+  if (team) suffixParts.push(team);
 
-  if (hierarchy) parts.push(hierarchy);
-  parts.push(pseudo);
+  let full = base;
+  if (suffixParts.length) {
+    full += ' | ' + suffixParts.join(' | ');
+  }
 
-  if (postes.length) parts.push(`| ${postes.join('/')}`);
-  if (team) parts.push(`| ${team}`);
+  // Si on dépasse 32, on réduit le pseudo en priorité
+  if (full.length > MAX_LEN) {
+    const fixedPrefix = `${tag}${hierarchy ? ' ' + hierarchy : ''}`.trim();
+    const suffix = suffixParts.length ? ' | ' + suffixParts.join(' | ') : '';
 
-  return parts.join(' ').slice(0, 32);
+    const roomForPseudo = Math.max(
+      3,
+      MAX_LEN - (fixedPrefix.length ? fixedPrefix.length + 1 : 0) - suffix.length
+    );
+
+    const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
+    full = fixedPrefix.length
+      ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
+      : `${trimmedPseudo}${suffix}`;
+  }
+
+  return full.slice(0, MAX_LEN);
 }
 
 /* =========================
@@ -109,11 +139,11 @@ function buildNickname(member) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('synchroniser_pseudos')
-    .setDescription('Synchronise les pseudos au format XIG RÔLE Pseudo | Poste | Team')
+    .setDescription('Synchronise les pseudos au format : TAG RÔLE Pseudo | Poste1/Poste2/Poste3 | A/B/C')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
     .addBooleanOption(o =>
       o.setName('simulation')
-        .setDescription('Simulation seulement (true par défaut)')
+        .setDescription('Simulation uniquement (par défaut : oui)')
         .setRequired(false)
     ),
 
@@ -123,26 +153,32 @@ module.exports = {
     const me = interaction.guild.members.me;
     if (!me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
       return interaction.reply({
-        content: '❌ Je n’ai pas la permission de gérer les pseudos.',
+        content: '❌ Je n’ai pas la permission **Gérer les pseudos** sur ce serveur.',
         flags: MessageFlags.Ephemeral
       });
     }
 
+    // Récupération du tag via la config serveur (servers.json)
+    const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
+    const tag = guildConfig?.tag || 'XIG';
+
     await interaction.reply({
-      content: simulation ? '🧪 Simulation en cours…' : '🔧 Synchronisation en cours…',
+      content: simulation
+        ? `🧪 Simulation de synchronisation des pseudos en cours… (tag : **${tag}**)`
+        : `🔧 Synchronisation des pseudos en cours… (tag : **${tag}**)`,
       flags: MessageFlags.Ephemeral
     });
 
-    await interaction.guild.members.fetch();
-
+    await interaction.guild.members.fetch().catch(() => {});
     const members = interaction.guild.members.cache.filter(m => !m.user.bot);
 
-    let changes = [];
-    let unchanged = [];
-    let blocked = [];
+    const changes = [];
+    const unchanged = [];
+    const blocked = [];
+    const errors = [];
 
     for (const member of members.values()) {
-      const newNick = buildNickname(member);
+      const newNick = buildNickname(member, tag);
       const current = member.nickname || member.user.username;
 
       if (current === newNick) {
@@ -157,25 +193,35 @@ module.exports = {
 
       if (!simulation) {
         try {
-          await member.setNickname(newNick, 'Synchronisation XIG');
-        } catch {
-          blocked.push(member);
+          await member.setNickname(newNick, 'Synchronisation pseudos XIG');
+          await sleep(SLEEP_MS);
+        } catch (e) {
+          errors.push({ member, err: String(e?.message || e) });
           continue;
         }
       }
 
-      changes.push(`${member.user.tag} → ${newNick}`);
+      changes.push({ member, from: current, to: newNick });
     }
 
-    return interaction.followUp({
+    const preview = changes
+      .slice(0, 25)
+      .map(c => `• ${c.member.user.tag} : "${c.from}" → "${c.to}"`)
+      .join('\n') || 'Aucun pseudo modifié.';
+
+    await interaction.followUp({
       content: [
         simulation ? '🧪 **SIMULATION TERMINÉE**' : '✅ **SYNCHRONISATION TERMINÉE**',
         `✅ Modifiés : ${changes.length}`,
         `⏭️ Déjà conformes : ${unchanged.length}`,
-        `🔒 Non modifiables : ${blocked.length}`,
+        `🔒 Non modifiables (hiérarchie / permissions) : ${blocked.length}`,
+        errors.length ? `❌ Erreurs : ${errors.length}` : '',
         '',
-        changes.slice(0, 20).join('\n')
-      ].join('\n'),
+        '```',
+        preview,
+        changes.length > 25 ? `\n... (+${changes.length - 25} autres)` : '',
+        '```'
+      ].filter(Boolean).join('\n'),
       flags: MessageFlags.Ephemeral
     });
   }
