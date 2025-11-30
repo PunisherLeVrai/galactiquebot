@@ -11,10 +11,9 @@ const {
   MessageFlags,
 } = require('discord.js');
 
-const { getGlobalConfig } = require('../utils/config');
+const { getGlobalConfig, getConfigFromInteraction } = require('../utils/config');
 
 const COULEUR = 0xff4db8;
-const BOT_NAME = getGlobalConfig().botName || 'GalactiqueBot';
 
 /* ---------- Catégorisation automatique (optimisée FR + snake_case) ---------- */
 function detectCategory(name, description = '') {
@@ -28,7 +27,7 @@ function detectCategory(name, description = '') {
     'verrouiller_dispos', 'rouvrir_dispos',
     'rappel', 'rappel_absents',
     'rapport', 'generer_rapport',
-    'verifier', 'verifiersemaine', 'mentionabsents'
+    'verifier', 'verifiersemaine', 'verifier_semaine', 'mentionabsents'
   ];
   if (dispoKeys.some(k => n.includes(k))) {
     return { label: '⚽️ Disponibilités', key: 'dispo' };
@@ -82,7 +81,7 @@ function permsToHuman(permBits) {
 }
 
 /* ---------- Construction des embeds ---------- */
-function buildOverviewEmbed(commands) {
+function buildOverviewEmbed(commands, botLabel) {
   const categories = {};
 
   for (const cmd of commands) {
@@ -103,20 +102,20 @@ function buildOverviewEmbed(commands) {
 
   return new EmbedBuilder()
     .setColor(COULEUR)
-    .setTitle('🧭 Aide — Commandes disponibles')
+    .setTitle(`🧭 Aide — Commandes de ${botLabel}`)
     .setDescription(lines.join('\n') || '_Aucune commande chargée_')
-    .setFooter({ text: `${BOT_NAME} • Sélectionne une commande ci-dessous` })
+    .setFooter({ text: `${botLabel} • Sélectionne une commande ci-dessous` })
     .setTimestamp();
 }
 
-function buildCommandEmbed(cmd) {
+function buildCommandEmbed(cmd, botLabel) {
   const data = cmd.data?.toJSON?.() || {};
   const emb = new EmbedBuilder()
     .setColor(COULEUR)
     .setTitle(`❓ Aide — /${data.name}`)
     .setDescription(data.description || '_Sans description_')
     .addFields({ name: 'Permissions requises', value: permsToHuman(data.default_member_permissions) })
-    .setFooter({ text: `${BOT_NAME} • /aide pour la liste complète` })
+    .setFooter({ text: `${botLabel} • /aide pour la liste complète` })
     .setTimestamp();
 
   const opts = data.options || [];
@@ -174,6 +173,17 @@ module.exports = {
   async execute(interaction) {
     const isPublic = interaction.options.getBoolean('public') ?? false;
 
+    // Récupération des infos depuis la config
+    const globalCfg = getGlobalConfig() || {};
+    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
+
+    // Label utilisé dans les embeds : clubName > botName global > nom du bot
+    const botLabel =
+      guildCfg?.clubName ||
+      globalCfg.botName ||
+      interaction.client.user?.username ||
+      'GalactiqueBot';
+
     const cmds = [...interaction.client.commands.values()]
       .sort((a, b) =>
         (a.data.name === 'aide' ? -1
@@ -181,7 +191,7 @@ module.exports = {
           : a.data.name.localeCompare(b.data.name, 'fr'))
       );
 
-    const overview = buildOverviewEmbed(cmds);
+    const overview = buildOverviewEmbed(cmds, botLabel);
     const rows = [buildSelectMenu(cmds), buildButtonsRow()];
 
     const replyOpts = { embeds: [overview], components: rows };
@@ -205,19 +215,19 @@ module.exports = {
         }
 
         if (i.customId === 'help_back') {
-          await i.update({ embeds: [buildOverviewEmbed(cmds)], components: rows });
+          await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel)], components: rows });
           return;
         }
 
         if (i.customId === 'help_select') {
           const picked = i.values?.[0];
           if (!picked || picked === 'overview') {
-            await i.update({ embeds: [buildOverviewEmbed(cmds)], components: rows });
+            await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel)], components: rows });
             return;
           }
           const cmd = cmds.find(c => c.data?.name === picked);
           if (!cmd) { await i.deferUpdate(); return; }
-          await i.update({ embeds: [buildCommandEmbed(cmd)], components: rows });
+          await i.update({ embeds: [buildCommandEmbed(cmd, botLabel)], components: rows });
           return;
         }
 
