@@ -250,7 +250,7 @@ module.exports = {
           '✅ Configuration des **rôles** mise à jour :',
           ...changes
         ].join('\n'),
-          ephemeral: true
+        ephemeral: true
       });
     }
 
