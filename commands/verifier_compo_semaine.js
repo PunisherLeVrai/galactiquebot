@@ -10,8 +10,17 @@ const fs = require('fs');
 const path = require('path');
 const { getConfigFromInteraction } = require('../utils/config');
 
-const COULEUR = 0xff4db8;
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
+const DEFAULT_COLOR = 0xff4db8;
+
+/* ---------- Couleur d’embed depuis la config ---------- */
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 /* ---------- Utils dates ---------- */
 function parseISODate(d) {
@@ -101,8 +110,11 @@ module.exports = {
     const mention = interaction.options.getBoolean('mention') ?? false;
     const includeExternal = interaction.options.getBoolean('inclure_hors_serveur') ?? true;
 
-    // 🔧 Récup config serveur (rapportChannelId éventuellement enregistré via /config)
+    // 🔧 Récup config serveur (rapportChannelId + style)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
+    const embedColor = getEmbedColor(guildConfig);
+    const clubLabel = guildConfig?.clubName || guild.name;
+
     const rapportChannelId =
       guildConfig?.channels?.rapport ||
       guildConfig?.rapportChannelId ||
@@ -210,10 +222,10 @@ module.exports = {
 
     if (!entries.length) {
       const embedOK = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(embedColor)
         .setTitle('✅ Aucun convoqué avec compo non validée sur la période')
         .setDescription(headerLines.join('\n'))
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Rapport compo (snapshots)' })
+        .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots)` })
         .setTimestamp();
 
       await targetChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
@@ -224,23 +236,24 @@ module.exports = {
     }
 
     // Pagination
+    const entriesCopy = [...entries];
     const pageSize = 20;
     const pages = [];
-    for (let i = 0; i < entries.length; i += pageSize) {
-      pages.push(entries.slice(i, i + pageSize));
+    for (let i = 0; i < entriesCopy.length; i += pageSize) {
+      pages.push(entriesCopy.slice(i, i + pageSize));
     }
 
     // Première page avec header
     const first = pages.shift();
     const firstEmbed = new EmbedBuilder()
-      .setColor(COULEUR)
+      .setColor(embedColor)
       .setTitle(`⏳ Convoqués n’ayant pas validé (total ${entries.length})`)
       .setDescription(headerLines.join('\n'))
       .addFields({
         name: 'Liste',
         value: first.map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
       })
-      .setFooter({ text: 'INTER GALACTIQUE ⚫ Rapport compo (snapshots)' })
+      .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots)` })
       .setTimestamp();
 
     const firstMentionIds = mention
@@ -271,9 +284,9 @@ module.exports = {
       if (cur.length) chunks.push(cur.join(''));
 
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(embedColor)
         .setTitle('Suite')
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Rapport compo (snapshots)' })
+        .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots)` })
         .setTimestamp();
 
       chunks.forEach((block, idx) => {
