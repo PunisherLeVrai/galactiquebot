@@ -9,6 +9,7 @@ const { getConfigFromInteraction } = require('../utils/config');
 
 /* =========================
    CONFIG ROLES (TES IDS)
+   (spécifiques à XIG INTER GALACTIQUE)
 ========================= */
 
 // Rôles hiérarchiques (du plus haut au plus bas)
@@ -104,7 +105,7 @@ function buildNickname(member, tagFromConfig) {
   const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
   let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
 
-  let suffixParts = [];
+  const suffixParts = [];
   if (postes.length) suffixParts.push(postes.join('/'));
   if (team) suffixParts.push(team);
 
