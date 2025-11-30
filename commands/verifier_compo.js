@@ -10,8 +10,16 @@ const fs = require('fs');
 const path = require('path');
 const { getConfigFromInteraction } = require('../utils/config');
 
-const COULEUR = 0xff4db8;
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
+const DEFAULT_COLOR = 0xff4db8; // couleur par défaut si aucune couleur définie
+
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -51,8 +59,9 @@ module.exports = {
 
     // 🔧 Config serveur (via utils/config)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
-    const convoqueRoleId =
-      guildConfig?.roles?.convoque || null;
+    const convoqueRoleId = guildConfig?.roles?.convoque || null;
+    const embedColor = getEmbedColor(guildConfig);
+    const clubLabel = guildConfig?.clubName || guild.name;
 
     const rappel = interaction.options.getBoolean('rappel') ?? false;
     const enregistrer = interaction.options.getBoolean('enregistrer_snapshot') ?? false;
@@ -174,7 +183,7 @@ module.exports = {
       arr.length ? arr.map(m => `<@${m.id}>`).join(' - ') : '_Aucun_';
 
     const embed = new EmbedBuilder()
-      .setColor(COULEUR)
+      .setColor(embedColor)
       .setTitle('📋 Vérification de la composition')
       .setDescription([
         `📨 Message : [Lien vers la compo](${url})`,
@@ -193,7 +202,7 @@ module.exports = {
           value: formatMentions(nonValides).slice(0, 1024)
         }
       )
-      .setFooter({ text: 'INTER GALACTIQUE • Vérification compo' })
+      .setFooter({ text: `${clubLabel} • Vérification compo` })
       .setTimestamp();
 
     const nonValidesIds = nonValides.map(m => m.id);
