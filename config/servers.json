@@ -1,9 +1,12 @@
 {
   "1392639720491581551": {
-    "name": "XIG INTER GALACTIQUE",
+    "clubName": "INTER GALACTIQUE",
+    "tag": "XIG",
+
     "logChannelId": "1393776090086117426",
     "rapportChannelId": "1393775806496641074",
     "mainDispoChannelId": "1429059902852173936",
+
     "dispoMessages": {
       "lundi": "1429061125307105290",
       "mardi": "1429061128742502450",
@@ -13,6 +16,7 @@
       "samedi": "1429061144428937326",
       "dimanche": "1429061148459794504"
     },
+
     "roles": {
       "joueur": "1393784530124668988",
       "essai": "1393784904809975850",
