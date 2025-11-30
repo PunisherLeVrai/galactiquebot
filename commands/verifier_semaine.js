@@ -12,8 +12,17 @@ const path = require('path');
 const { getConfigFromInteraction } = require('../utils/config');
 
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
-const COULEUR = 0xff4db8;
+const DEFAULT_COLOR = 0xff4db8;
 const SNAP_REGEX = /^snapshot-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
+
+/* ------------------------- Couleur depuis config ------------------------- */
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 /* ------------------------- Utils dates ------------------------- */
 function parseISODate(d) {
@@ -53,7 +62,9 @@ function readSnapshotsInRange(fromDate, toDate) {
       try {
         const js = JSON.parse(fs.readFileSync(path.join(RAPPORTS_DIR, f), 'utf8'));
         snaps.push({ file: f, date: fileDate, data: js });
-      } catch {}
+      } catch {
+        // ignore fichiers corrompus
+      }
     }
   }
 
@@ -142,6 +153,9 @@ module.exports = {
 
       // Charge config dynamique
       const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
+      const embedColor = getEmbedColor(guildConfig);
+      const clubLabel = guildConfig?.clubName || guild.name;
+
       const rapportChannelId =
         guildConfig?.channels?.rapport ||
         guildConfig?.rapportChannelId ||
@@ -248,10 +262,10 @@ module.exports = {
 
       if (entries.length === 0) {
         const embedOK = new EmbedBuilder()
-          .setColor(COULEUR)
+          .setColor(embedColor)
           .setTitle('✅ Tous ont réagi au moins une fois')
           .setDescription(headerLines.join('\n'))
-          .setFooter({ text: 'INTER GALACTIQUE • Rapport snapshots' })
+          .setFooter({ text: `${clubLabel} • Rapport snapshots` })
           .setTimestamp();
 
         await targetChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
@@ -267,14 +281,14 @@ module.exports = {
       /* Première page */
       const first = pages.shift();
       const firstEmbed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(embedColor)
         .setTitle(`⏳ Membres n’ayant pas réagi (total : ${entries.length})`)
         .setDescription(headerLines.join('\n'))
         .addFields({
           name: 'Liste',
           value: first.map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
         })
-        .setFooter({ text: 'INTER GALACTIQUE • Rapport snapshots' })
+        .setFooter({ text: `${clubLabel} • Rapport snapshots` })
         .setTimestamp();
 
       const firstMentions =
@@ -305,9 +319,9 @@ module.exports = {
         if (cur.length) chunks.push(cur.join(''));
 
         const embed = new EmbedBuilder()
-          .setColor(COULEUR)
+          .setColor(embedColor)
           .setTitle('Suite')
-          .setFooter({ text: 'INTER GALACTIQUE • Rapport snapshots' })
+          .setFooter({ text: `${clubLabel} • Rapport snapshots` })
           .setTimestamp();
 
         chunks.forEach((c, i) => {
