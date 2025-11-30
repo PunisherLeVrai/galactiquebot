@@ -8,6 +8,8 @@ const {
   MessageFlags
 } = require('discord.js');
 
+const { getConfigFromInteraction } = require('../utils/config');
+
 const JOURS = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'];
 const TITRES = {
   lundi: '📅 Lundi', mardi: '📅 Mardi', mercredi: '📅 Mercredi',
@@ -22,13 +24,23 @@ const TITRES_MAJ = {
   samedi: '📅 SAMEDI',
   dimanche: '📅 DIMANCHE'
 };
-const COULEUR = 0xff4db8;
+
 const DESC_PAR_DEFAUT = 'Réagissez ci-dessous :\n\n✅ **Présent**  |  ❌ **Absent**';
 const DESCRIPTION_DEFAUT_ROUVRIR = '🕓 Session à 20h45 — merci de réagir ci-dessous ✅ / ❌';
+
+const DEFAULT_COLOR = 0xff4db8;
 
 // Anti-mentions
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
+
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 function parseIdsByJour(jourChoisi, idsInput) {
   const clean = String(idsInput || '').trim();
@@ -245,6 +257,11 @@ module.exports = {
     const guild = interaction.guild;
     const me = guild.members.me;
 
+    // Config dynamique (couleur + nom club)
+    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
+    const color = getEmbedColor(guildCfg);
+    const clubName = guildCfg?.clubName || guild.name || 'INTER GALACTIQUE';
+
     /* -------------------- SUBCOMMAND : PUBLIER -------------------- */
     if (sub === 'publier') {
       const channel = interaction.options.getChannel('salon');
@@ -298,10 +315,10 @@ module.exports = {
           } else {
             const titreMaj = TITRES[jour].replace(/📅\s*/i, '📅 ').toUpperCase();
             const embed = new EmbedBuilder()
-              .setColor(COULEUR)
+              .setColor(color)
               .setTitle(titreMaj)
               .setDescription(desc)
-              .setFooter({ text: 'INTER GALACTIQUE ⚫ Disponibilités' });
+              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
             msg = await channel.send({
               content: '',
@@ -434,10 +451,10 @@ module.exports = {
               : `${texte}\n\n✅ **Présent**  |  ❌ **Absent**`;
 
             const embed = new EmbedBuilder()
-              .setColor(COULEUR)
+              .setColor(color)
               .setTitle(titreFinal)
               .setDescription(descriptionFinale)
-              .setFooter({ text: 'INTER GALACTIQUE ⚫ Disponibilités' });
+              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
             await msg.edit({ content: '', embeds: [embed], allowedMentions: { parse: [] } });
           }
@@ -627,10 +644,10 @@ module.exports = {
             });
           } else {
             const embed = new EmbedBuilder()
-              .setColor(COULEUR)
+              .setColor(color)
               .setTitle(TITRES_MAJ[jour])
               .setDescription(description)
-              .setFooter({ text: 'INTER GALACTIQUE ⚫ Disponibilités' });
+              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
             await msg.edit({ content: '', embeds: [embed], allowedMentions: { parse: [] } });
           }
