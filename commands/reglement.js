@@ -7,7 +7,17 @@ const {
   MessageFlags
 } = require('discord.js');
 
-const COULEUR = 0xff4db8; // Rose IGA
+const { getConfigFromInteraction } = require('../utils/config');
+
+const DEFAULT_COLOR = 0xff4db8; // couleur par défaut
+
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 function sanitize(text) {
   return String(text).replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
@@ -23,7 +33,7 @@ function buildMention(mention, role) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('reglement')
-    .setDescription('Publie le règlement officiel INTER GALACTIQUE (sans bouton).')
+    .setDescription('Publie le règlement officiel du club (sans bouton).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addChannelOption(o =>
       o.setName('salon')
@@ -59,6 +69,11 @@ module.exports = {
         flags: MessageFlags.Ephemeral
       });
     }
+
+    // Config dynamique (couleur + nom club)
+    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
+    const color = getEmbedColor(guildCfg);
+    const clubName = guildCfg?.clubName || interaction.guild.name || 'INTER GALACTIQUE';
 
     // 🔐 Vérifie les permissions avant publication
     const me = interaction.guild.members.me;
@@ -142,16 +157,16 @@ module.exports = {
       },
       {
         name: '🌌 CONCLUSION',
-        value: 'Ensemble, faisons briller **INTER GALACTIQUE** ! ✨'
+        value: `Ensemble, faisons briller **${clubName}** ! ✨`
       }
     ];
 
     const embed = new EmbedBuilder()
-      .setColor(COULEUR)
-      .setTitle('🪐 RÈGLEMENT DU SERVEUR & DU CLUB – INTER GALACTIQUE')
+      .setColor(color)
+      .setTitle(`🪐 RÈGLEMENT DU SERVEUR & DU CLUB – ${clubName}`)
       .setDescription(intro)
       .addFields(fields)
-      .setFooter({ text: 'INTER GALACTIQUE ⚫ Règlement officiel' })
+      .setFooter({ text: `${clubName} ⚫ Règlement officiel` })
       .setTimestamp();
 
     const mentionLine = buildMention(mention, role);
