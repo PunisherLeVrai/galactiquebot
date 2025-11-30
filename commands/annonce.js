@@ -11,7 +11,19 @@ const {
   MessageFlags
 } = require('discord.js');
 
-const COULEUR = 0xff4db8; // rose IGA
+const { getConfigFromInteraction, getGlobalConfig } = require('../utils/config');
+
+const DEFAULT_COLOR = 0xff4db8; // rose par défaut
+
+/* ---------- Couleur par serveur ---------- */
+function getEmbedColorFromCfg(guildCfg) {
+  const hex = guildCfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 /* ---------- Helpers sécurité / format ---------- */
 
@@ -153,6 +165,17 @@ module.exports = {
   async execute(interaction) {
     const type = interaction.options.getString('type', true);
 
+    // Récup config pour couleur + nom de club
+    const globalCfg = getGlobalConfig() || {};
+    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
+
+    const clubName =
+      guildCfg?.clubName ||
+      interaction.guild?.name ||
+      'INTER GALACTIQUE';
+
+    const color = getEmbedColorFromCfg(guildCfg);
+
     // Salon cible : option "salon" OU salon actuel
     const salon = interaction.options.getChannel('salon') || interaction.channel;
 
@@ -192,7 +215,7 @@ module.exports = {
         '',
         `👋 **Bonjour <@${user.id}>**,`,
         '',
-        'Tu intègres désormais **l’effectif officiel** d’**INTER GALACTIQUE** 🌌',
+        `Tu intègres désormais **l’effectif officiel** de **${clubName}** 🌌`,
         'Félicitations et bienvenue parmi les **joueurs titulaires** de notre structure.',
         '',
         '💬 Tu disposes dès à présent d’une **LOGE PERSONNELLE**, ton canal **privé et exclusif** avec le staff.',
@@ -206,7 +229,7 @@ module.exports = {
         '---',
         '',
         '🎯 En rejoignant l’effectif, tu t’engages à faire preuve de **rigueur**, **respect** et **engagement**.',
-        'Bienvenue dans l’aventure **INTER GALACTIQUE** 💫',
+        `Bienvenue dans l’aventure **${clubName}** 💫`,
         'Et surtout… **honore le maillot.**'
       ].join('\n');
 
@@ -237,15 +260,15 @@ module.exports = {
       const roleEssai = interaction.options.getRole('role_essai') || null;
 
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(color)
         .setTitle('🖊️ Nouvelle signature officielle')
         .setDescription([
-          `> <@${user.id}> rejoint officiellement **INTER GALACTIQUE** !`,
+          `> <@${user.id}> rejoint officiellement **${clubName}** !`,
           '',
           '🎉 Félicitations pour ta période d’essai réussie, tu fais désormais partie du groupe officiel.',
           messagePerso ? `\n💬 _${messagePerso}_` : ''
         ].join('\n'))
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Signature officielle' })
+        .setFooter({ text: `${clubName} ⚫ Signature officielle` })
         .setTimestamp();
 
       // Annonce publique
@@ -278,10 +301,16 @@ module.exports = {
               rolesLog = '⚠️ Je ne peux pas modifier ces rôles (hiérarchie ou permission manquante).';
             } else {
               if (roleEssai && membre.roles.cache.has(roleEssai.id)) {
-                await membre.roles.remove(roleEssai, 'Fin de période d’essai — signature officielle');
+                await membre.roles.remove(
+                  roleEssai,
+                  'Fin de période d’essai — signature officielle'
+                );
               }
               if (roleJoueur && !membre.roles.cache.has(roleJoueur.id)) {
-                await membre.roles.add(roleJoueur, 'Signature officielle — ajout du rôle Joueur');
+                await membre.roles.add(
+                  roleJoueur,
+                  'Signature officielle — ajout du rôle Joueur'
+                );
               }
               rolesLog = '✅ Rôles mis à jour selon les options fournies.';
             }
@@ -325,10 +354,10 @@ module.exports = {
        ====================== */
     if (type === 'interne') {
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(color)
         .setTitle(titre)
         .setDescription(contenu)
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Communication interne' })
+        .setFooter({ text: `${clubName} ⚫ Communication interne` })
         .setTimestamp();
 
       try {
@@ -357,13 +386,13 @@ module.exports = {
         return interaction.editReply('❌ Pour ajouter un bouton, renseigne **libellé + URL**.');
       }
 
-      const subtitle = '🛰️ Équipe **INTER GALACTIQUE** — *Annonce importante*';
+      const subtitle = `🛰️ Équipe **${clubName}** — *Annonce importante*`;
 
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(color)
         .setTitle(titre)
         .setDescription([subtitle, '', contenu].join('\n'))
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Communiqué officiel' })
+        .setFooter({ text: `${clubName} ⚫ Communiqué officiel` })
         .setTimestamp();
 
       if (imageFile) embed.setImage(imageFile.url);
