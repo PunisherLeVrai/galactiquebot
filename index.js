@@ -26,6 +26,20 @@ const client = new Client({
 const globalConfig = getGlobalConfig();
 const BOT_NAME = globalConfig.botName || 'GalactiqueBot';
 
+// --- Helper : couleur d’embed par serveur (embedColor ou défaut) ---
+const DEFAULT_COLOR = 0xff4db8;
+function getEmbedColorForGuild(guildId) {
+  if (!guildId) return DEFAULT_COLOR;
+  const cfg = getGuildConfig(guildId) || {};
+  const hex = cfg.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+
+  // hex peut être "ff4db8" ou "#ff4db8" ou "0xff4db8"
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
+
 // --- Chargement des commandes ---
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
@@ -56,26 +70,31 @@ client.once('ready', async () => {
 
   console.log(`🟢 ${BOT_NAME} prêt et en ligne !`);
 
-  // Embed "base" de démarrage
+  // Embed "base" de démarrage (couleur sera adaptée par guilde)
   const baseStartEmbed = new EmbedBuilder()
-    .setColor(0xff4db8)
     .setTitle(`🚀 ${BOT_NAME.toUpperCase()} EN LIGNE`)
     .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
     .setTimestamp();
 
   // Message de démarrage dans le salon de logs de CHAQUE serveur configuré
   for (const guild of client.guilds.cache.values()) {
-    const gConfig = getGuildConfig(guild.id);
-    const logChannelId = gConfig?.logChannelId;
+    const gConfig = getGuildConfig(guild.id) || {};
+    const logChannelId = gConfig.logChannelId;
     if (!logChannelId) continue;
+
+    const clubLabel = gConfig.clubName || guild.name;
 
     try {
       const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
       if (!logChannel) continue;
 
-      const embed = EmbedBuilder.from(baseStartEmbed).setDescription(
-        `Le bot est opérationnel et connecté.\n\n🌌 **Serveur :** ${guild.name}`
-      );
+      const embed = EmbedBuilder.from(baseStartEmbed)
+        .setColor(getEmbedColorForGuild(guild.id))
+        .setDescription(
+          `Le bot est opérationnel et connecté.\n\n` +
+          `🌌 **Serveur :** ${guild.name}\n` +
+          `🏟️ **Club :** ${clubLabel}`
+        );
 
       await logChannel.send({ embeds: [embed] });
       console.log(`📨 Message de démarrage envoyé pour ${guild.name} (${guild.id}).`);
@@ -87,23 +106,25 @@ client.once('ready', async () => {
 
 // --- Message de shutdown (arrêt propre) ---
 async function sendShutdownLog() {
-  const embed = new EmbedBuilder()
-    .setColor(0x2f3136)
-    .setTitle(`🛑 ${BOT_NAME.toUpperCase()} HORS LIGNE`)
-    .setDescription(
-      `Le bot a été arrêté ou redémarre.\n\n🕓 **Heure :** <t:${Math.floor(Date.now() / 1000)}:F>`
-    )
-    .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
-    .setTimestamp();
-
+  // On crée l’embed à la volée pour chaque guilde (couleur par config)
   for (const guild of client.guilds.cache.values()) {
-    const gConfig = getGuildConfig(guild.id);
-    const logChannelId = gConfig?.logChannelId;
+    const gConfig = getGuildConfig(guild.id) || {};
+    const logChannelId = gConfig.logChannelId;
     if (!logChannelId) continue;
 
     try {
       const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
       if (!logChannel) continue;
+
+      const embed = new EmbedBuilder()
+        .setColor(getEmbedColorForGuild(guild.id))
+        .setTitle(`🛑 ${BOT_NAME.toUpperCase()} HORS LIGNE`)
+        .setDescription(
+          `Le bot a été arrêté ou redémarre.\n\n` +
+          `🕓 **Heure :** <t:${Math.floor(Date.now() / 1000)}:F>`
+        )
+        .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
+        .setTimestamp();
 
       await logChannel.send({ embeds: [embed] });
       console.log(`📴 Message de shutdown envoyé pour ${guild.name} (${guild.id}).`);
