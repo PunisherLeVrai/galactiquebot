@@ -13,7 +13,17 @@ const {
 
 const { getGlobalConfig, getConfigFromInteraction } = require('../utils/config');
 
-const COULEUR = 0xff4db8;
+const DEFAULT_COLOR = 0xff4db8;
+
+/* ---------- Couleur par serveur ---------- */
+function getEmbedColorFromCfg(guildCfg) {
+  const hex = guildCfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 /* ---------- Catégorisation automatique (optimisée FR + snake_case) ---------- */
 function detectCategory(name, description = '') {
@@ -81,7 +91,7 @@ function permsToHuman(permBits) {
 }
 
 /* ---------- Construction des embeds ---------- */
-function buildOverviewEmbed(commands, botLabel) {
+function buildOverviewEmbed(commands, botLabel, color) {
   const categories = {};
 
   for (const cmd of commands) {
@@ -101,17 +111,17 @@ function buildOverviewEmbed(commands, botLabel) {
   }
 
   return new EmbedBuilder()
-    .setColor(COULEUR)
+    .setColor(color)
     .setTitle(`🧭 Aide — Commandes de ${botLabel}`)
     .setDescription(lines.join('\n') || '_Aucune commande chargée_')
     .setFooter({ text: `${botLabel} • Sélectionne une commande ci-dessous` })
     .setTimestamp();
 }
 
-function buildCommandEmbed(cmd, botLabel) {
+function buildCommandEmbed(cmd, botLabel, color) {
   const data = cmd.data?.toJSON?.() || {};
   const emb = new EmbedBuilder()
-    .setColor(COULEUR)
+    .setColor(color)
     .setTitle(`❓ Aide — /${data.name}`)
     .setDescription(data.description || '_Sans description_')
     .addFields({ name: 'Permissions requises', value: permsToHuman(data.default_member_permissions) })
@@ -184,6 +194,9 @@ module.exports = {
       interaction.client.user?.username ||
       'GalactiqueBot';
 
+    // Couleur spécifique à ce serveur
+    const color = getEmbedColorFromCfg(guildCfg);
+
     const cmds = [...interaction.client.commands.values()]
       .sort((a, b) =>
         (a.data.name === 'aide' ? -1
@@ -191,7 +204,7 @@ module.exports = {
           : a.data.name.localeCompare(b.data.name, 'fr'))
       );
 
-    const overview = buildOverviewEmbed(cmds, botLabel);
+    const overview = buildOverviewEmbed(cmds, botLabel, color);
     const rows = [buildSelectMenu(cmds), buildButtonsRow()];
 
     const replyOpts = { embeds: [overview], components: rows };
@@ -215,19 +228,19 @@ module.exports = {
         }
 
         if (i.customId === 'help_back') {
-          await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel)], components: rows });
+          await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel, color)], components: rows });
           return;
         }
 
         if (i.customId === 'help_select') {
           const picked = i.values?.[0];
           if (!picked || picked === 'overview') {
-            await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel)], components: rows });
+            await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel, color)], components: rows });
             return;
           }
           const cmd = cmds.find(c => c.data?.name === picked);
           if (!cmd) { await i.deferUpdate(); return; }
-          await i.update({ embeds: [buildCommandEmbed(cmd, botLabel)], components: rows });
+          await i.update({ embeds: [buildCommandEmbed(cmd, botLabel, color)], components: rows });
           return;
         }
 
