@@ -1,3 +1,4 @@
+// commands/config.js
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -10,7 +11,16 @@ const {
   updateGuildConfig
 } = require('../utils/config');
 
-const COULEUR = 0xff4db8; // rose GalactiqueBot
+const DEFAULT_COLOR = 0xff4db8; // couleur par défaut si aucune couleur définie en config
+
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  // hex peut être "ff4db8" ou "#ff4db8" ou "0xff4db8"
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -65,6 +75,28 @@ module.exports = {
         )
     )
 
+    // /config style (couleur, tag, nom du club)
+    .addSubcommand(sc =>
+      sc
+        .setName('style')
+        .setDescription('Configurer le style du bot (couleur des embeds, tag, nom du club).')
+        .addStringOption(o =>
+          o.setName('couleur')
+            .setDescription('Couleur des embeds au format hexadécimal (ex : ff4db8 ou #ff4db8).')
+            .setRequired(false)
+        )
+        .addStringOption(o =>
+          o.setName('tag')
+            .setDescription('Tag utilisé dans certains messages (ex : XIG).')
+            .setRequired(false)
+        )
+        .addStringOption(o =>
+          o.setName('clubname')
+            .setDescription('Nom du club (ex : INTER GALACTIQUE).')
+            .setRequired(false)
+        )
+    )
+
     // /config view
     .addSubcommand(sc =>
       sc
@@ -84,14 +116,23 @@ module.exports = {
     }
 
     const { global, guild: guildConfig } = getConfigFromInteraction(interaction);
+    const cfg = guildConfig || {};
 
     // -----------------------------------------------------------------------
     // /config view
     // -----------------------------------------------------------------------
     if (sub === 'view') {
-      const cfg = guildConfig || {};
-
       const fields = [];
+
+      // Style (couleur / tag / clubName)
+      fields.push({
+        name: '🎨 Style',
+        value: [
+          `• Nom du club : ${cfg.clubName || guild.name}`,
+          `• Tag : ${cfg.tag || '_non défini_'}`,
+          `• Couleur embeds : ${cfg.embedColor ? `#${cfg.embedColor}` : '_par défaut_'}`
+        ].join('\n')
+      });
 
       fields.push({
         name: '📡 Salons',
@@ -113,7 +154,7 @@ module.exports = {
       });
 
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(getEmbedColor(cfg))
         .setTitle('⚙️ Configuration GalactiqueBot')
         .setDescription(
           `Serveur : **${guild.name}**\n` +
@@ -207,6 +248,61 @@ module.exports = {
       return interaction.reply({
         content: [
           '✅ Configuration des **rôles** mise à jour :',
+          ...changes
+        ].join('\n'),
+          ephemeral: true
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // /config style
+    // -----------------------------------------------------------------------
+    if (sub === 'style') {
+      const couleurStr = interaction.options.getString('couleur') || null;
+      const tag = interaction.options.getString('tag') || null;
+      const clubName = interaction.options.getString('clubname') || null;
+
+      if (!couleurStr && !tag && !clubName) {
+        return interaction.reply({
+          content: 'ℹ️ Aucun paramètre fourni. Tu peux définir `couleur`, `tag` ou `clubname`.',
+          ephemeral: true
+        });
+      }
+
+      const patch = {};
+      const changes = [];
+
+      if (couleurStr) {
+        const raw = couleurStr.trim();
+        const clean = raw.replace(/^0x/i, '').replace('#', '');
+        const validHex = /^[0-9a-fA-F]{6}$/.test(clean);
+
+        if (!validHex) {
+          return interaction.reply({
+            content: '❌ Couleur invalide. Utilise un hex sur 6 caractères, ex : `ff4db8` ou `#ff4db8`.',
+            ephemeral: true
+          });
+        }
+
+        patch.embedColor = clean.toLowerCase();
+        changes.push(`• Couleur des embeds → \`#${clean.toLowerCase()}\``);
+      }
+
+      if (tag) {
+        patch.tag = tag.trim();
+        changes.push(`• Tag → \`${tag.trim()}\``);
+      }
+
+      if (clubName) {
+        patch.clubName = clubName.trim();
+        changes.push(`• Nom du club → **${clubName.trim()}**`);
+      }
+
+      updateGuildConfig(guild.id, patch);
+
+      return interaction.reply({
+        content: [
+          '✅ Configuration du **style** mise à jour :',
           ...changes
         ].join('\n'),
         ephemeral: true
