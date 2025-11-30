@@ -14,13 +14,22 @@ const fs = require('fs');
 const path = require('path');
 const { getConfigFromInteraction } = require('../utils/config');
 
-const VERSION = 'disponibilites v3.2 FR+snapshot+verrouiller (no-ID+config)';
+const VERSION = 'disponibilites v3.3 FR+snapshot+verrouiller (config couleur+club)';
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
-const COULEUR = 0xff4db8;
+const DEFAULT_COLOR = 0xff4db8;
 
 // 🧹 Anti-mentions accidentelles dans les textes
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
+
+// Couleur dynamique depuis la config
+function getEmbedColor(cfg) {
+  const hex = cfg?.embedColor;
+  if (!hex) return DEFAULT_COLOR;
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  const num = parseInt(clean, 16);
+  return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -117,6 +126,9 @@ module.exports = {
     // 🔧 Config dynamique serveur
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const cfgRoles = guildConfig?.roles || {};
+    const color = getEmbedColor(guildConfig);
+    const clubName = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
+
     const rapportChannelId =
       guildConfig?.channels?.rapport ||
       guildConfig?.rapportChannelId ||
@@ -230,14 +242,14 @@ module.exports = {
     /* --- 🔹 EMBED SIMPLE --- */
     if (mode === 'embed_simple') {
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(color)
         .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
         .setDescription(
           nonRepondus.size === 0
             ? '✅ **Tout le monde a réagi.**'
             : `**Membres n’ayant pas réagi (${nonRepondus.size}) :**\n${idsLine(nonRepondus)}`
         )
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Rapport automatisé' })
+        .setFooter({ text: `${clubName} ⚫ Rapport automatisé` })
         .setTimestamp();
 
       await targetChannel.send({
@@ -256,14 +268,14 @@ module.exports = {
       const absentsAll  = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
 
       const embed = new EmbedBuilder()
-        .setColor(COULEUR)
+        .setColor(color)
         .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
         .addFields(
           { name: `✅ Présents (${presentsAll.size})`, value: idsLine(presentsAll) },
           { name: `❌ Ont dit absent (${absentsAll.size})`, value: idsLine(absentsAll) },
           { name: `⏳ N’ont pas réagi (${nonRepondus.size})`, value: idsLine(nonRepondus) }
         )
-        .setFooter({ text: 'INTER GALACTIQUE ⚫ Rapport automatisé' })
+        .setFooter({ text: `${clubName} ⚫ Rapport automatisé` })
         .setTimestamp();
 
       await targetChannel.send({
@@ -376,8 +388,8 @@ module.exports = {
       const body = nonRepondus.size === 0
         ? '✅ Aucun absent détecté.'
         : `⏳ Personnes n’ayant pas réagi (${nonRepondus.size}) :\n${idsLine(nonRepondus)}`;
-      const footer = `\n\n⚫ INTER GALACTIQUE | Snapshot ${dateStr}`;
-      const txtContent = `${header}\n${body}${footer}`;
+      const footerTxt = `\n\n⚫ ${clubName} | Snapshot ${dateStr}`;
+      const txtContent = `${header}\n${body}${footerTxt}`;
       const txtPath = path.join(RAPPORTS_DIR, `rapport-${jour}-simple-${dateStr}.txt`);
       try {
         fs.writeFileSync(txtPath, txtContent.replace(/\r\n/g, '\n'), 'utf8');
@@ -424,8 +436,8 @@ module.exports = {
       const body = nonRepondus.size === 0
         ? '✅ Aucun absent détecté.'
         : `⏳ Membres n’ayant pas réagi (${nonRepondus.size}) :\n${idsLine(nonRepondus)}`;
-      const footer = `\n\n⚫ INTER GALACTIQUE | Snapshot ${dateStr}`;
-      const rapportTexte = `${header}\n\n${body}${footer}`;
+      const footerTxt = `\n\n⚫ ${clubName} | Snapshot ${dateStr}`;
+      const rapportTexte = `${header}\n\n${body}${footerTxt}`;
       const txtPath = path.join(RAPPORTS_DIR, `rapport-${jour}-simple-${dateStr}.txt`);
       try {
         fs.writeFileSync(txtPath, rapportTexte.replace(/\r\n/g, '\n'), 'utf8');
@@ -444,7 +456,7 @@ module.exports = {
           const lockLine = '🔒 **Disponibilités fermées** – merci de ne plus réagir.';
           if (!desc.includes('Disponibilités fermées')) {
             e.setDescription([desc, '', lockLine].filter(Boolean).join('\n'));
-            e.setFooter({ text: 'INTER GALACTIQUE ⚫ Disponibilités (fermées)' });
+            e.setFooter({ text: `${clubName} ⚫ Disponibilités (fermées)` });
             await message.edit({ content: '', embeds: [e] });
           }
         }
