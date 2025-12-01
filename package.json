@@ -1,6 +1,7 @@
 {
   "name": "galactiquebot",
   "version": "1.0.0",
+  "description": "Bot Discord INTER GALACTIQUE",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
