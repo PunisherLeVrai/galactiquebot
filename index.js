@@ -39,7 +39,47 @@ function getEmbedColorForGuild(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
-// --- Chargement des commandes ---
+/* ============================================================
+   COMPTEUR DE MEMBRES — GALACTIQUEBOT SUPPORT
+   Catégorie renommée en : "GalactiqueBot — X membres"
+============================================================ */
+
+const SUPPORT_GUILD_ID = '1444745566004449506';      // Serveur "GalactiqueBot Support"
+const SUPPORT_CATEGORY_ID = '1445186546335482037';   // Catégorie à renommer
+
+function buildSupportCounterName(count) {
+  return `GalactiqueBot — ${count} membres`;
+}
+
+async function updateSupportMemberCounter() {
+  try {
+    const guild = client.guilds.cache.get(SUPPORT_GUILD_ID);
+    if (!guild) return;
+
+    // On s'assure d'avoir les bons nombres
+    await guild.members.fetch().catch(() => {});
+    const count = guild.memberCount;
+
+    const channel =
+      guild.channels.cache.get(SUPPORT_CATEGORY_ID) ||
+      await client.channels.fetch(SUPPORT_CATEGORY_ID).catch(() => null);
+
+    if (!channel) return;
+
+    const newName = buildSupportCounterName(count);
+    if (channel.name === newName) return; // inutile de renommer
+
+    await channel.setName(newName, 'Mise à jour du compteur de membres GalactiqueBot');
+    console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
+  } catch (err) {
+    console.error('❌ Erreur lors de la mise à jour du compteur de membres :', err);
+  }
+}
+
+/* ============================================================
+   CHARGEMENT DES COMMANDES
+============================================================ */
+
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
 
@@ -61,7 +101,10 @@ if (fs.existsSync(commandsPath)) {
   console.warn('⚠️ Dossier /commands introuvable.');
 }
 
-// --- READY ---
+/* ============================================================
+   READY
+============================================================ */
+
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
 
@@ -99,9 +142,31 @@ client.once('ready', async () => {
       console.error(`❌ Erreur log ${guild.id}`, err);
     }
   }
+
+  // 🔢 Mise à jour initiale du compteur sur le serveur support
+  await updateSupportMemberCounter();
 });
 
-// --- INTERACTIONS ---
+/* ============================================================
+   EVENTS MEMBRES — POUR MAJ DU COMPTEUR
+============================================================ */
+
+// Nouveau membre sur le serveur support
+client.on('guildMemberAdd', async (member) => {
+  if (member.guild.id !== SUPPORT_GUILD_ID) return;
+  await updateSupportMemberCounter();
+});
+
+// Membre qui quitte le serveur support
+client.on('guildMemberRemove', async (member) => {
+  if (member.guild.id !== SUPPORT_GUILD_ID) return;
+  await updateSupportMemberCounter();
+});
+
+/* ============================================================
+   INTERACTIONS (COMMANDES SLASH)
+============================================================ */
+
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -126,11 +191,21 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// --- LOG ERREURS ---
-process.on('unhandledRejection', error => console.error('🚨 Promesse rejetée :', error));
-process.on('uncaughtException', error => console.error('💥 Exception :', error));
+/* ============================================================
+   LOG ERREURS GLOBALES
+============================================================ */
 
-// --- LOGIN ---
+process.on('unhandledRejection', error =>
+  console.error('🚨 Promesse rejetée :', error)
+);
+process.on('uncaughtException', error =>
+  console.error('💥 Exception :', error)
+);
+
+/* ============================================================
+   LOGIN
+============================================================ */
+
 const token = process.env.TOKEN;
 if (!token) {
   console.error('❌ TOKEN manquant dans .env');
