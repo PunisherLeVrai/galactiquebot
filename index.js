@@ -8,6 +8,7 @@ const {
   ActivityType,
   EmbedBuilder
 } = require('discord.js');
+const express = require('express'); // ⬅️ pour le keep-alive Railway
 
 const { getGlobalConfig, getGuildConfig } = require('./utils/config');
 
@@ -181,3 +182,18 @@ if (!token) {
 }
 
 client.login(token);
+
+/* ======================================================
+   KEEP-ALIVE RAILWAY (petit serveur web Express)
+   ====================================================== */
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send(`${BOT_NAME} actif ✅`);
+});
+
+app.listen(PORT, () => {
+  console.log(`🌍 Serveur web keep-alive lancé sur le port ${PORT}`);
+});
