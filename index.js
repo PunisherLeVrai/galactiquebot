@@ -108,13 +108,35 @@ if (fs.existsSync(commandsPath)) {
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
 
-  client.user.setPresence({
-    activities: [{
-      name: `${BOT_NAME} — surveillance`,
-      type: ActivityType.Watching
-    }],
-    status: 'online'
-  });
+  // 👀 Rotation automatique du "Regarde ..."
+  const activities = [
+    'Surveillance du club',
+    'Gestion des disponibilités',
+    'Rapports automatisés',
+    'Support : discord.gg/BrkeGC6JQE',
+    'GalactiqueBot en service'
+  ];
+
+  let activityIndex = 0;
+
+  function updatePresence() {
+    const name = activities[activityIndex];
+
+    client.user.setPresence({
+      activities: [{
+        name,
+        type: ActivityType.Watching
+      }],
+      status: 'online'
+    });
+
+    activityIndex = (activityIndex + 1) % activities.length;
+  }
+
+  // Lancement immédiat
+  updatePresence();
+  // Changement toutes les 5 minutes
+  setInterval(updatePresence, 300000);
 
   console.log(`🟢 ${BOT_NAME} prêt !`);
 
