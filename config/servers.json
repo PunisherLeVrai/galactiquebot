@@ -23,5 +23,17 @@
       "essai": "1393784904809975850",
       "convoque": "1439759021371428955"
     }
+  },
+
+  "1444745566004449506": {
+    "clubName": "GalactiqueBot Support",
+    "tag": "GBS",
+    "embedColor": "5865F2",
+
+    "logChannelId": "0",
+    "rapportChannelId": "0",
+    "mainDispoChannelId": "0",
+
+    "roles": {}
   }
 }
