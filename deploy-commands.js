@@ -6,10 +6,9 @@ const path = require('path');
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID; // ton serveur INTER GALACTIQUE
 
-if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
-  console.error('❌ TOKEN, CLIENT_ID ou GUILD_ID manquant dans .env');
+if (!TOKEN || !CLIENT_ID) {
+  console.error('❌ TOKEN ou CLIENT_ID manquant dans .env');
   process.exit(1);
 }
 
@@ -44,21 +43,19 @@ function loadCommands() {
     const commands = loadCommands();
     console.log(`🔎 ${commands.length} commande(s) trouvée(s) à déployer.`);
 
-    console.log(`🚀 Déploiement des commandes **GUILDE** pour ${GUILD_ID}…`);
+    console.log('🚀 Déploiement des commandes **GLOBALES**…');
 
-    // PUT remplace TOUTES les commandes de guilde par celles du body
+    // PUT = remplace TOUTES les commandes globales par celles du body
     await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      Routes.applicationCommands(CLIENT_ID),
       { body: commands }
     );
 
-    console.log('✅ Commandes de guilde déployées avec succès !');
+    console.log('✅ Commandes globales déployées avec succès !');
 
-    const after = await rest.get(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
-    );
+    const after = await rest.get(Routes.applicationCommands(CLIENT_ID));
     console.log(
-      `📋 Commandes actives sur la guilde : ${
+      `📋 Commandes globales actives : ${
         after.map(c => c.name).join(', ') || '(aucune)'
       }`
     );
