@@ -11,6 +11,16 @@ const {
 
 const { getGlobalConfig, getGuildConfig } = require('./utils/config');
 
+// --- IDs FIXES (deux serveurs) ---
+const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
+const IG_ARRIVALS_CHANNEL_ID = '1393775051433840680';   // #arrivées IG
+
+const SUPPORT_GUILD_ID = '1444745566004449506';         // GalactiqueBot Support
+const SUPPORT_CATEGORY_ID = '1445186546335482037';      // Catégorie compteur
+const SUPPORT_ARRIVALS_CHANNEL_ID = '1445186724576628899'; // #arrivées support
+const SUPPORT_HELP_ROLE_ID = '1445374262029451334';        // rôle @Aide
+const SUPPORT_HELP_CHANNEL_ID = '1445186873063505960';     // salon #support
+
 // --- Initialisation du client Discord ---
 const client = new Client({
   intents: [
@@ -43,9 +53,6 @@ function getEmbedColorForGuild(guildId) {
    COMPTEUR DE MEMBRES — GALACTIQUEBOT SUPPORT
    Catégorie renommée en : "GalactiqueBot — X membres"
 ============================================================ */
-
-const SUPPORT_GUILD_ID = '1444745566004449506';      // Serveur "GalactiqueBot Support"
-const SUPPORT_CATEGORY_ID = '1445186546335482037';   // Catégorie à renommer
 
 function buildSupportCounterName(count) {
   return `GalactiqueBot — ${count} membres`;
@@ -170,16 +177,88 @@ client.once('ready', async () => {
 });
 
 /* ============================================================
-   EVENTS MEMBRES — POUR MAJ DU COMPTEUR
+   MESSAGES DE BIENVENUE + MISE À JOUR COMPTEUR
 ============================================================ */
 
-// Nouveau membre sur le serveur support
+async function sendWelcomeInterGalactique(member) {
+  try {
+    const channel = await member.guild.channels
+      .fetch(IG_ARRIVALS_CHANNEL_ID)
+      .catch(() => null);
+    if (!channel) return;
+
+    const total = member.guild.memberCount;
+
+    const embed = new EmbedBuilder()
+      .setColor(getEmbedColorForGuild(member.guild.id))
+      .setAuthor({ name: 'Ho ! Un nouveau joueur INTER GALACTIQUE !' })
+      .setDescription(
+        `👋 Bienvenue ${member} sur le serveur **INTER GALACTIQUE**.\n` +
+        `Nous sommes désormais **${total}** membres. 🎉\n\n` +
+        `> Tu peux dès maintenant :\n` +
+        `> • Lire le règlement et les infos du club\n` +
+        `> • Mettre tes disponibilités chaque jour\n` +
+        `> • Discuter avec le staff dans ta loge dédiée\n\n` +
+        `🚀 Prépare-toi à prouver que tu as le niveau.`
+      )
+      .setFooter({ text: 'INTER GALACTIQUE — GalactiqueBot' })
+      .setTimestamp();
+
+    await channel.send({ content: `${member}`, embeds: [embed] });
+    console.log(`🙌 Message de bienvenue envoyé (INTER GALACTIQUE) pour ${member.id}`);
+  } catch (err) {
+    console.error('❌ Erreur welcome INTER GALACTIQUE :', err);
+  }
+}
+
+async function sendWelcomeSupport(member) {
+  try {
+    const channel = await member.guild.channels
+      .fetch(SUPPORT_ARRIVALS_CHANNEL_ID)
+      .catch(() => null);
+    if (!channel) return;
+
+    const total = member.guild.memberCount;
+
+    const embed = new EmbedBuilder()
+      .setColor(getEmbedColorForGuild(member.guild.id))
+      .setAuthor({ name: 'Ho ! Un nouveau membre !' })
+      .setDescription(
+        `🐙 Bienvenue sur **GalactiqueBot Support** ${member} !\n` +
+        `Nous sommes désormais **${total}** membres. 🎉\n\n` +
+        `» Tu peux demander de l'aide à notre équipe dans le salon ` +
+        `<#${SUPPORT_HELP_CHANNEL_ID}> en créant un nouveau message pour ton problème.\n` +
+        `Pense aussi à mentionner le rôle <@&${SUPPORT_HELP_ROLE_ID}> ` +
+        `afin que ta demande soit traitée plus rapidement.\n\n` +
+        `If you speak English, you can also ask your questions in ` +
+        `<#${SUPPORT_HELP_CHANNEL_ID}> — the team will help you.`
+      )
+      .setFooter({ text: 'GalactiqueBot Support' })
+      .setTimestamp();
+
+    await channel.send({ content: `${member}`, embeds: [embed] });
+    console.log(`🙌 Message de bienvenue envoyé (Support) pour ${member.id}`);
+  } catch (err) {
+    console.error('❌ Erreur welcome SUPPORT :', err);
+  }
+}
+
+// Un seul handler pour les deux serveurs
 client.on('guildMemberAdd', async (member) => {
-  if (member.guild.id !== SUPPORT_GUILD_ID) return;
-  await updateSupportMemberCounter();
+  // INTER GALACTIQUE
+  if (member.guild.id === IG_GUILD_ID) {
+    await sendWelcomeInterGalactique(member);
+    return;
+  }
+
+  // Serveur SUPPORT : welcome + MAJ compteur
+  if (member.guild.id === SUPPORT_GUILD_ID) {
+    await sendWelcomeSupport(member);
+    await updateSupportMemberCounter();
+  }
 });
 
-// Membre qui quitte le serveur support
+// Membre qui quitte le serveur support => MAJ compteur
 client.on('guildMemberRemove', async (member) => {
   if (member.guild.id !== SUPPORT_GUILD_ID) return;
   await updateSupportMemberCounter();
