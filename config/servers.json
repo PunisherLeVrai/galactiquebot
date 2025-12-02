@@ -8,6 +8,8 @@
     "rapportChannelId": "1393775806496641074",
     "mainDispoChannelId": "1429059902852173936",
 
+    "welcomeChannelId": "1393775051433840680",
+
     "dispoMessages": {
       "lundi": "1429061125307105290",
       "mardi": "1429061128742502450",
@@ -33,6 +35,10 @@
     "logChannelId": "0",
     "rapportChannelId": "0",
     "mainDispoChannelId": "0",
+
+    "welcomeChannelId": "1445186724576628899",
+    "supportChannelId": "1445186873063505960",
+    "helpRoleId": "1445374262029451334",
 
     "roles": {}
   }
