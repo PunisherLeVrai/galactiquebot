@@ -6,18 +6,25 @@ const path = require('path');
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID; // ton serveur INTER GALACTIQUE
 
-if (!TOKEN || !CLIENT_ID) {
-  console.error('❌ TOKEN ou CLIENT_ID manquant dans le .env');
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.error('❌ TOKEN, CLIENT_ID ou GUILD_ID manquant dans .env');
   process.exit(1);
 }
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-// Chargement des commandes depuis /commands
+// Charge toutes les commandes du dossier ./commands
 function loadCommands() {
   const commands = [];
   const commandsPath = path.join(__dirname, 'commands');
+
+  if (!fs.existsSync(commandsPath)) {
+    console.error('❌ Dossier ./commands introuvable');
+    process.exit(1);
+  }
+
   const files = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'));
 
   for (const file of files) {
@@ -28,50 +35,33 @@ function loadCommands() {
     }
     commands.push(cmd.data.toJSON());
   }
+
   return commands;
 }
 
 (async () => {
   try {
     const commands = loadCommands();
-    console.log(`🔎 ${commands.length} commande(s) trouvée(s) à déployer (GLOBAL).`);
+    console.log(`🔎 ${commands.length} commande(s) trouvée(s) à déployer.`);
 
-    /* ---------------- PURGE COMMANDES GLOBALES ---------------- */
-    const existingGlobal = await rest.get(Routes.applicationCommands(CLIENT_ID));
+    console.log(`🚀 Déploiement des commandes **GUILDE** pour ${GUILD_ID}…`);
 
-    console.log(
-      `📋 Commandes globales existantes: ${
-        existingGlobal.map(c => c.name).join(', ') || '(aucune)'
-      }`
-    );
-
-    if (existingGlobal.length) {
-      console.log('🧹 Suppression des commandes globales existantes…');
-      for (const c of existingGlobal) {
-        await rest.delete(Routes.applicationCommand(CLIENT_ID, c.id));
-        console.log(`❌ Supprimée : /${c.name}`);
-      }
-      console.log('✅ Purge globale terminée.\n');
-    } else {
-      console.log('✅ Aucune commande globale à supprimer.\n');
-    }
-
-    /* ---------------- DÉPLOIEMENT GLOBAL ---------------- */
-    console.log('🚀 Déploiement des nouvelles commandes **GLOBALES**…');
+    // PUT remplace TOUTES les commandes de guilde par celles du body
     await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
 
-    console.log('✅ Commandes globales déployées avec succès !');
+    console.log('✅ Commandes de guilde déployées avec succès !');
 
-    const after = await rest.get(Routes.applicationCommands(CLIENT_ID));
+    const after = await rest.get(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
+    );
     console.log(
-      `🔁 Vérification: ${after.length} commande(s) actives (global): ${
+      `📋 Commandes actives sur la guilde : ${
         after.map(c => c.name).join(', ') || '(aucune)'
       }`
     );
-
   } catch (err) {
     console.error('❌ Erreur lors du déploiement :');
     if (err?.rawError) console.error(JSON.stringify(err.rawError, null, 2));
