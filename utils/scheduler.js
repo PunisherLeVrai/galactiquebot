@@ -5,7 +5,8 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  PermissionFlagsBits
 } = require('discord.js');
 const { getGuildConfig } = require('./config');
 
@@ -16,7 +17,7 @@ const DEFAULT_COLOR = 0xff4db8;
 const IG_GUILD_ID = '1392639720491581551';
 const IG_REMINDER_12H_CHANNEL_ID = '1429059902852173936'; // rappel 12h (salon dispo)
 const IG_REPORT_CHANNEL_ID = '1446471718943326259';       // rapport détaillé 12h & 17h
-const IG_PANEL_CHANNEL_ID = '1393774851218735216';        // panneau de dispos (ton salon)
+const IG_PANEL_CHANNEL_ID = '1393774851218735216';        // panneau de dispos
 
 // ⚙️ Options d’automatisation pour IG
 const IG_AUTOMATION = {
@@ -219,7 +220,6 @@ async function sendDispoPanelIG(client) {
     return;
   }
 
-  // URLs vers chaque message de dispo
   const makeUrl = (jourKey) => {
     const msgId = dispoMessages[jourKey];
     if (!msgId) return null;
@@ -236,13 +236,11 @@ async function sendDispoPanelIG(client) {
     dimanche: makeUrl('dimanche')
   };
 
-  // Si on n'a aucun lien, on ne spam pas
   if (!Object.values(urls).some(Boolean)) {
     console.warn('⚠️ [AUTO] Aucun message de dispo configuré pour le panneau');
     return;
   }
 
-  // Construction des lignes de boutons (max 5 par ligne)
   const rows = [];
 
   const row1 = new ActionRowBuilder();
@@ -339,7 +337,7 @@ async function runNoonReminderIG(client) {
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(now); // "lundi" etc.
+  const jour = getJourString(now);
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -575,15 +573,150 @@ async function closeDisposAt17IG(client) {
 }
 
 /* ============================================================
+   SYNC PSEUDOS AUTO (toutes les heures à H:10)
+============================================================ */
+
+const MAX_LEN = 32;
+const SLEEP_MS = 350;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function cleanPseudo(username, room = MAX_LEN) {
+  if (!username) return 'Joueur';
+  let clean = username.replace(/[^A-Za-z]/g, '');
+  if (!clean.length) return 'Joueur';
+  clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+  if (clean.length > room) {
+    clean = clean.slice(0, room - 1) + '…';
+  }
+  return clean;
+}
+
+function getHierarchy(member, hierarchyRoles = []) {
+  const found = hierarchyRoles.find(r => member.roles.cache.has(r.id));
+  return found ? found.label : null;
+}
+
+function getTeam(member, teamRoles = []) {
+  const found = teamRoles.find(r => member.roles.cache.has(r.id));
+  return found ? found.label : null;
+}
+
+function getPostes(member, posteRoles = []) {
+  return posteRoles
+    .filter(p => member.roles.cache.has(p.id))
+    .map(p => p.label)
+    .slice(0, 3);
+}
+
+function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRoles) {
+  const tag = tagFromConfig || 'XIG';
+  const hierarchy = getHierarchy(member, hierarchyRoles);
+  const team = getTeam(member, teamRoles);
+  const postes = getPostes(member, posteRoles);
+
+  const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
+  let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
+
+  const suffixParts = [];
+  if (postes.length) suffixParts.push(postes.join('/'));
+  if (team) suffixParts.push(team);
+
+  let full = base;
+  if (suffixParts.length) {
+    full += ' | ' + suffixParts.join(' | ');
+  }
+
+  if (full.length > MAX_LEN) {
+    const fixedPrefix = `${tag}${hierarchy ? ' ' + hierarchy : ''}`.trim();
+    const suffix = suffixParts.length ? ' | ' + suffixParts.join(' | ') : '';
+
+    const roomForPseudo = Math.max(
+      3,
+      MAX_LEN - (fixedPrefix.length ? fixedPrefix.length + 1 : 0) - suffix.length
+    );
+
+    const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
+    full = fixedPrefix.length
+      ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
+      : `${trimmedPseudo}${suffix}`;
+  }
+
+  return full.slice(0, MAX_LEN);
+}
+
+async function autoSyncNicknamesIG(client) {
+  const guild = client.guilds.cache.get(IG_GUILD_ID);
+  if (!guild) return;
+
+  const me = guild.members.me;
+  if (!me || !me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
+    console.warn('⚠️ [AUTO] Pas la permission ManageNicknames pour sync pseudos.');
+    return;
+  }
+
+  const cfg = getGuildConfig(guild.id) || {};
+  const tag = cfg.tag || 'XIG';
+
+  const nicknameCfg = cfg.nickname || {};
+  const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
+  const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
+  const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
+
+  if (!hierarchyRoles.length && !teamRoles.length && !posteRoles.length) {
+    console.warn('⚠️ [AUTO] Config nickname.* manquante, sync pseudos ignorée.');
+    return;
+  }
+
+  await guild.members.fetch().catch(() => {});
+  const members = guild.members.cache.filter(m => !m.user.bot);
+
+  const changes = [];
+  const unchanged = [];
+  const blocked = [];
+  const errors = [];
+
+  for (const member of members.values()) {
+    const newNick = buildNickname(member, tag, hierarchyRoles, teamRoles, posteRoles);
+    const current = member.nickname || member.user.username;
+
+    if (current === newNick) {
+      unchanged.push(member);
+      continue;
+    }
+
+    if (!member.manageable) {
+      blocked.push(member);
+      continue;
+    }
+
+    try {
+      await member.setNickname(newNick, 'Synchronisation pseudos XIG (auto)');
+      await sleep(SLEEP_MS);
+    } catch (e) {
+      errors.push({ member, err: String(e?.message || e) });
+      continue;
+    }
+
+    changes.push({ member, from: current, to: newNick });
+  }
+
+  console.log(
+    `🧾 [AUTO] Sync pseudos : modifiés=${changes.length}, ok=${unchanged.length}, ` +
+    `bloqués=${blocked.length}, erreurs=${errors.length}`
+  );
+}
+
+/* ============================================================
    INIT SCHEDULER
 ============================================================ */
 
 function initScheduler(client) {
-  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 22h)…');
+  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 22h + sync pseudos)…');
 
   let lastNoonDate = null;
   let last17Date = null;
   let lastPanelKey = null; // pour 10h & 22h
+  let lastNickKey = null;  // pour sync pseudos horaire
 
   setInterval(async () => {
     const now = getParisNow();
@@ -626,6 +759,20 @@ function initScheduler(client) {
         await closeDisposAt17IG(client);
       } catch (e) {
         console.error('❌ [AUTO] Erreur tâche 17h :', e);
+      }
+    }
+
+    // 🔁 Sync pseudos automatique — toutes les heures à H:10
+    if (minute === 10) {
+      const nickKey = `${dateKey}-${hour}`;
+      if (lastNickKey !== nickKey) {
+        lastNickKey = nickKey;
+        console.log(`⏰ [AUTO] Tick sync pseudos ${hour}h10 pour ${dateKey}`);
+        try {
+          await autoSyncNicknamesIG(client);
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur sync pseudos auto :', e);
+        }
       }
     }
   }, 60 * 1000); // vérification toutes les minutes
