@@ -194,11 +194,12 @@ async function fetchDispoDataForDay(guild, jour) {
 }
 
 // --- Rappel 12h : absents du jour ---
-async function runNoonReminderIG(client, dateObj) {
+async function runNoonReminderIG(client) {
+  const now = getParisNow();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(dateObj); // "lundi" etc.
+  const jour = getJourString(now); // "lundi" etc.
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -255,11 +256,12 @@ async function runNoonReminderIG(client, dateObj) {
 }
 
 // --- Rapport détaillé (12h & 17h) ---
-async function sendDetailedReportIG(client, dateObj, hourLabel) {
+async function sendDetailedReportIG(client, hourLabel) {
+  const now = getParisNow();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(dateObj);
+  const jour = getJourString(now);
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -321,11 +323,12 @@ async function sendDetailedReportIG(client, dateObj, hourLabel) {
 }
 
 // --- Fermeture 17h : snapshot + verrouillage + clear réactions ---
-async function closeDisposAt17IG(client, dateObj) {
+async function closeDisposAt17IG(client) {
+  const now = getParisNow();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(dateObj);
+  const jour = getJourString(now);
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -446,8 +449,8 @@ function initScheduler(client) {
       lastNoonDate = dateKey;
       console.log(`⏰ [AUTO] Tick 12h pour ${dateKey}`);
       try {
-        await runNoonReminderIG(client, now);
-        await sendDetailedReportIG(client, now, '12h');
+        await runNoonReminderIG(client);
+        await sendDetailedReportIG(client, '12h');
       } catch (e) {
         console.error('❌ [AUTO] Erreur tâche 12h :', e);
       }
@@ -458,8 +461,8 @@ function initScheduler(client) {
       last17Date = dateKey;
       console.log(`⏰ [AUTO] Tick 17h pour ${dateKey}`);
       try {
-        await sendDetailedReportIG(client, now, '17h');
-        await closeDisposAt17IG(client, now);
+        await sendDetailedReportIG(client, '17h');
+        await closeDisposAt17IG(client);
       } catch (e) {
         console.error('❌ [AUTO] Erreur tâche 17h :', e);
       }
