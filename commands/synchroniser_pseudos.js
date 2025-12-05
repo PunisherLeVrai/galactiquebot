@@ -7,49 +7,6 @@ const {
 
 const { getConfigFromInteraction } = require('../utils/config');
 
-/* =========================
-   CONFIG ROLES (TES IDS)
-   (spécifiques à XIG INTER GALACTIQUE)
-========================= */
-
-// Rôles hiérarchiques (du plus haut au plus bas)
-const ROLE_HIERARCHY = [
-  { id: '1393784275853246666', label: 'PRÉSIDENT' },
-  { id: '1393891243368386641', label: 'GM' },
-  { id: '1393891684752031814', label: 'coGM' },
-  { id: '1393892611382575185', label: 'STAFF' },
-  { id: '1393892474170114169', label: 'HoF' },
-  { id: '1393892334613172275', label: 'DEP' },
-  { id: '1393785087132172429', label: 'NEW' },
-  { id: '1393784530124668988', label: 'IGA' },
-  { id: '1393784904809975850', label: 'TEST' }
-];
-
-// Équipes
-const TEAM_ROLES = [
-  { id: '1423016118448296056', label: 'A' },
-  { id: '1423016177751429191', label: 'B' },
-  { id: '1423016222659706992', label: 'C' }
-];
-
-// Postes
-const POSTE_ROLES = [
-  { id: '1429389198531498085', label: 'GK' },
-  { id: '1429389245935779953', label: 'DC' },
-  { id: '1429389286742036560', label: 'DG' },
-  { id: '1444317466468810854', label: 'DD' },
-  { id: '1429389418958946346', label: 'MDC' },
-  { id: '1429389494863532062', label: 'MC' },
-  { id: '1429389702842290206', label: 'MG' },
-  { id: '1444317534084923392', label: 'MD' },
-  { id: '1429389840767516794', label: 'MOC' },
-  { id: '1429389901157236806', label: 'AG' },
-  { id: '1444317591781769217', label: 'AD' },
-  { id: '1429389946183090377', label: 'BU' },
-  { id: '1444317669859004518', label: 'ATG' },
-  { id: '1444317741505974333', label: 'ATD' }
-];
-
 const MAX_LEN = 32;
 const SLEEP_MS = 350;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -74,18 +31,18 @@ function cleanPseudo(username, room = MAX_LEN) {
   return clean;
 }
 
-function getHierarchy(member) {
-  const found = ROLE_HIERARCHY.find(r => member.roles.cache.has(r.id));
+function getHierarchy(member, hierarchyRoles = []) {
+  const found = hierarchyRoles.find(r => member.roles.cache.has(r.id));
   return found ? found.label : null;
 }
 
-function getTeam(member) {
-  const found = TEAM_ROLES.find(r => member.roles.cache.has(r.id));
+function getTeam(member, teamRoles = []) {
+  const found = teamRoles.find(r => member.roles.cache.has(r.id));
   return found ? found.label : null;
 }
 
-function getPostes(member) {
-  return POSTE_ROLES
+function getPostes(member, posteRoles = []) {
+  return posteRoles
     .filter(p => member.roles.cache.has(p.id))
     .map(p => p.label)
     .slice(0, 3);
@@ -95,11 +52,11 @@ function getPostes(member) {
  * Construit le pseudo :
  * TAG RÔLE Pseudo | Poste1/Poste2/Poste3 | A/B/C
  */
-function buildNickname(member, tagFromConfig) {
+function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRoles) {
   const tag = tagFromConfig || 'XIG';
-  const hierarchy = getHierarchy(member);
-  const team = getTeam(member);
-  const postes = getPostes(member);
+  const hierarchy = getHierarchy(member, hierarchyRoles);
+  const team = getTeam(member, teamRoles);
+  const postes = getPostes(member, posteRoles);
 
   // On prépare d'abord sans se soucier de la taille
   const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
@@ -159,9 +116,22 @@ module.exports = {
       });
     }
 
-    // Récupération du tag via la config serveur (servers.json)
+    // 🔧 Récupération de la config serveur (tag + mapping des rôles)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const tag = guildConfig?.tag || 'XIG';
+
+    const nicknameCfg = guildConfig?.nickname || {};
+    const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
+    const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
+    const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
+
+    if (!hierarchyRoles.length && !teamRoles.length && !posteRoles.length) {
+      return interaction.reply({
+        content:
+          '❌ La configuration des rôles pour les pseudos est manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
+        flags: MessageFlags.Ephemeral
+      });
+    }
 
     await interaction.reply({
       content: simulation
@@ -179,7 +149,7 @@ module.exports = {
     const errors = [];
 
     for (const member of members.values()) {
-      const newNick = buildNickname(member, tag);
+      const newNick = buildNickname(member, tag, hierarchyRoles, teamRoles, posteRoles);
       const current = member.nickname || member.user.username;
 
       if (current === newNick) {
@@ -222,7 +192,9 @@ module.exports = {
         preview,
         changes.length > 25 ? `\n... (+${changes.length - 25} autres)` : '',
         '```'
-      ].filter(Boolean).join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
       flags: MessageFlags.Ephemeral
     });
   }
