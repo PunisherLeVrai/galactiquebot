@@ -10,7 +10,7 @@ const {
 } = require('discord.js');
 
 const { getGlobalConfig, getGuildConfig } = require('./utils/config');
-const { initScheduler } = require('./utils/scheduler'); // 🆕 scheduler
+const { initScheduler } = require('./utils/scheduler'); // 🕒 scheduler
 
 // --- IDs FIXES (deux serveurs) ---
 const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
@@ -141,7 +141,7 @@ client.once('ready', async () => {
   }
 
   updatePresence();
-  setInterval(updatePresence, 300000);
+  setInterval(updatePresence, 300000); // toutes les 5 minutes
 
   console.log(`🟢 ${BOT_NAME} prêt !`);
 
@@ -244,12 +244,37 @@ async function sendWelcomeSupport(member) {
   }
 }
 
+/* ============================================================
+   ARRIVÉES / DÉPARTS
+============================================================ */
+
 client.on('guildMemberAdd', async (member) => {
+  // 🔹 INTER GALACTIQUE
   if (member.guild.id === IG_GUILD_ID) {
     await sendWelcomeInterGalactique(member);
+
+    // Ajout automatique du rôle "recrue" si configuré dans servers.json
+    try {
+      const cfg = getGuildConfig(member.guild.id) || {};
+      const recrueId = cfg.roles?.recrue;
+
+      if (recrueId) {
+        const role = member.guild.roles.cache.get(recrueId);
+        if (role) {
+          await member.roles.add(role, 'Arrivée sur le serveur — rôle recrue automatique');
+          console.log(`🎫 Rôle "recrue" ajouté à ${member.user.tag}`);
+        } else {
+          console.warn(`⚠️ Rôle "recrue" introuvable pour le guild ${member.guild.id}`);
+        }
+      }
+    } catch (err) {
+      console.error('❌ Erreur ajout rôle recrue :', err);
+    }
+
     return;
   }
 
+  // 🔹 Serveur SUPPORT
   if (member.guild.id === SUPPORT_GUILD_ID) {
     await sendWelcomeSupport(member);
     await updateSupportMemberCounter();
