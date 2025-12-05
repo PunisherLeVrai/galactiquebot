@@ -10,6 +10,7 @@ const {
 } = require('discord.js');
 
 const { getGlobalConfig, getGuildConfig } = require('./utils/config');
+const { initScheduler } = require('./utils/scheduler'); // 🆕 scheduler
 
 // --- IDs FIXES (deux serveurs) ---
 const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
@@ -63,7 +64,6 @@ async function updateSupportMemberCounter() {
     const guild = client.guilds.cache.get(SUPPORT_GUILD_ID);
     if (!guild) return;
 
-    // On s'assure d'avoir les bons nombres
     await guild.members.fetch().catch(() => {});
     const count = guild.memberCount;
 
@@ -74,7 +74,7 @@ async function updateSupportMemberCounter() {
     if (!channel) return;
 
     const newName = buildSupportCounterName(count);
-    if (channel.name === newName) return; // inutile de renommer
+    if (channel.name === newName) return;
 
     await channel.setName(newName, 'Mise à jour du compteur de membres GalactiqueBot');
     console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
@@ -115,7 +115,7 @@ if (fs.existsSync(commandsPath)) {
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
 
-  // 👀 Rotation automatique du "Regarde ..."
+  // Rotation automatique du "Regarde ..."
   const activities = [
     'Surveillance du club',
     'Gestion des disponibilités',
@@ -140,9 +140,7 @@ client.once('ready', async () => {
     activityIndex = (activityIndex + 1) % activities.length;
   }
 
-  // Lancement immédiat
   updatePresence();
-  // Changement toutes les 5 minutes
   setInterval(updatePresence, 300000);
 
   console.log(`🟢 ${BOT_NAME} prêt !`);
@@ -172,8 +170,11 @@ client.once('ready', async () => {
     }
   }
 
-  // 🔢 Mise à jour initiale du compteur sur le serveur support
+  // Compteur membres serveur support
   await updateSupportMemberCounter();
+
+  // 🕒 Lancement du scheduler automatique (12h / 17h)
+  initScheduler(client);
 });
 
 /* ============================================================
@@ -243,22 +244,18 @@ async function sendWelcomeSupport(member) {
   }
 }
 
-// Un seul handler pour les deux serveurs
 client.on('guildMemberAdd', async (member) => {
-  // INTER GALACTIQUE
   if (member.guild.id === IG_GUILD_ID) {
     await sendWelcomeInterGalactique(member);
     return;
   }
 
-  // Serveur SUPPORT : welcome + MAJ compteur
   if (member.guild.id === SUPPORT_GUILD_ID) {
     await sendWelcomeSupport(member);
     await updateSupportMemberCounter();
   }
 });
 
-// Membre qui quitte le serveur support => MAJ compteur
 client.on('guildMemberRemove', async (member) => {
   if (member.guild.id !== SUPPORT_GUILD_ID) return;
   await updateSupportMemberCounter();
