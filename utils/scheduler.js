@@ -16,6 +16,7 @@ const DEFAULT_COLOR = 0xff4db8;
 const IG_GUILD_ID = '1392639720491581551';
 const IG_REMINDER_12H_CHANNEL_ID = '1429059902852173936'; // rappel 12h (salon dispo)
 const IG_REPORT_CHANNEL_ID = '1446471718943326259';       // rapport détaillé 12h & 17h
+const IG_PANEL_CHANNEL_ID = '1393774851218735216';        // panneau de dispos (ton salon)
 
 // ⚙️ Options d’automatisation pour IG
 const IG_AUTOMATION = {
@@ -193,7 +194,146 @@ async function fetchDispoDataForDay(guild, jour) {
   };
 }
 
-// --- Rappel 12h : absents du jour ---
+/* ============================================================
+   PANNEAU DE DISPONIBILITÉS (10h & 22h)
+============================================================ */
+
+async function sendDispoPanelIG(client) {
+  const guild = client.guilds.cache.get(IG_GUILD_ID);
+  if (!guild) return;
+
+  const cfg = getGuildConfig(guild.id) || {};
+  const dispoMessages = cfg.dispoMessages || {};
+  const dispoChannelId = cfg.mainDispoChannelId;
+
+  if (!dispoChannelId) {
+    console.warn('⚠️ [AUTO] mainDispoChannelId manquant pour IG');
+    return;
+  }
+
+  const panelChannel = await guild.channels
+    .fetch(IG_PANEL_CHANNEL_ID)
+    .catch(() => null);
+  if (!panelChannel) {
+    console.warn('⚠️ [AUTO] Salon panneau de dispos introuvable');
+    return;
+  }
+
+  // URLs vers chaque message de dispo
+  const makeUrl = (jourKey) => {
+    const msgId = dispoMessages[jourKey];
+    if (!msgId) return null;
+    return `https://discord.com/channels/${guild.id}/${dispoChannelId}/${msgId}`;
+  };
+
+  const urls = {
+    lundi: makeUrl('lundi'),
+    mardi: makeUrl('mardi'),
+    mercredi: makeUrl('mercredi'),
+    jeudi: makeUrl('jeudi'),
+    vendredi: makeUrl('vendredi'),
+    samedi: makeUrl('samedi'),
+    dimanche: makeUrl('dimanche')
+  };
+
+  // Si on n'a aucun lien, on ne spam pas
+  if (!Object.values(urls).some(Boolean)) {
+    console.warn('⚠️ [AUTO] Aucun message de dispo configuré pour le panneau');
+    return;
+  }
+
+  // Construction des lignes de boutons (max 5 par ligne)
+  const rows = [];
+
+  const row1 = new ActionRowBuilder();
+  if (urls.lundi) {
+    row1.addComponents(
+      new ButtonBuilder()
+        .setLabel('LUNDI')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.lundi)
+    );
+  }
+  if (urls.mardi) {
+    row1.addComponents(
+      new ButtonBuilder()
+        .setLabel('MARDI')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.mardi)
+    );
+  }
+  if (row1.components.length) rows.push(row1);
+
+  const row2 = new ActionRowBuilder();
+  if (urls.mercredi) {
+    row2.addComponents(
+      new ButtonBuilder()
+        .setLabel('MERCREDI')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.mercredi)
+    );
+  }
+  if (urls.jeudi) {
+    row2.addComponents(
+      new ButtonBuilder()
+        .setLabel('JEUDI')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.jeudi)
+    );
+  }
+  if (row2.components.length) rows.push(row2);
+
+  const row3 = new ActionRowBuilder();
+  if (urls.vendredi) {
+    row3.addComponents(
+      new ButtonBuilder()
+        .setLabel('VENDREDI')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.vendredi)
+    );
+  }
+  if (urls.samedi) {
+    row3.addComponents(
+      new ButtonBuilder()
+        .setLabel('SAMEDI')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.samedi)
+    );
+  }
+  if (row3.components.length) rows.push(row3);
+
+  const row4 = new ActionRowBuilder();
+  if (urls.dimanche) {
+    row4.addComponents(
+      new ButtonBuilder()
+        .setLabel('DIMANCHE')
+        .setStyle(ButtonStyle.Link)
+        .setURL(urls.dimanche)
+    );
+  }
+  if (row4.components.length) rows.push(row4);
+
+  const content = [
+    '⚠️ **Confirmez vos disponibilités immédiatement.** Réagissez avec ✅ ou ❌.',
+    '🎯 **Aucune excuse.** Chaque réponse est obligatoire pour l’organisation de l’équipe.',
+    'Merci de respecter les consignes.',
+    '',
+    '@everyone'
+  ].join('\n');
+
+  await panelChannel.send({
+    content,
+    components: rows,
+    allowedMentions: { parse: ['everyone'] }
+  });
+
+  console.log('📌 [AUTO] Panneau de disponibilités envoyé (IG).');
+}
+
+/* ============================================================
+   RAPPEL 12h
+============================================================ */
+
 async function runNoonReminderIG(client) {
   const now = getParisNow();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
@@ -255,7 +395,10 @@ async function runNoonReminderIG(client) {
   console.log(`📣 [AUTO] Rappel 12h envoyé pour ${jour} (IG).`);
 }
 
-// --- Rapport détaillé (12h & 17h) ---
+/* ============================================================
+   RAPPORTS 12h & 17h
+============================================================ */
+
 async function sendDetailedReportIG(client, hourLabel) {
   const now = getParisNow();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
@@ -322,7 +465,10 @@ async function sendDetailedReportIG(client, hourLabel) {
   console.log(`📊 [AUTO] Rapport ${hourLabel} envoyé pour ${jour} (IG).`);
 }
 
-// --- Fermeture 17h : snapshot + verrouillage + clear réactions ---
+/* ============================================================
+   FERMETURE 17h
+============================================================ */
+
 async function closeDisposAt17IG(client) {
   const now = getParisNow();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
@@ -349,7 +495,7 @@ async function closeDisposAt17IG(client) {
   const color = getEmbedColorFromConfig(guild.id);
   const dateStr = toISODate(getParisNow());
 
-  // 1) Snapshot JSON (même format que /disponibilites)
+  // 1) Snapshot JSON
   try {
     if (!fs.existsSync(RAPPORTS_DIR)) {
       fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
@@ -406,7 +552,7 @@ async function closeDisposAt17IG(client) {
     }
   }
 
-  // 4) Message "dispos fermées" dans le salon des dispos
+  // 4) Message "dispos fermées"
   if (IG_AUTOMATION.sendCloseMessageAt17) {
     try {
       await dispoChannel.send({
@@ -428,21 +574,36 @@ async function closeDisposAt17IG(client) {
   console.log(`🔒 [AUTO] Dispos fermées pour ${jour} (IG).`);
 }
 
-// ============================================================
-// INIT SCHEDULER
-// ============================================================
+/* ============================================================
+   INIT SCHEDULER
+============================================================ */
 
 function initScheduler(client) {
-  console.log('⏰ Initialisation du scheduler automatique (12h / 17h)…');
+  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 22h)…');
 
   let lastNoonDate = null;
   let last17Date = null;
+  let lastPanelKey = null; // pour 10h & 22h
 
   setInterval(async () => {
     const now = getParisNow();
     const hour = now.getHours();
     const minute = now.getMinutes();
     const dateKey = toISODate(now);
+
+    // 10h00 & 22h00 → panneau de disponibilités
+    if ((hour === 10 || hour === 22) && minute === 0) {
+      const panelKey = `${dateKey}-${hour}`;
+      if (lastPanelKey !== panelKey) {
+        lastPanelKey = panelKey;
+        console.log(`⏰ [AUTO] Tick panneau ${hour}h pour ${dateKey}`);
+        try {
+          await sendDispoPanelIG(client);
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche panneau dispos :', e);
+        }
+      }
+    }
 
     // 12h00 → rappel + rapport intermédiaire
     if (hour === 12 && minute === 0 && lastNoonDate !== dateKey) {
