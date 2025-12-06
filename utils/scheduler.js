@@ -38,6 +38,7 @@ function getEmbedColorFromConfig(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
+// Anti-mentions
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
@@ -55,7 +56,6 @@ function toISODate(d) {
 }
 
 function getJourString(d) {
-  // 0 = dimanche, 1 = lundi, ...
   const map = [
     'dimanche',
     'lundi',
@@ -329,8 +329,29 @@ async function sendDispoPanelIG(client) {
 }
 
 /* ============================================================
-   RAPPEL 12h
+   RAPPEL 12h — même comportement que /disponibilites mode "rappel_absents"
 ============================================================ */
+
+function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900) {
+  const batches = [];
+  let cur = [];
+  let curLen = headerText.length;
+
+  for (const id of allIds) {
+    const mention = `<@${id}>`;
+    const addLen = (cur.length ? sep.length : 0) + mention.length;
+    if (curLen + addLen > limit) {
+      batches.push(cur);
+      cur = [id];
+      curLen = headerText.length + mention.length;
+    } else {
+      cur.push(id);
+      curLen += addLen;
+    }
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
 
 async function runNoonReminderIG(client) {
   const now = getParisNow();
@@ -346,11 +367,10 @@ async function runNoonReminderIG(client) {
   const {
     cfg,
     nonRepondus,
-    rowBtn,
-    messageURL
+    messageURL,
+    dispoChannel
   } = data;
 
-  const color = getEmbedColorFromConfig(guild.id);
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
 
   const channel = await guild.channels
@@ -364,37 +384,52 @@ async function runNoonReminderIG(client) {
   const absentsArr = [...nonRepondus.values()];
   const ids = absentsArr.map(m => m.id);
 
-  const embed = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(`📣 RAPPEL DISPONIBILITÉS — ${jour.toUpperCase()}`)
-    .setDescription(
-      absentsArr.length === 0
-        ? '✅ Tout le monde a déjà réagi aux disponibilités du jour.'
-        : [
-            'Merci de réagir aux disponibilités du jour ✅ / ❌',
-            '',
-            `🧵 [Voir le message du jour](${messageURL})`,
-            '',
-            `⏳ **Membres n’ayant pas réagi (${absentsArr.length}) :**`,
-            idsLine(absentsArr)
-          ].join('\n')
-    )
-    .setFooter({ text: `${clubName} ⚫ Rappel automatisé (12h)` })
-    .setTimestamp();
+  // Même logique que la commande : texte brut, pas d'embed
+  if (absentsArr.length === 0) {
+    await channel.send({
+      content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`,
+      allowedMentions: { parse: [] }
+    });
+    console.log(`📣 [AUTO] Rappel 12h : aucun absent (${jour})`);
+    return;
+  }
 
-  await channel.send({
-    embeds: [embed],
-    components: [rowBtn],
-    allowedMentions: IG_AUTOMATION.mentionInReminder && ids.length
-      ? { users: ids, parse: [] }
-      : { parse: [] }
-  });
+  const header = [
+    `📣 **Rappel aux absents (${jour.toUpperCase()})**`,
+    'Merci de réagir aux disponibilités du jour ✅❌',
+    `➡️ ${dispoChannel} — [Accéder au message du jour](${messageURL})`
+  ].join('\n');
 
-  console.log(`📣 [AUTO] Rappel 12h envoyé pour ${jour} (IG).`);
+  const batches = splitByMessageLimit(ids, header + '\n\n');
+
+  try {
+    const first = batches.shift();
+    if (first && first.length) {
+      await channel.send({
+        content: `${header}\n\n${first.map(id => `<@${id}>`).join(' - ')}`,
+        allowedMentions: IG_AUTOMATION.mentionInReminder
+          ? { users: first, parse: [] }
+          : { parse: [] }
+      });
+    }
+
+    for (const batch of batches) {
+      await channel.send({
+        content: batch.map(id => `<@${id}>`).join(' - '),
+        allowedMentions: IG_AUTOMATION.mentionInReminder
+          ? { users: batch, parse: [] }
+          : { parse: [] }
+      });
+    }
+  } catch (e) {
+    console.error('❌ [AUTO] Erreur envoi rappel 12h :', e);
+  }
+
+  console.log(`📣 [AUTO] Rappel 12h envoyé pour ${jour} (IG) — ${ids.length} absents.`);
 }
 
 /* ============================================================
-   RAPPORTS 12h & 17h
+   RAPPORTS 12h & 17h — même embed que /disponibilites mode "embed_detaille"
 ============================================================ */
 
 async function sendDetailedReportIG(client, hourLabel) {
@@ -427,14 +462,10 @@ async function sendDetailedReportIG(client, hourLabel) {
     return;
   }
 
+  // Même structure que l'embed détaillé de la commande
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(`📅 RAPPORT ${hourLabel} — ${jour.toUpperCase()}`)
-    .setDescription(
-      hourLabel === '12h'
-        ? '📊 Rapport intermédiaire généré automatiquement à **12h**.'
-        : '📊 Rapport final généré automatiquement à **17h**.'
-    )
+    .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
     .addFields(
       {
         name: `✅ Présents (${presentsAll.size})`,
@@ -449,7 +480,7 @@ async function sendDetailedReportIG(client, hourLabel) {
         value: idsLine(nonRepondus)
       }
     )
-    .setFooter({ text: `${clubName} ⚫ Rapport automatisé (${hourLabel})` })
+    .setFooter({ text: `${clubName} ⚫ Rapport automatisé` })
     .setTimestamp();
 
   await reportChannel.send({
@@ -464,7 +495,7 @@ async function sendDetailedReportIG(client, hourLabel) {
 }
 
 /* ============================================================
-   FERMETURE 17h
+   FERMETURE 17h (snapshot + verrouillage)
 ============================================================ */
 
 async function closeDisposAt17IG(client) {
