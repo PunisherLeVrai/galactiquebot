@@ -42,30 +42,48 @@ function getEmbedColorFromConfig(guildId) {
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
-function getParisNow() {
-  return new Date(
-    new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })
-  );
-}
+/**
+ * Récupère la date/heure de Paris **sans** re-parser une string ambiguë.
+ * Retourne : { year, month, day, hour, minute, isoDate, jour }
+ */
+function getParisParts() {
+  const fmt = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: IG_AUTOMATION.timezone || 'Europe/Paris',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    weekday: 'long',
+    hour12: false
+  });
 
-function toISODate(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const da = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${da}`;
-}
+  const parts = fmt.formatToParts(new Date());
+  const get = (type) => parts.find(p => p.type === type)?.value;
 
-function getJourString(d) {
-  const map = [
-    'dimanche',
-    'lundi',
-    'mardi',
-    'mercredi',
-    'jeudi',
-    'vendredi',
-    'samedi'
-  ];
-  return map[d.getDay()];
+  const year = Number(get('year'));
+  const month = Number(get('month'));
+  const day = Number(get('day'));
+  const hour = Number(get('hour'));
+  const minute = Number(get('minute'));
+  const weekday = (get('weekday') || '').toLowerCase();
+
+  const isoDate =
+    `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+  // On normalise le nom du jour pour coller aux clés de config
+  const mapJour = {
+    'dimanche': 'dimanche',
+    'lundi': 'lundi',
+    'mardi': 'mardi',
+    'mercredi': 'mercredi',
+    'jeudi': 'jeudi',
+    'vendredi': 'vendredi',
+    'samedi': 'samedi'
+  };
+  const jour = mapJour[weekday] || 'lundi';
+
+  return { year, month, day, hour, minute, isoDate, jour };
 }
 
 // Format liste de mentions sur une ligne
@@ -354,11 +372,10 @@ function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900)
 }
 
 async function runNoonReminderIG(client) {
-  const now = getParisNow();
+  const { jour } = getParisParts();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(now);
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -384,7 +401,6 @@ async function runNoonReminderIG(client) {
   const absentsArr = [...nonRepondus.values()];
   const ids = absentsArr.map(m => m.id);
 
-  // Même logique que la commande : texte brut, pas d'embed
   if (absentsArr.length === 0) {
     await channel.send({
       content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`,
@@ -433,11 +449,10 @@ async function runNoonReminderIG(client) {
 ============================================================ */
 
 async function sendDetailedReportIG(client, hourLabel) {
-  const now = getParisNow();
+  const { jour } = getParisParts();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(now);
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -462,7 +477,6 @@ async function sendDetailedReportIG(client, hourLabel) {
     return;
   }
 
-  // Même structure que l'embed détaillé de la commande
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
@@ -499,11 +513,10 @@ async function sendDetailedReportIG(client, hourLabel) {
 ============================================================ */
 
 async function closeDisposAt17IG(client) {
-  const now = getParisNow();
+  const { jour, isoDate } = getParisParts();
   const guild = client.guilds.cache.get(IG_GUILD_ID);
   if (!guild) return;
 
-  const jour = getJourString(now);
   if (!['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour)) return;
 
   const data = await fetchDispoDataForDay(guild, jour);
@@ -522,7 +535,6 @@ async function closeDisposAt17IG(client) {
 
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
   const color = getEmbedColorFromConfig(guild.id);
-  const dateStr = toISODate(getParisNow());
 
   // 1) Snapshot JSON
   try {
@@ -532,7 +544,7 @@ async function closeDisposAt17IG(client) {
 
     const snapshot = {
       jour,
-      date: dateStr,
+      date: isoDate,
       messageId: message.id,
       channelId: dispoChannel.id,
       reacted: [...reacted],
@@ -543,7 +555,7 @@ async function closeDisposAt17IG(client) {
 
     const snapPath = path.join(
       RAPPORTS_DIR,
-      `snapshot-${jour}-${dateStr}.json`
+      `snapshot-${jour}-${isoDate}.json`
     );
     fs.writeFileSync(snapPath, JSON.stringify(snapshot, null, 2), 'utf8');
 
@@ -750,10 +762,7 @@ function initScheduler(client) {
   let lastNickKey = null;  // pour sync pseudos horaire
 
   setInterval(async () => {
-    const now = getParisNow();
-    const hour = now.getHours();
-    const minute = now.getMinutes();
-    const dateKey = toISODate(now);
+    const { hour, minute, isoDate: dateKey } = getParisParts();
 
     // 10h00 & 22h00 → panneau de disponibilités
     if ((hour === 10 || hour === 22) && minute === 0) {
