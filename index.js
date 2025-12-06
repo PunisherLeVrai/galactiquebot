@@ -15,6 +15,7 @@ const { initScheduler } = require('./utils/scheduler'); // 🕒 scheduler
 // --- IDs FIXES (deux serveurs) ---
 const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
 const IG_ARRIVALS_CHANNEL_ID = '1393775051433840680';   // #arrivées IG
+const IG_COUNTER_CHANNEL_ID = '1393770717656514600';    // compteur membres IG
 
 const SUPPORT_GUILD_ID = '1444745566004449506';         // GalactiqueBot Support
 const SUPPORT_CATEGORY_ID = '1445186546335482037';      // Catégorie compteur
@@ -51,12 +52,15 @@ function getEmbedColorForGuild(guildId) {
 }
 
 /* ============================================================
-   COMPTEUR DE MEMBRES — GALACTIQUEBOT SUPPORT
-   Catégorie renommée en : "GalactiqueBot — X membres"
+   COMPTEURS DE MEMBRES
 ============================================================ */
 
 function buildSupportCounterName(count) {
   return `GalactiqueBot — ${count} membres`;
+}
+
+function buildInterCounterName(count) {
+  return `INTER GALACTIQUE — ${count} membres`;
 }
 
 async function updateSupportMemberCounter() {
@@ -79,7 +83,31 @@ async function updateSupportMemberCounter() {
     await channel.setName(newName, 'Mise à jour du compteur de membres GalactiqueBot');
     console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
   } catch (err) {
-    console.error('❌ Erreur lors de la mise à jour du compteur de membres :', err);
+    console.error('❌ Erreur lors de la mise à jour du compteur de membres (Support) :', err);
+  }
+}
+
+async function updateInterMemberCounter() {
+  try {
+    const guild = client.guilds.cache.get(IG_GUILD_ID);
+    if (!guild) return;
+
+    await guild.members.fetch().catch(() => {});
+    const count = guild.memberCount;
+
+    const channel =
+      guild.channels.cache.get(IG_COUNTER_CHANNEL_ID) ||
+      await client.channels.fetch(IG_COUNTER_CHANNEL_ID).catch(() => null);
+
+    if (!channel) return;
+
+    const newName = buildInterCounterName(count);
+    if (channel.name === newName) return;
+
+    await channel.setName(newName, 'Mise à jour du compteur de membres INTER GALACTIQUE');
+    console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
+  } catch (err) {
+    console.error('❌ Erreur lors de la mise à jour du compteur de membres (INTER) :', err);
   }
 }
 
@@ -173,12 +201,15 @@ client.once('ready', async () => {
   // Compteur membres serveur support
   await updateSupportMemberCounter();
 
+  // Compteur membres INTER GALACTIQUE
+  await updateInterMemberCounter();
+
   // 🕒 Lancement du scheduler automatique (12h / 17h)
   initScheduler(client);
 });
 
 /* ============================================================
-   MESSAGES DE BIENVENUE + MISE À JOUR COMPTEUR
+   MESSAGES DE BIENVENUE
 ============================================================ */
 
 async function sendWelcomeInterGalactique(member) {
@@ -271,6 +302,8 @@ client.on('guildMemberAdd', async (member) => {
       console.error('❌ Erreur ajout rôle recrue :', err);
     }
 
+    // Mise à jour compteur membres IG
+    await updateInterMemberCounter();
     return;
   }
 
@@ -282,8 +315,13 @@ client.on('guildMemberAdd', async (member) => {
 });
 
 client.on('guildMemberRemove', async (member) => {
-  if (member.guild.id !== SUPPORT_GUILD_ID) return;
-  await updateSupportMemberCounter();
+  if (member.guild.id === SUPPORT_GUILD_ID) {
+    await updateSupportMemberCounter();
+  }
+
+  if (member.guild.id === IG_GUILD_ID) {
+    await updateInterMemberCounter();
+  }
 });
 
 /* ============================================================
