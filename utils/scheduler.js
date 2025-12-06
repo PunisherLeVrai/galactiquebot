@@ -43,7 +43,7 @@ const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
 /**
- * Récupère la date/heure de Paris **sans** re-parser une string ambiguë.
+ * Récupère la date/heure de Paris de manière fiable.
  * Retourne : { year, month, day, hour, minute, isoDate, jour }
  */
 function getParisParts() {
@@ -819,5 +819,11 @@ function initScheduler(client) {
 }
 
 module.exports = {
-  initScheduler
+  initScheduler,
+  // exports pour la commande de test
+  sendDispoPanelIG,
+  runNoonReminderIG,
+  sendDetailedReportIG,
+  closeDisposAt17IG,
+  autoSyncNicknamesIG
 };
