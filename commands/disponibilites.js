@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { getConfigFromInteraction } = require('../utils/config');
 
-const VERSION = 'disponibilites v3.3 FR+snapshot+verrouiller (config couleur+club)';
+const VERSION = 'disponibilites v3.4 FR+snapshot+verrouiller (auto config servers.json)';
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
 const DEFAULT_COLOR = 0xff4db8;
 
@@ -68,22 +68,23 @@ module.exports = {
         )
     )
 
-    // 🧵 Salon contenant le message de disponibilités (obligatoire)
+    // ========== À partir d’ici : options facultatives ==========
+
+    // 🧵 Salon contenant le message de disponibilités (optionnel, défaut : mainDispoChannelId)
     .addChannelOption(o =>
       o.setName('salon_dispos')
-        .setDescription('Salon où se trouve le message de disponibilités du jour')
+        .setDescription('Salon où se trouve le message de disponibilités du jour (défaut : salon des dispos configuré)')
         .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true)
+        .setRequired(false)
     )
 
-    // 🆔 ID du message de disponibilités (obligatoire)
+    // 🆔 ID du message de disponibilités (optionnel, défaut : dispoMessages[jour])
     .addStringOption(o =>
       o.setName('message_id')
-        .setDescription('ID du message de disponibilités du jour (clic droit → Copier l’identifiant)')
-        .setRequired(true)
+        .setDescription('ID du message de disponibilités du jour (défaut : ID configuré pour ce jour dans servers.json)')
+        .setRequired(false)
     )
 
-    // ========== À partir d’ici : options facultatives ==========
     // 🧵 Salon des rapports / rappels (optionnel)
     .addChannelOption(o =>
       o.setName('salon')
@@ -95,14 +96,14 @@ module.exports = {
     // 🏷️ Rôle Joueur (optionnel)
     .addRoleOption(o =>
       o.setName('role_joueur')
-        .setDescription('Rôle des joueurs officiels pris en compte pour le rapport')
+        .setDescription('Rôle des joueurs officiels pris en compte pour le rapport (défaut : config servers.json)')
         .setRequired(false)
     )
 
     // 🏷️ Rôle Essai (optionnel)
     .addRoleOption(o =>
       o.setName('role_essai')
-        .setDescription('Rôle des joueurs en essai pris en compte pour le rapport')
+        .setDescription('Rôle des joueurs en essai pris en compte pour le rapport (défaut : config servers.json)')
         .setRequired(false)
     )
 
@@ -123,9 +124,11 @@ module.exports = {
     const mode = interaction.options.getString('mode', true);
     const guild = interaction.guild;
 
-    // 🔧 Config dynamique serveur
+    // 🔧 Config dynamique serveur (servers.json via utils/config)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const cfgRoles = guildConfig?.roles || {};
+    const cfgDispoMessages = guildConfig?.dispoMessages || {};
+    const mainDispoChannelId = guildConfig?.mainDispoChannelId || null;
     const color = getEmbedColor(guildConfig);
     const clubName = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
 
@@ -140,8 +143,17 @@ module.exports = {
       (rapportChannelId ? guild.channels.cache.get(rapportChannelId) : null) ||
       interaction.channel;
 
-    const dispoChannel = interaction.options.getChannel('salon_dispos');
-    const messageId = interaction.options.getString('message_id', true);
+    // 🎯 Salon de disponibilités : option > mainDispoChannelId > null
+    const dispoChannelOption = interaction.options.getChannel('salon_dispos');
+    const dispoChannel =
+      dispoChannelOption ||
+      (mainDispoChannelId ? guild.channels.cache.get(mainDispoChannelId) : null);
+
+    // 🎯 ID du message de dispo : option > dispoMessages[jour] > null
+    let messageId =
+      interaction.options.getString('message_id') ||
+      cfgDispoMessages?.[jour] ||
+      null;
 
     // Rôles : option > config > null
     let roleJoueur =
@@ -154,14 +166,21 @@ module.exports = {
 
     if (!dispoChannel) {
       return interaction.reply({
-        content: '❌ Salon de disponibilités introuvable.',
+        content: '❌ Salon de disponibilités introuvable. (Pense à configurer `mainDispoChannelId` dans servers.json ou fournir `salon_dispos`.)',
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    if (!messageId) {
+      return interaction.reply({
+        content: `❌ ID du message de disponibilités introuvable pour **${jour}**.\nConfigure \`dispoMessages.${jour}\` dans servers.json ou fournis l’option \`message_id\`.`,
         flags: MessageFlags.Ephemeral
       });
     }
 
     if (!roleJoueur && !roleEssai) {
       return interaction.reply({
-        content: '❌ Aucun rôle joueur/essai trouvé. Fournis `role_joueur` ou `role_essai`, ou configure-les via `/config roles`.',
+        content: '❌ Aucun rôle joueur/essai trouvé. Fournis `role_joueur` ou `role_essai`, ou configure-les via `/config roles` / servers.json.',
         flags: MessageFlags.Ephemeral
       });
     }
@@ -193,7 +212,7 @@ module.exports = {
       message = await dispoChannel.messages.fetch(messageId);
     } catch {
       return interaction.editReply({
-        content: `❌ Message de disponibilités introuvable pour **${jour}** (vérifie l’ID et le salon).`
+        content: `❌ Message de disponibilités introuvable pour **${jour}** (vérifie l’ID, le salon, ou la config de servers.json).`
       });
     }
 
