@@ -221,18 +221,27 @@ async function sendWelcomeInterGalactique(member) {
 
     const total = member.guild.memberCount;
 
+    const description =
+      `👋 Tu viens de rejoindre la **structure XIG INTER GALACTIQUE** ${member}.\n` +
+      `Nous sommes désormais **${total}** membres. 🎉\n\n` +
+      `### 📌 1) LIRE LE RÈGLEMENT\n` +
+      `Prends connaissance de l’ensemble des obligations du serveur :\n` +
+      `👉 <#1393771863821389976>\n` +
+      `Aucune excuse ne sera acceptée en cas de non-respect.\n\n` +
+      `### 🙋 2) FAIRE TA PRÉSENTATION\n` +
+      `Présente-toi brièvement, indique ton **poste préféré, âge et expérience** :\n` +
+      `👉 <#1447255582485643547>\n\n` +
+      `### 📅 3) TENIR TES DISPONIBILITÉS À JOUR\n` +
+      `Chaque jour, indique dans ce salon si tu es :\n` +
+      `**Disponible (✅) — Indisponible (❌)**\n` +
+      `👉 <#1429059902852173936>\n` +
+      `L’implication quotidienne est obligatoire pour espérer conserver une place dans l’effectif.\n\n` +
+      `🛡️ **XIG INTER GALACTIQUE — Discipline, engagement, performance**`;
+
     const embed = new EmbedBuilder()
       .setColor(getEmbedColorForGuild(member.guild.id))
-      .setAuthor({ name: 'Ho ! Un nouveau joueur INTER GALACTIQUE !' })
-      .setDescription(
-        `👋 Bienvenue ${member} sur le serveur **INTER GALACTIQUE**.\n` +
-        `Nous sommes désormais **${total}** membres. 🎉\n\n` +
-        `> Tu peux dès maintenant :\n` +
-        `> • Lire le règlement et les infos du club\n` +
-        `> • Mettre tes disponibilités chaque jour\n` +
-        `> • Discuter avec le staff dans ta loge dédiée\n\n` +
-        `🚀 Prépare-toi à prouver que tu as le niveau.`
-      )
+      .setAuthor({ name: 'Nouvelle arrivée — XIG INTER GALACTIQUE' })
+      .setDescription(description)
       .setFooter({ text: 'INTER GALACTIQUE — GalactiqueBot' })
       .setTimestamp();
 
