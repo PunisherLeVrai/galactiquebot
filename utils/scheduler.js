@@ -305,7 +305,7 @@ async function sendDispoPanelIG(client) {
       new ButtonBuilder()
         .setLabel('VENDREDI')
         .setStyle(ButtonStyle.Link)
-        .setURL(urls.vendredi)
+        .URL(urls.vendredi)
     );
   }
   if (urls.samedi) {
