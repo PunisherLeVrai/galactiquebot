@@ -1,4 +1,3 @@
-// utils/scheduler.js
 const fs = require('fs');
 const path = require('path');
 const {
@@ -305,7 +304,7 @@ async function sendDispoPanelIG(client) {
       new ButtonBuilder()
         .setLabel('VENDREDI')
         .setStyle(ButtonStyle.Link)
-        .URL(urls.vendredi)
+        .setURL(urls.vendredi) // ✅ corrigé (.setURL)
     );
   }
   if (urls.samedi) {
@@ -756,16 +755,16 @@ async function autoSyncNicknamesIG(client) {
 function initScheduler(client) {
   console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 22h + sync pseudos)…');
 
-  let lastNoonDate = null;
-  let last17Date = null;
   let lastPanelKey = null; // pour 10h & 22h
+  let lastNoonKey = null;  // pour 12h
+  let last17Key = null;    // pour 17h
   let lastNickKey = null;  // pour sync pseudos horaire
 
   setInterval(async () => {
     const { hour, minute, isoDate: dateKey } = getParisParts();
 
-    // 10h00 & 22h00 → panneau de disponibilités
-    if ((hour === 10 || hour === 22) && minute === 0) {
+    // 10h00 & 22h00 → panneau de disponibilités (fenêtre 0-2 minutes)
+    if ((hour === 10 || hour === 22) && minute >= 0 && minute <= 2) {
       const panelKey = `${dateKey}-${hour}`;
       if (lastPanelKey !== panelKey) {
         lastPanelKey = panelKey;
@@ -778,27 +777,33 @@ function initScheduler(client) {
       }
     }
 
-    // 12h00 → rappel + rapport intermédiaire
-    if (hour === 12 && minute === 0 && lastNoonDate !== dateKey) {
-      lastNoonDate = dateKey;
-      console.log(`⏰ [AUTO] Tick 12h pour ${dateKey}`);
-      try {
-        await runNoonReminderIG(client);
-        await sendDetailedReportIG(client, '12h');
-      } catch (e) {
-        console.error('❌ [AUTO] Erreur tâche 12h :', e);
+    // 12h → rappel + rapport intermédiaire (fenêtre 0-2 minutes)
+    if (hour === 12 && minute >= 0 && minute <= 2) {
+      const noonKey = `${dateKey}-12`;
+      if (lastNoonKey !== noonKey) {
+        lastNoonKey = noonKey;
+        console.log(`⏰ [AUTO] Tick 12h pour ${dateKey}`);
+        try {
+          await runNoonReminderIG(client);
+          await sendDetailedReportIG(client, '12h');
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche 12h :', e);
+        }
       }
     }
 
-    // 17h00 → rapport final + fermeture
-    if (hour === 17 && minute === 0 && last17Date !== dateKey) {
-      last17Date = dateKey;
-      console.log(`⏰ [AUTO] Tick 17h pour ${dateKey}`);
-      try {
-        await sendDetailedReportIG(client, '17h');
-        await closeDisposAt17IG(client);
-      } catch (e) {
-        console.error('❌ [AUTO] Erreur tâche 17h :', e);
+    // 17h → rapport final + fermeture (fenêtre 0-2 minutes)
+    if (hour === 17 && minute >= 0 && minute <= 2) {
+      const key17 = `${dateKey}-17`;
+      if (last17Key !== key17) {
+        last17Key = key17;
+        console.log(`⏰ [AUTO] Tick 17h pour ${dateKey}`);
+        try {
+          await sendDetailedReportIG(client, '17h');
+          await closeDisposAt17IG(client);
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche 17h :', e);
+        }
       }
     }
 
