@@ -29,7 +29,7 @@ module.exports = {
     .addStringOption(o =>
       o.setName('message')
         .setDescription('ID ou lien du message de composition (laisser vide pour auto-détection).')
-        .setRequired(false) // ✅ optionnel
+        .setRequired(false)
     )
     .addChannelOption(o =>
       o.setName('salon')
@@ -57,7 +57,6 @@ module.exports = {
   async execute(interaction) {
     const guild = interaction.guild;
 
-    // 🔧 Config serveur (via utils/config)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const convoqueRoleId = guildConfig?.roles?.convoque || null;
     const embedColor = getEmbedColor(guildConfig);
@@ -73,7 +72,6 @@ module.exports = {
       });
     }
 
-    // Salon où se trouve le message de compo
     const compoChannel =
       interaction.options.getChannel('salon') ||
       interaction.channel;
@@ -85,7 +83,6 @@ module.exports = {
       });
     }
 
-    // Salon où poster le rapport
     const rapportChannelId =
       guildConfig?.channels?.rapport ||
       guildConfig?.rapportChannelId ||
@@ -109,12 +106,10 @@ module.exports = {
       flags: MessageFlags.Ephemeral
     });
 
-    // 🧩 Récupération du message : ID fourni ou auto-détection
     let messageIdInput = interaction.options.getString('message');
     let compoMessage;
 
     if (messageIdInput) {
-      // MODE MANUEL
       messageIdInput = messageIdInput.trim();
       const linkMatch = messageIdInput.match(/\/(\d{17,20})$/);
       if (linkMatch) messageIdInput = linkMatch[1];
@@ -127,17 +122,14 @@ module.exports = {
         });
       }
     } else {
-      // MODE AUTO : on cherche la dernière compo envoyée par le bot
       try {
         const fetched = await compoChannel.messages.fetch({ limit: 50 });
 
-        // 1️⃣ On privilégie les messages avec le footer "Compo officielle"
         compoMessage = fetched.find(msg =>
           msg.author.id === me.id &&
           msg.embeds?.[0]?.footer?.text?.includes('Compo officielle')
         );
 
-        // 2️⃣ Sinon fallback : message du bot avec réaction ✅
         if (!compoMessage) {
           compoMessage = fetched.find(msg =>
             msg.author.id === me.id &&
@@ -160,7 +152,6 @@ module.exports = {
       }
     }
 
-    // 🧠 Chargement des membres (pour rôle convoqué)
     await guild.members.fetch().catch(() => {});
 
     const convoques = guild.members.cache.filter(
@@ -171,7 +162,6 @@ module.exports = {
       return interaction.editReply('ℹ️ Aucun convoqué trouvé (rôle vide).');
     }
 
-    // Qui a mis ✅ ?
     const validesSet = new Set();
     for (const [, reaction] of compoMessage.reactions.cache) {
       if (reaction.emoji?.name !== '✅') continue;
@@ -187,7 +177,6 @@ module.exports = {
       (validesSet.has(m.id) ? valides : nonValides).push(m);
     }
 
-    // 🌙 Snapshot optionnel
     if (enregistrer) {
       try {
         if (!fs.existsSync(RAPPORTS_DIR)) {
