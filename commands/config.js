@@ -51,6 +51,18 @@ module.exports = {
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
+        .addChannelOption(o =>
+          o.setName('welcome')
+            .setDescription('Salon de bienvenue des nouveaux membres.')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false)
+        )
+        .addChannelOption(o =>
+          o.setName('support')
+            .setDescription('Salon support (pour le serveur GalactiqueBot Support, par ex.).')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false)
+        )
     )
 
     // /config roles
@@ -71,6 +83,16 @@ module.exports = {
         .addRoleOption(o =>
           o.setName('convoque')
             .setDescription('Rôle des joueurs convoqués (pour compo).')
+            .setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('recrue')
+            .setDescription('Rôle des recrues (nouveaux joueurs).')
+            .setRequired(false)
+        )
+        .addRoleOption(o =>
+          o.setName('help')
+            .setDescription('Rôle d’aide / support (helpRoleId, pour le serveur support).')
             .setRequired(false)
         )
     )
@@ -94,6 +116,32 @@ module.exports = {
           o.setName('clubname')
             .setDescription('Nom du club (ex : INTER GALACTIQUE).')
             .setRequired(false)
+        )
+    )
+
+    // /config dispos (messages de dispo par jour)
+    .addSubcommand(sc =>
+      sc
+        .setName('dispos')
+        .setDescription('Configurer les messages de disponibilités par jour.')
+        .addStringOption(o =>
+          o.setName('jour')
+            .setDescription('Jour à configurer')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Lundi', value: 'lundi' },
+              { name: 'Mardi', value: 'mardi' },
+              { name: 'Mercredi', value: 'mercredi' },
+              { name: 'Jeudi', value: 'jeudi' },
+              { name: 'Vendredi', value: 'vendredi' },
+              { name: 'Samedi', value: 'samedi' },
+              { name: 'Dimanche', value: 'dimanche' }
+            )
+        )
+        .addStringOption(o =>
+          o.setName('message_id')
+            .setDescription('ID du message de disponibilités pour ce jour.')
+            .setRequired(true)
         )
     )
 
@@ -134,23 +182,60 @@ module.exports = {
         ].join('\n')
       });
 
+      const salonsLines = [
+        `• Logs : ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : '_non défini_'}`,
+        `• Disponibilités : ${cfg.mainDispoChannelId ? `<#${cfg.mainDispoChannelId}>` : '_non défini_'}`,
+        `• Rapports : ${cfg.rapportChannelId ? `<#${cfg.rapportChannelId}>` : '_non défini_'}`
+      ];
+
+      // Salon de bienvenue
+      salonsLines.push(
+        `• Bienvenue : ${cfg.welcomeChannelId ? `<#${cfg.welcomeChannelId}>` : '_non défini_'}`
+      );
+
+      // Salon support (pour le serveur support)
+      salonsLines.push(
+        `• Support : ${cfg.supportChannelId ? `<#${cfg.supportChannelId}>` : '_non défini_'}`
+      );
+
       fields.push({
         name: '📡 Salons',
-        value: [
-          `• Logs : ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : '_non défini_'}`,
-          `• Disponibilités : ${cfg.mainDispoChannelId ? `<#${cfg.mainDispoChannelId}>` : '_non défini_'}`,
-          `• Rapports : ${cfg.rapportChannelId ? `<#${cfg.rapportChannelId}>` : '_non défini_'}`,
-        ].join('\n')
+        value: salonsLines.join('\n')
       });
 
-      const roles = cfg.roles || {};
+      const rolesCfg = cfg.roles || {};
+      const rolesLines = [
+        `• Joueur : ${rolesCfg.joueur ? `<@&${rolesCfg.joueur}>` : '_non défini_'}`,
+        `• Essai : ${rolesCfg.essai ? `<@&${rolesCfg.essai}>` : '_non défini_'}`,
+        `• Convoqué : ${rolesCfg.convoque ? `<@&${rolesCfg.convoque}>` : '_non défini_'}`,
+        `• Recrue : ${rolesCfg.recrue ? `<@&${rolesCfg.recrue}>` : '_non défini_'}`
+      ];
+
+      // Rôle d’aide séparé (helpRoleId)
+      rolesLines.push(
+        `• Rôle d’aide / support : ${cfg.helpRoleId ? `<@&${cfg.helpRoleId}>` : '_non défini_'}`
+      );
+
       fields.push({
         name: '🎭 Rôles',
-        value: [
-          `• Joueur : ${roles.joueur ? `<@&${roles.joueur}>` : '_non défini_'}`,
-          `• Essai : ${roles.essai ? `<@&${roles.essai}>` : '_non défini_'}`,
-          `• Convoqué : ${roles.convoque ? `<@&${roles.convoque}>` : '_non défini_'}`,
-        ].join('\n')
+        value: rolesLines.join('\n')
+      });
+
+      // Dispos messages (on affiche juste un résumé)
+      const dispoMessages = cfg.dispoMessages || {};
+      const dispoLines = [
+        `• Lundi : ${dispoMessages.lundi ? `\`${dispoMessages.lundi}\`` : '_non défini_'}`,
+        `• Mardi : ${dispoMessages.mardi ? `\`${dispoMessages.mardi}\`` : '_non défini_'}`,
+        `• Mercredi : ${dispoMessages.mercredi ? `\`${dispoMessages.mercredi}\`` : '_non défini_'}`,
+        `• Jeudi : ${dispoMessages.jeudi ? `\`${dispoMessages.jeudi}\`` : '_non défini_'}`,
+        `• Vendredi : ${dispoMessages.vendredi ? `\`${dispoMessages.vendredi}\`` : '_non défini_'}`,
+        `• Samedi : ${dispoMessages.samedi ? `\`${dispoMessages.samedi}\`` : '_non défini_'}`,
+        `• Dimanche : ${dispoMessages.dimanche ? `\`${dispoMessages.dimanche}\`` : '_non défini_'}`,
+      ];
+
+      fields.push({
+        name: '📅 Messages de disponibilités',
+        value: dispoLines.join('\n')
       });
 
       const embed = new EmbedBuilder()
@@ -177,8 +262,10 @@ module.exports = {
       const logsChannel = interaction.options.getChannel('logs') || null;
       const dispoChannel = interaction.options.getChannel('dispos') || null;
       const rapportsChannel = interaction.options.getChannel('rapports') || null;
+      const welcomeChannel = interaction.options.getChannel('welcome') || null;
+      const supportChannel = interaction.options.getChannel('support') || null;
 
-      if (!logsChannel && !dispoChannel && !rapportsChannel) {
+      if (!logsChannel && !dispoChannel && !rapportsChannel && !welcomeChannel && !supportChannel) {
         return interaction.reply({
           content: 'ℹ️ Aucun salon fourni. Merci de choisir au moins une option.',
           ephemeral: true
@@ -200,6 +287,14 @@ module.exports = {
         patch.rapportChannelId = rapportsChannel.id;
         changes.push(`• Rapports → <#${rapportsChannel.id}>`);
       }
+      if (welcomeChannel) {
+        patch.welcomeChannelId = welcomeChannel.id;
+        changes.push(`• Bienvenue → <#${welcomeChannel.id}>`);
+      }
+      if (supportChannel) {
+        patch.supportChannelId = supportChannel.id;
+        changes.push(`• Support → <#${supportChannel.id}>`);
+      }
 
       updateGuildConfig(guild.id, patch);
 
@@ -219,8 +314,10 @@ module.exports = {
       const rJoueur = interaction.options.getRole('joueur') || null;
       const rEssai = interaction.options.getRole('essai') || null;
       const rConvoque = interaction.options.getRole('convoque') || null;
+      const rRecrue = interaction.options.getRole('recrue') || null;
+      const rHelp = interaction.options.getRole('help') || null;
 
-      if (!rJoueur && !rEssai && !rConvoque) {
+      if (!rJoueur && !rEssai && !rConvoque && !rRecrue && !rHelp) {
         return interaction.reply({
           content: 'ℹ️ Aucun rôle fourni. Merci de choisir au moins une option.',
           ephemeral: true
@@ -228,6 +325,7 @@ module.exports = {
       }
 
       const rolesPatch = {};
+      const patch = {};
       const changes = [];
 
       if (rJoueur) {
@@ -242,8 +340,20 @@ module.exports = {
         rolesPatch.convoque = rConvoque.id;
         changes.push(`• Convoqué → <@&${rConvoque.id}>`);
       }
+      if (rRecrue) {
+        rolesPatch.recrue = rRecrue.id;
+        changes.push(`• Recrue → <@&${rRecrue.id}>`);
+      }
+      if (rHelp) {
+        patch.helpRoleId = rHelp.id;
+        changes.push(`• Rôle d’aide / support → <@&${rHelp.id}>`);
+      }
 
-      updateGuildConfig(guild.id, { roles: rolesPatch });
+      if (Object.keys(rolesPatch).length > 0) {
+        patch.roles = rolesPatch;
+      }
+
+      updateGuildConfig(guild.id, patch);
 
       return interaction.reply({
         content: [
@@ -305,6 +415,27 @@ module.exports = {
           '✅ Configuration du **style** mise à jour :',
           ...changes
         ].join('\n'),
+        ephemeral: true
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // /config dispos
+    // -----------------------------------------------------------------------
+    if (sub === 'dispos') {
+      const jour = interaction.options.getString('jour', true); // lundi ... dimanche
+      const messageId = interaction.options.getString('message_id', true);
+
+      const existing = (cfg.dispoMessages || {});
+      const newDispoMessages = {
+        ...existing,
+        [jour]: messageId
+      };
+
+      updateGuildConfig(guild.id, { dispoMessages: newDispoMessages });
+
+      return interaction.reply({
+        content: `✅ Message de disponibilités configuré pour **${jour.toUpperCase()}** → \`${messageId}\``,
         ephemeral: true
       });
     }
