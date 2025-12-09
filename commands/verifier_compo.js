@@ -28,8 +28,8 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o =>
       o.setName('message')
-        .setDescription('ID ou lien du message de composition')
-        .setRequired(true)
+        .setDescription('ID ou lien du message de composition (laisser vide pour auto-détection)')
+        .setRequired(false) // 🔁 DEVENU OPTIONNEL
     )
     .addChannelOption(o =>
       o.setName('salon')
@@ -104,26 +104,58 @@ module.exports = {
       });
     }
 
-    // ID du message (ou lien)
-    let messageId = interaction.options.getString('message', true).trim();
-    const linkMatch = messageId.match(/\/(\d{17,20})$/);
-    if (linkMatch) messageId = linkMatch[1];
-
+    // 🔁 On répond d’abord (ephemeral) pour que la commande ne time-out pas
     await interaction.reply({
-      content: '🔎 Vérification en cours…',
+      content: '🔎 Vérification de la compo en cours…',
       flags: MessageFlags.Ephemeral
     });
 
-    // Récupération du message de compo
+    // 🧩 Récupération du message : ID fourni ou auto-détection
+    let messageIdInput = interaction.options.getString('message');
     let compoMessage;
-    try {
-      compoMessage = await compoChannel.messages.fetch(messageId);
-    } catch {
-      return interaction.editReply({
-        content: `❌ Message introuvable dans <#${compoChannel.id}> (ID: \`${messageId}\`).`
-      });
+
+    if (messageIdInput) {
+      // 🔹 MODE CLASSIQUE : ID ou lien fourni
+      messageIdInput = messageIdInput.trim();
+      const linkMatch = messageIdInput.match(/\/(\d{17,20})$/);
+      if (linkMatch) messageIdInput = linkMatch[1];
+
+      try {
+        compoMessage = await compoChannel.messages.fetch(messageIdInput);
+      } catch {
+        return interaction.editReply({
+          content: `❌ Message introuvable dans <#${compoChannel.id}> (ID: \`${messageIdInput}\`).`
+        });
+      }
+    } else {
+      // 🔹 MODE AUTO : on cherche la dernière compo dans le salon
+      try {
+        const fetched = await compoChannel.messages.fetch({ limit: 50 });
+
+        // 🔍 Heuristique :
+        // - message envoyé par le BOT
+        // - qui possède au moins une réaction ✅ (les validations)
+        compoMessage = fetched.find(msg =>
+          msg.author.id === me.id &&
+          msg.reactions?.cache?.some(r => r.emoji?.name === '✅')
+        );
+
+        if (!compoMessage) {
+          return interaction.editReply(
+            '❌ Impossible de trouver automatiquement un message de composition dans ce salon.\n' +
+            '➡️ Merci de relancer la commande en précisant l’option `message` (ID ou lien de la compo).'
+          );
+        }
+      } catch (err) {
+        console.error('Erreur recherche compo auto :', err);
+        return interaction.editReply(
+          '❌ Erreur lors de la recherche automatique de la composition.\n' +
+          '➡️ Merci de relancer la commande avec l’ID ou le lien du message via l’option `message`.'
+        );
+      }
     }
 
+    // 🧠 Chargement des membres (pour les rôles convoqué)
     await guild.members.fetch().catch(() => {});
 
     const convoques = guild.members.cache.filter(
@@ -131,7 +163,7 @@ module.exports = {
     );
 
     if (!convoques.size) {
-      return interaction.editReply('ℹ️ Aucun convoqué trouvé.');
+      return interaction.editReply('ℹ️ Aucun convoqué trouvé (rôle vide).');
     }
 
     // Qui a mis ✅ ?
