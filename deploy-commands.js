@@ -27,12 +27,19 @@ function loadCommands() {
   const files = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'));
 
   for (const file of files) {
-    const cmd = require(path.join(commandsPath, file));
-    if (!cmd?.data?.toJSON) {
-      console.warn(`⚠️ Ignoré: ${file} (pas de data.toJSON)`);
-      continue;
+    const cmdPath = path.join(commandsPath, file);
+    try {
+      const cmd = require(cmdPath);
+      if (!cmd?.data?.toJSON) {
+        console.warn(`⚠️ Ignoré: ${file} (pas de data.toJSON)`);
+        continue;
+      }
+      commands.push(cmd.data.toJSON());
+    } catch (err) {
+      console.error(`❌ Erreur en important ${file} :`);
+      console.error(err);
+      process.exit(1);
     }
-    commands.push(cmd.data.toJSON());
   }
 
   return commands;
