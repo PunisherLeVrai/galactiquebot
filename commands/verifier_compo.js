@@ -28,29 +28,29 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o =>
       o.setName('message')
-        .setDescription('ID ou lien du message de composition (laisser vide pour auto-détection)')
-        .setRequired(false) // 🔁 DEVENU OPTIONNEL
+        .setDescription('ID ou lien du message de composition (laisser vide pour auto-détection).')
+        .setRequired(false) // ✅ optionnel
     )
     .addChannelOption(o =>
       o.setName('salon')
-        .setDescription('Salon où se trouve la compo (défaut : salon courant)')
+        .setDescription('Salon où se trouve la compo (défaut : salon courant).')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
     .addChannelOption(o =>
       o.setName('salon_rapport')
-        .setDescription('Salon où envoyer la vérification (défaut : salon des rapports ou salon courant)')
+        .setDescription('Salon où envoyer la vérification (défaut : salon des rapports ou salon courant).')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
     .addBooleanOption(o =>
       o.setName('rappel')
-        .setDescription('Mentionner ceux qui n’ont pas validé (défaut : non)')
+        .setDescription('Mentionner ceux qui n’ont pas validé (défaut : non).')
         .setRequired(false)
     )
     .addBooleanOption(o =>
       o.setName('enregistrer_snapshot')
-        .setDescription('Enregistrer un snapshot du résultat (défaut : non)')
+        .setDescription('Enregistrer un snapshot du résultat (défaut : non).')
         .setRequired(false)
     ),
 
@@ -104,9 +104,8 @@ module.exports = {
       });
     }
 
-    // 🔁 On répond d’abord (ephemeral) pour que la commande ne time-out pas
     await interaction.reply({
-      content: '🔎 Vérification de la compo en cours…',
+      content: '🔎 Vérification de la composition en cours…',
       flags: MessageFlags.Ephemeral
     });
 
@@ -115,7 +114,7 @@ module.exports = {
     let compoMessage;
 
     if (messageIdInput) {
-      // 🔹 MODE CLASSIQUE : ID ou lien fourni
+      // MODE MANUEL
       messageIdInput = messageIdInput.trim();
       const linkMatch = messageIdInput.match(/\/(\d{17,20})$/);
       if (linkMatch) messageIdInput = linkMatch[1];
@@ -128,17 +127,23 @@ module.exports = {
         });
       }
     } else {
-      // 🔹 MODE AUTO : on cherche la dernière compo dans le salon
+      // MODE AUTO : on cherche la dernière compo envoyée par le bot
       try {
         const fetched = await compoChannel.messages.fetch({ limit: 50 });
 
-        // 🔍 Heuristique :
-        // - message envoyé par le BOT
-        // - qui possède au moins une réaction ✅ (les validations)
+        // 1️⃣ On privilégie les messages avec le footer "Compo officielle"
         compoMessage = fetched.find(msg =>
           msg.author.id === me.id &&
-          msg.reactions?.cache?.some(r => r.emoji?.name === '✅')
+          msg.embeds?.[0]?.footer?.text?.includes('Compo officielle')
         );
+
+        // 2️⃣ Sinon fallback : message du bot avec réaction ✅
+        if (!compoMessage) {
+          compoMessage = fetched.find(msg =>
+            msg.author.id === me.id &&
+            msg.reactions?.cache?.some(r => r.emoji?.name === '✅')
+          );
+        }
 
         if (!compoMessage) {
           return interaction.editReply(
@@ -155,7 +160,7 @@ module.exports = {
       }
     }
 
-    // 🧠 Chargement des membres (pour les rôles convoqué)
+    // 🧠 Chargement des membres (pour rôle convoqué)
     await guild.members.fetch().catch(() => {});
 
     const convoques = guild.members.cache.filter(
@@ -205,7 +210,6 @@ module.exports = {
         fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
       } catch (e) {
         console.error('Erreur snapshot compo :', e);
-        // non bloquant
       }
     }
 
