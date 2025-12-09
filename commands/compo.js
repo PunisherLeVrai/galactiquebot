@@ -12,7 +12,7 @@ const { getConfigFromInteraction } = require('../utils/config');
 
 const DEFAULT_COLOR = 0xff4db8;
 
-// 🔒 Anti-mentions
+// 🔒 Anti-mentions dans les textes libres (embed)
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
@@ -65,6 +65,11 @@ module.exports = {
             .setRequired(false)
         )
         .addBooleanOption(opt =>
+          opt.setName('mention_everyone')
+            .setDescription('Mentionner @everyone en plus (optionnel).')
+            .setRequired(false)
+        )
+        .addBooleanOption(opt =>
           opt.setName('reactions')
             .setDescription('Ajouter automatiquement ✅ (défaut : oui).')
             .setRequired(false)
@@ -90,6 +95,7 @@ module.exports = {
       let texte = interaction.options.getString('texte', true);
       const image = interaction.options.getAttachment('image') || null;
       const mentionConvoques = interaction.options.getBoolean('mention_convoques') ?? false;
+      const mentionEveryone = interaction.options.getBoolean('mention_everyone') ?? false;
       const reactionsOpt = interaction.options.getBoolean('reactions');
       const shouldReact = reactionsOpt ?? true; // défaut : vrai
 
@@ -114,7 +120,7 @@ module.exports = {
         });
       }
 
-      // Nettoyage des mentions sauvages
+      // Nettoyage des mentions sauvages dans l'embed
       texte = sanitize(texte || '').trim();
       const titre = sanitize(
         titreInput || '📋 Composition du match'
@@ -134,17 +140,28 @@ module.exports = {
         .setFooter({ text: `${clubName} ⚫ Compo officielle` }) // 🧷 marqueur pour /verifier_compo
         .setTimestamp();
 
-      let content = '';
+      // --- Construction du contenu (mentions) ---
+      const contentParts = [];
+      const allowedMentions = { parse: [] };
+
+      if (mentionEveryone) {
+        contentParts.push('@everyone');
+        allowedMentions.parse.push('everyone');
+      }
+
       if (mentionConvoques) {
         if (convoqueRoleId) {
-          content = `<@&${convoqueRoleId}>`;
+          contentParts.push(`<@&${convoqueRoleId}>`);
+          allowedMentions.parse.push('roles');
         } else {
           await interaction.reply({
-            content: '⚠️ Rôle **convoqué** non configuré dans la config (`roles.convoque`). La compo sera envoyée sans mention.',
+            content: '⚠️ Rôle **convoqué** non configuré dans la config (`roles.convoque`). La compo sera envoyée sans mention de ce rôle.',
             flags: MessageFlags.Ephemeral
           });
         }
       }
+
+      const content = contentParts.join(' ').trim() || undefined;
 
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
@@ -161,12 +178,10 @@ module.exports = {
       let msg;
       try {
         msg = await channel.send({
-          content: content || undefined,
+          content,
           embeds: [embed],
           files: image ? [{ attachment: image.url, name: image.name }] : [],
-          allowedMentions: {
-            parse: content ? ['roles'] : []
-          }
+          allowedMentions
         });
       } catch (err) {
         console.error('Erreur envoi compo :', err);
