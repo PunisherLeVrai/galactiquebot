@@ -34,6 +34,15 @@ module.exports = {
     .addSubcommand(sc =>
       sc.setName('publier')
         .setDescription('Publie une composition officielle pour un match.')
+
+        // ⚠️ IMPORTANT : option OBLIGATOIRE en PREMIER
+        .addStringOption(opt =>
+          opt.setName('texte')
+            .setDescription('Texte de la compo (liste des joueurs, consignes, etc.).')
+            .setRequired(true)
+        )
+
+        // Puis seulement les options facultatives
         .addChannelOption(opt =>
           opt.setName('salon')
             .setDescription('Salon où publier la compo (défaut : salon courant).')
@@ -44,11 +53,6 @@ module.exports = {
           opt.setName('titre')
             .setDescription('Titre de la compo (défaut : "📋 Composition du match").')
             .setRequired(false)
-        )
-        .addStringOption(opt =>
-          opt.setName('texte')
-            .setDescription('Texte de la compo (liste des joueurs, consignes, etc.).')
-            .setRequired(true)
         )
         .addAttachmentOption(opt =>
           opt.setName('image')
@@ -135,7 +139,6 @@ module.exports = {
         if (convoqueRoleId) {
           content = `<@&${convoqueRoleId}>`;
         } else {
-          // on prévient juste en privé si le rôle n’est pas configuré
           await interaction.reply({
             content: '⚠️ Rôle **convoqué** non configuré dans la config (`roles.convoque`). La compo sera envoyée sans mention.',
             flags: MessageFlags.Ephemeral
@@ -143,7 +146,6 @@ module.exports = {
         }
       }
 
-      // Si pas encore répondu (cas sans avertissement rôle convoqué)
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: `🛠️ Publication de la composition dans ${channel}...`,
