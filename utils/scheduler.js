@@ -13,11 +13,8 @@ const { SNAPSHOT_DIR } = require('./paths'); // 📁 snapshots persistants
 
 const DEFAULT_COLOR = 0xff4db8;
 
-// IDs fixes pour INTER GALACTIQUE
+// IDs fixes : uniquement le serveur INTER GALACTIQUE
 const IG_GUILD_ID = '1392639720491581551';
-const IG_REMINDER_12H_CHANNEL_ID = '1429059902852173936'; // rappel 12h (salon dispo)
-const IG_REPORT_CHANNEL_ID = '1446471718943326259';       // rapport détaillé 12h & 17h
-const IG_PANEL_CHANNEL_ID = '1393774851218735216';        // panneau de dispos
 
 // ⚙️ Options d’automatisation pour IG
 const IG_AUTOMATION = {
@@ -224,14 +221,19 @@ async function sendDispoPanelIG(client) {
   const cfg = getGuildConfig(guild.id) || {};
   const dispoMessages = cfg.dispoMessages || {};
   const dispoChannelId = cfg.mainDispoChannelId;
+  const panelChannelId = cfg.panelChannelId;
 
   if (!dispoChannelId) {
     console.warn('⚠️ [AUTO] mainDispoChannelId manquant pour IG');
     return;
   }
+  if (!panelChannelId) {
+    console.warn('⚠️ [AUTO] panelChannelId manquant pour IG');
+    return;
+  }
 
   const panelChannel = await guild.channels
-    .fetch(IG_PANEL_CHANNEL_ID)
+    .fetch(panelChannelId)
     .catch(() => null);
   if (!panelChannel) {
     console.warn('⚠️ [AUTO] Salon panneau de dispos introuvable');
@@ -390,11 +392,10 @@ async function runNoonReminderIG(client) {
 
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
 
-  const channel = await guild.channels
-    .fetch(IG_REMINDER_12H_CHANNEL_ID)
-    .catch(() => null);
+  // Rappel envoyé dans le salon des disponibilités (mainDispoChannelId)
+  const channel = dispoChannel;
   if (!channel) {
-    console.warn('⚠️ [AUTO] Salon de rappel 12h introuvable');
+    console.warn('⚠️ [AUTO] Salon de rappel 12h introuvable (mainDispoChannelId)');
     return;
   }
 
@@ -469,8 +470,14 @@ async function sendDetailedReportIG(client, hourLabel) {
   const color = getEmbedColorFromConfig(guild.id);
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
 
+  const reportChannelId = cfg.rapportChannelId;
+  if (!reportChannelId || reportChannelId === '0') {
+    console.warn('⚠️ [AUTO] rapportChannelId manquant pour IG');
+    return;
+  }
+
   const reportChannel = await guild.channels
-    .fetch(IG_REPORT_CHANNEL_ID)
+    .fetch(reportChannelId)
     .catch(() => null);
   if (!reportChannel) {
     console.warn('⚠️ [AUTO] Salon de rapport introuvable');
