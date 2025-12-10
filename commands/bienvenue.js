@@ -2,8 +2,7 @@
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType,
-  MessageFlags
+  ChannelType
 } = require('discord.js');
 
 const { getConfigFromInteraction } = require('../utils/config');
@@ -51,27 +50,46 @@ module.exports = {
 
   async execute(interaction) {
     const user = interaction.options.getUser('utilisateur', true);
-    const channel =
-      interaction.options.getChannel('salon') ||
-      interaction.channel;
 
-    const reglementChan     = interaction.options.getChannel('reglement') || null;
-    const presentationChan  = interaction.options.getChannel('presentation') || null;
-    const disposChan        = interaction.options.getChannel('disponibilites') || null;
-
-    // 🔧 Récup clubName depuis la config serveur
+    // 🔧 Récup clubName + config serveur
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const clubName =
       guildCfg?.clubName ||
       interaction.guild?.name ||
       'INTER GALACTIQUE';
 
-    // 🔐 Vérifie les permissions d’écriture
+    // Salon cible : option "salon" OU salon actuel
+    let channel =
+      interaction.options.getChannel('salon') ||
+      interaction.channel;
+
+    const reglementChan    = interaction.options.getChannel('reglement') || null;
+    const presentationChan = interaction.options.getChannel('presentation') || null;
+
+    // Pour les dispos : option > config > null
+    let disposChan = interaction.options.getChannel('disponibilites') || null;
+    if (!disposChan && guildCfg?.mainDispoChannelId) {
+      const fetched = await interaction.guild.channels
+        .fetch(guildCfg.mainDispoChannelId)
+        .catch(() => null);
+      if (fetched && fetched.isTextBased()) {
+        disposChan = fetched;
+      }
+    }
+
+    // 🔐 Vérifie les permissions d’écriture dans le salon cible
     const me = interaction.guild.members.me;
+    if (!channel || !channel.isTextBased()) {
+      return interaction.reply({
+        content: '❌ Salon cible introuvable ou non textuel. Utilise cette commande dans un salon texte valide ou précise un salon.',
+        ephemeral: true
+      });
+    }
+
     if (!channel.permissionsFor?.(me)?.has(['ViewChannel', 'SendMessages'])) {
       return interaction.reply({
         content: `❌ Je ne peux pas écrire dans ${channel}.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -115,14 +133,13 @@ ${lignesEtapes.join('\n')}
 
       await interaction.reply({
         content: `✅ Message de bienvenue envoyé dans ${channel}.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
-
     } catch (e) {
       console.error('Erreur envoi bienvenue :', e);
       return interaction.reply({
         content: '❌ Impossible d’envoyer le message de bienvenue.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
   }
