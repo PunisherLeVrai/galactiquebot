@@ -7,8 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ComponentType,
-  PermissionsBitField,
-  MessageFlags,
+  PermissionsBitField
 } = require('discord.js');
 
 const { getGlobalConfig, getConfigFromInteraction } = require('../utils/config');
@@ -81,12 +80,15 @@ const typeLabel = (t) => {
 
 function permsToHuman(permBits) {
   if (!permBits) return '_Aucune (accessible à tous)_';
+
   const p = new PermissionsBitField(permBits);
   const names = [];
+
+  if (p.has(PermissionsBitField.Flags.Administrator)) names.push('Administrateur');
   if (p.has(PermissionsBitField.Flags.ManageGuild)) names.push('Gérer le serveur');
   if (p.has(PermissionsBitField.Flags.ManageNicknames)) names.push('Gérer les pseudos');
   if (p.has(PermissionsBitField.Flags.ModerateMembers)) names.push('Modérer les membres');
-  if (p.has(PermissionsBitField.Flags.Administrator)) names.push('Administrateur');
+
   return names.length ? names.join(' • ') : `_Permissions : ${permBits}_`;
 }
 
@@ -105,7 +107,9 @@ function buildOverviewEmbed(commands, botLabel, color) {
   for (const cat of Object.values(categories)) {
     lines.push(`\n**${cat.label}**`);
     for (const d of cat.cmds.sort((a, b) => a.name.localeCompare(b.name, 'fr'))) {
-      const perms = d.default_member_permissions ? `  ⟮${permsToHuman(d.default_member_permissions)}⟯` : '';
+      const perms = d.default_member_permissions
+        ? `  ⟮${permsToHuman(d.default_member_permissions)}⟯`
+        : '';
       lines.push(`• **/${d.name}** — ${d.description || '_Sans description_'}${perms}`);
     }
   }
@@ -120,32 +124,50 @@ function buildOverviewEmbed(commands, botLabel, color) {
 
 function buildCommandEmbed(cmd, botLabel, color) {
   const data = cmd.data?.toJSON?.() || {};
+
   const emb = new EmbedBuilder()
     .setColor(color)
     .setTitle(`❓ Aide — /${data.name}`)
     .setDescription(data.description || '_Sans description_')
-    .addFields({ name: 'Permissions requises', value: permsToHuman(data.default_member_permissions) })
+    .addFields({
+      name: 'Permissions requises',
+      value: permsToHuman(data.default_member_permissions)
+    })
     .setFooter({ text: `${botLabel} • /aide pour la liste complète` })
     .setTimestamp();
 
   const opts = data.options || [];
   if (opts.length) {
-    const lines = opts.map(o => {
-      const base = `• **${o.name}** (${typeLabel(o.type)}) ${o.required ? '— *requis*' : ''}\n  ${o.description || '_—_'}`;
-      const withChoices = (o.choices?.length)
-        ? `${base}\n  Choix : ${o.choices.map(c => `\`${c.name}\``).join(', ')}`
-        : base;
-      const withSub = (o.options?.length)
-        ? `${withChoices}\n  (Sous-options : ${o.options.map(s => `\`${s.name}\``).join(', ')})`
-        : withChoices;
-      return withSub;
-    }).join('\n\n');
+    const lines = opts
+      .map(o => {
+        const base =
+          `• **${o.name}** (${typeLabel(o.type)}) ${o.required ? '— *requis*' : ''}\n` +
+          `  ${o.description || '_—_'}`;
 
-    emb.addFields({ name: 'Options', value: lines.slice(0, 1024) || '_—_' });
-    if (lines.length > 1024) emb.addFields({ name: 'Options (suite)', value: lines.slice(1024, 2048) });
+        const withChoices = (o.choices?.length)
+          ? `${base}\n  Choix : ${o.choices.map(c => `\`${c.name}\``).join(', ')}`
+          : base;
+
+        const withSub = (o.options?.length)
+          ? `${withChoices}\n  (Sous-options : ${o.options.map(s => `\`${s.name}\``).join(', ')})`
+          : withChoices;
+
+        return withSub;
+      })
+      .join('\n\n');
+
+    // Discord limite les fields à 1024 caractères → découpe en 2 si besoin
+    const firstChunk = lines.slice(0, 1024) || '_—_';
+    emb.addFields({ name: 'Options', value: firstChunk });
+
+    if (lines.length > 1024) {
+      const secondChunk = lines.slice(1024, 1024 + 1024);
+      emb.addFields({ name: 'Options (suite)', value: secondChunk });
+    }
   } else {
     emb.addFields({ name: 'Options', value: '_Aucune_' });
   }
+
   return emb;
 }
 
@@ -155,19 +177,34 @@ function buildSelectMenu(commands) {
     .setCustomId('help_select')
     .setPlaceholder('Choisis une commande…')
     .addOptions(
-      { label: '📜 Vue d’ensemble', value: 'overview', description: 'Liste complète des commandes' },
+      {
+        label: '📜 Vue d’ensemble',
+        value: 'overview',
+        description: 'Liste complète des commandes'
+      },
       ...commands.map(c => {
         const d = c.data?.toJSON?.() || {};
-        return { label: `/${d.name}`, value: d.name, description: (d.description || '—').slice(0, 95) };
+        return {
+          label: `/${d.name}`,
+          value: d.name,
+          description: (d.description || '—').slice(0, 95)
+        };
       })
     );
+
   return new ActionRowBuilder().addComponents(menu);
 }
 
 function buildButtonsRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('help_back').setStyle(ButtonStyle.Secondary).setLabel('⬅️ Vue d’ensemble'),
-    new ButtonBuilder().setCustomId('help_close').setStyle(ButtonStyle.Danger).setLabel('❌ Fermer')
+    new ButtonBuilder()
+      .setCustomId('help_back')
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel('⬅️ Vue d’ensemble'),
+    new ButtonBuilder()
+      .setCustomId('help_close')
+      .setStyle(ButtonStyle.Danger)
+      .setLabel('❌ Fermer')
   );
 }
 
@@ -177,7 +214,10 @@ module.exports = {
     .setName('aide')
     .setDescription('Affiche l’aide interactive des commandes disponibles, classées automatiquement.')
     .addBooleanOption(o =>
-      o.setName('public').setDescription('Afficher publiquement (par défaut : non)').setRequired(false)
+      o
+        .setName('public')
+        .setDescription('Afficher publiquement (par défaut : non)')
+        .setRequired(false)
     ),
 
   async execute(interaction) {
@@ -197,18 +237,22 @@ module.exports = {
     // Couleur spécifique à ce serveur
     const color = getEmbedColorFromCfg(guildCfg);
 
-    const cmds = [...interaction.client.commands.values()]
-      .sort((a, b) =>
-        (a.data.name === 'aide' ? -1
-          : b.data.name === 'aide' ? 1
-          : a.data.name.localeCompare(b.data.name, 'fr'))
-      );
+    const cmds = [...interaction.client.commands.values()].sort((a, b) =>
+      a.data.name === 'aide'
+        ? -1
+        : b.data.name === 'aide'
+        ? 1
+        : a.data.name.localeCompare(b.data.name, 'fr')
+    );
 
     const overview = buildOverviewEmbed(cmds, botLabel, color);
     const rows = [buildSelectMenu(cmds), buildButtonsRow()];
 
-    const replyOpts = { embeds: [overview], components: rows };
-    if (!isPublic) replyOpts.flags = MessageFlags.Ephemeral;
+    const replyOpts = {
+      embeds: [overview],
+      components: rows,
+      ephemeral: !isPublic
+    };
 
     const msg = await interaction.reply(replyOpts);
 
@@ -216,37 +260,56 @@ module.exports = {
       time: 5 * 60 * 1000,
       filter: i =>
         i.user.id === interaction.user.id &&
-        (i.componentType === ComponentType.Button || i.componentType === ComponentType.StringSelect)
+        [ComponentType.Button, ComponentType.StringSelect].includes(i.componentType)
     });
 
-    collector.on('collect', async (i) => {
+    collector.on('collect', async i => {
       try {
         if (i.customId === 'help_close') {
-          await i.update({ content: '❎ Aide fermée.', embeds: [], components: [] });
+          await i.update({
+            content: '❎ Aide fermée.',
+            embeds: [],
+            components: []
+          });
           collector.stop('closed');
           return;
         }
 
         if (i.customId === 'help_back') {
-          await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel, color)], components: rows });
+          await i.update({
+            embeds: [buildOverviewEmbed(cmds, botLabel, color)],
+            components: rows
+          });
           return;
         }
 
         if (i.customId === 'help_select') {
           const picked = i.values?.[0];
+
           if (!picked || picked === 'overview') {
-            await i.update({ embeds: [buildOverviewEmbed(cmds, botLabel, color)], components: rows });
+            await i.update({
+              embeds: [buildOverviewEmbed(cmds, botLabel, color)],
+              components: rows
+            });
             return;
           }
+
           const cmd = cmds.find(c => c.data?.name === picked);
-          if (!cmd) { await i.deferUpdate(); return; }
-          await i.update({ embeds: [buildCommandEmbed(cmd, botLabel, color)], components: rows });
+          if (!cmd) {
+            await i.deferUpdate();
+            return;
+          }
+
+          await i.update({
+            embeds: [buildCommandEmbed(cmd, botLabel, color)],
+            components: rows
+          });
           return;
         }
 
         await i.deferUpdate();
       } catch {
-        // ignore
+        // ignore les erreurs ponctuelles de mise à jour
       }
     });
 
