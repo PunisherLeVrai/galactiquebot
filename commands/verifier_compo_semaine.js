@@ -3,8 +3,7 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
-  ChannelType,
-  MessageFlags
+  ChannelType
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -113,7 +112,7 @@ module.exports = {
     // 🔧 Récup config serveur (rapportChannelId + style)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const embedColor = getEmbedColor(guildConfig);
-    const clubLabel = guildConfig?.clubName || guild.name;
+    const clubLabel = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
 
     const rapportChannelId =
       guildConfig?.channels?.rapport ||
@@ -130,7 +129,7 @@ module.exports = {
     if (!targetChannel?.permissionsFor?.(me)?.has(needed)) {
       return interaction.reply({
         content: `❌ Je ne peux pas écrire dans <#${targetChannel?.id || 'inconnu'}>.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -148,20 +147,20 @@ module.exports = {
     if (!fromDate || !toDate || fromDate > toDate) {
       return interaction.reply({
         content: '❌ Dates invalides. Utilise `YYYY-MM-DD` et assure-toi que début ≤ fin.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     await interaction.reply({
       content: `🔎 Analyse des **snapshots de compo** du **${debutStr}** au **${finStr}**…`,
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
 
     const snaps = readCompoSnapshotsInRange(fromDate, toDate);
     if (snaps.length === 0) {
       return interaction.followUp({
         content: `⚠️ Aucun snapshot de compo trouvé dans \`/rapports\` sur la période ${debutStr} → ${finStr}.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -231,7 +230,7 @@ module.exports = {
       await targetChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
       return interaction.followUp({
         content: '✅ Vérification semaine compo terminée.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -305,7 +304,7 @@ module.exports = {
 
     await interaction.followUp({
       content: `✅ Vérification semaine compo envoyée dans <#${targetChannel.id}>.`,
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
   }
 };
