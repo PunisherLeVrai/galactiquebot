@@ -1,8 +1,7 @@
 // commands/support.js
 const {
   SlashCommandBuilder,
-  EmbedBuilder,
-  MessageFlags
+  EmbedBuilder
 } = require('discord.js');
 
 const { getConfigFromInteraction, getGlobalConfig } = require('../utils/config');
@@ -25,17 +24,17 @@ module.exports = {
   async execute(interaction) {
     const OWNER_ID = process.env.OWNER_ID;
 
-    // Sécurité dev
+    // 🔐 Sécurité dev
     if (!OWNER_ID || interaction.user.id !== OWNER_ID) {
       return interaction.reply({
         content: '⛔ Cette commande est réservée au développeur du bot.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     const client = interaction.client;
 
-    // Récup config pour couleur + label
+    // Config pour couleur + label
     const globalCfg = getGlobalConfig() || {};
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const color = getEmbedColor(guildCfg);
@@ -45,11 +44,11 @@ module.exports = {
       client.user.username ||
       'GalactiqueBot';
 
-    // Uptime : convertir en timestamp de démarrage
+    // Uptime : conversion en timestamp de démarrage
     const nowMs = Date.now();
     const startedAtUnix = Math.floor((nowMs - process.uptime() * 1000) / 1000);
 
-    // Liste des serveurs (max 10 pour rester lisible)
+    // Liste des serveurs (aperçu max 10)
     const guildLines = client.guilds.cache
       .map(g => `• **${g.name}** (\`${g.id}\`) — ${g.memberCount ?? '??'} membres`)
       .slice(0, 10);
@@ -99,7 +98,7 @@ module.exports = {
 
     return interaction.reply({
       embeds: [embed],
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
   }
 };
