@@ -6,9 +6,7 @@ const {
   EmbedBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ActionRowBuilder,
-  AttachmentBuilder,
-  MessageFlags
+  ActionRowBuilder
 } = require('discord.js');
 
 const { getConfigFromInteraction, getGlobalConfig } = require('../utils/config');
@@ -30,7 +28,7 @@ function getEmbedColorFromCfg(guildCfg) {
 // Nettoie le texte (pas de massive mentions dans le contenu libre)
 function sanitize(text) {
   return String(text || '')
-    .replace(/^["“”]|["“”]$/g, '')               // enlève guillemets d'encadrement
+    .replace(/^["“”]|["“”]$/g, '') // enlève guillemets d'encadrement
     .replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]')
     .trim();
 }
@@ -58,7 +56,7 @@ module.exports = {
           { name: 'Annonce interne', value: 'interne' },
           { name: 'Communiqué officiel', value: 'communique' },
           { name: 'Entrée dans la loge', value: 'loge' },
-          { name: 'Signature officielle', value: 'signature' },
+          { name: 'Signature officielle', value: 'signature' }
         )
     )
 
@@ -99,7 +97,7 @@ module.exports = {
           { name: 'Aucune', value: 'none' },
           { name: '@everyone', value: 'everyone' },
           { name: '@here', value: 'here' },
-          { name: 'Un rôle', value: 'role' },
+          { name: 'Un rôle', value: 'role' }
         )
     )
     .addRoleOption(o =>
@@ -172,6 +170,7 @@ module.exports = {
     const clubName =
       guildCfg?.clubName ||
       interaction.guild?.name ||
+      globalCfg.botName ||
       'INTER GALACTIQUE';
 
     const color = getEmbedColorFromCfg(guildCfg);
@@ -181,8 +180,9 @@ module.exports = {
 
     if (!salon || !salon.isTextBased()) {
       return interaction.reply({
-        content: '❌ Salon cible introuvable ou non textuel. Utilise cette commande dans un salon texte valide ou précise un salon.',
-        flags: MessageFlags.Ephemeral
+        content:
+          '❌ Salon cible introuvable ou non textuel. Utilise cette commande dans un salon texte valide ou précise un salon.',
+        ephemeral: true
       });
     }
 
@@ -191,14 +191,15 @@ module.exports = {
 
     if (mentionType === 'role' && !role) {
       return interaction.reply({
-        content: '❌ Tu as choisi **Un rôle** à mentionner, mais aucun `role` n’a été fourni.',
-        flags: MessageFlags.Ephemeral
+        content:
+          '❌ Tu as choisi **Un rôle** à mentionner, mais aucun `role` n’a été fourni.',
+        ephemeral: true
       });
     }
 
     await interaction.reply({
       content: '🛰️ Préparation de l’annonce…',
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
 
     /* =========================
@@ -207,7 +208,9 @@ module.exports = {
     if (type === 'loge') {
       const user = interaction.options.getUser('joueur');
       if (!user) {
-        return interaction.editReply('❌ Tu dois préciser un `joueur` pour le mode **loge**.');
+        return interaction.editReply(
+          '❌ Tu dois préciser un `joueur` pour le mode **loge**.'
+        );
       }
 
       const msg = [
@@ -238,10 +241,14 @@ module.exports = {
           content: msg,
           allowedMentions: { users: [user.id], parse: [] }
         });
-        return interaction.editReply(`✅ Annonce de loge envoyée dans <#${salon.id}>.`);
+        return interaction.editReply(
+          `✅ Annonce de loge envoyée dans <#${salon.id}>.`
+        );
       } catch (e) {
         console.error('Erreur envoi annonce loge :', e);
-        return interaction.editReply('❌ Impossible d’envoyer le message (vérifie mes permissions).');
+        return interaction.editReply(
+          '❌ Impossible d’envoyer le message (vérifie mes permissions).'
+        );
       }
     }
 
@@ -251,42 +258,51 @@ module.exports = {
     if (type === 'signature') {
       const user = interaction.options.getUser('joueur');
       if (!user) {
-        return interaction.editReply('❌ Tu dois préciser un `joueur` pour le mode **signature**.');
+        return interaction.editReply(
+          '❌ Tu dois préciser un `joueur` pour le mode **signature**.'
+        );
       }
 
       const messagePerso = interaction.options.getString('message') || '';
-      const changerRoles = interaction.options.getBoolean('changer_roles') ?? true;
+      const changerRoles =
+        interaction.options.getBoolean('changer_roles') ?? true;
       const roleJoueur = interaction.options.getRole('role_joueur') || null;
       const roleEssai = interaction.options.getRole('role_essai') || null;
 
       const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle('🖊️ Nouvelle signature officielle')
-        .setDescription([
-          `> <@${user.id}> rejoint officiellement **${clubName}** !`,
-          '',
-          '🎉 Félicitations pour ta période d’essai réussie, tu fais désormais partie du groupe officiel.',
-          messagePerso ? `\n💬 _${messagePerso}_` : ''
-        ].join('\n'))
+        .setDescription(
+          [
+            `> <@${user.id}> rejoint officiellement **${clubName}** !`,
+            '',
+            '🎉 Félicitations pour ta période d’essai réussie, tu fais désormais partie du groupe officiel.',
+            messagePerso ? `\n💬 _${messagePerso}_` : ''
+          ].join('\n')
+        )
         .setFooter({ text: `${clubName} ⚫ Signature officielle` })
         .setTimestamp();
 
       // Annonce publique
       try {
-        await salon.send({ embeds: [embed], allowedMentions: { users: [user.id] } });
+        await salon.send({
+          embeds: [embed],
+          allowedMentions: { users: [user.id] }
+        });
       } catch (err) {
         console.error('Erreur envoi annonce signature :', err);
         return interaction.editReply({
-          content: '❌ Impossible d’envoyer l’annonce (permissions manquantes ?).'
+          content:
+            '❌ Impossible d’envoyer l’annonce (permissions manquantes ?).'
         });
       }
 
       // Gestion des rôles
       let rolesLog = '—';
       if (changerRoles) {
-        // Si aucun rôle fourni, on ne bloque pas, on explique juste
         if (!roleJoueur && !roleEssai) {
-          rolesLog = '⚠️ Aucun rôle fourni (`role_joueur` / `role_essai`), aucun changement effectué.';
+          rolesLog =
+            '⚠️ Aucun rôle fourni (`role_joueur` / `role_essai`), aucun changement effectué.';
         } else {
           try {
             const membre = await interaction.guild.members.fetch(user.id);
@@ -298,7 +314,8 @@ module.exports = {
               (!roleEssai || me.roles.highest.position > roleEssai.position);
 
             if (!canManage) {
-              rolesLog = '⚠️ Je ne peux pas modifier ces rôles (hiérarchie ou permission manquante).';
+              rolesLog =
+                '⚠️ Je ne peux pas modifier ces rôles (hiérarchie ou permission manquante).';
             } else {
               if (roleEssai && membre.roles.cache.has(roleEssai.id)) {
                 await membre.roles.remove(
@@ -334,20 +351,27 @@ module.exports = {
     // À partir d’ici : uniquement pour "interne" et "communique"
     const rawContenu = interaction.options.getString('contenu');
     if (!rawContenu) {
-      return interaction.editReply('❌ Tu dois renseigner `contenu` pour ce type d’annonce.');
+      return interaction.editReply(
+        '❌ Tu dois renseigner `contenu` pour ce type d’annonce.'
+      );
     }
 
     const contenu = sanitize(rawContenu);
     const titre =
       sanitize(interaction.options.getString('titre')) ||
-      (type === 'communique' ? '✦ COMMUNIQUÉ OFFICIEL ✦' : '🗞️ ANNONCE INTERNE');
+      (type === 'communique'
+        ? '✦ COMMUNIQUÉ OFFICIEL ✦'
+        : '🗞️ ANNONCE INTERNE');
 
     const mentionLine = buildMention(mentionType, role);
     const allowedMentionHeader =
-      mentionType === 'everyone' ? { parse: ['everyone'] } :
-      mentionType === 'here'     ? { parse: ['everyone'] } : // @here via le flag everyone
-      mentionType === 'role'     ? { roles: [role.id] } :
-      { parse: [] };
+      mentionType === 'everyone'
+        ? { parse: ['everyone'] }
+        : mentionType === 'here'
+        ? { parse: ['everyone'] } // @here fonctionne aussi avec parse: ['everyone']
+        : mentionType === 'role'
+        ? { roles: [role.id] }
+        : { parse: [] };
 
     /* ======================
        MODE ANNONCE INTERNE
@@ -362,13 +386,23 @@ module.exports = {
 
       try {
         if (mentionLine) {
-          await salon.send({ content: mentionLine, allowedMentions: allowedMentionHeader });
+          await salon.send({
+            content: mentionLine,
+            allowedMentions: allowedMentionHeader
+          });
         }
-        await salon.send({ embeds: [embed], allowedMentions: { parse: [] } });
-        return interaction.editReply(`✅ Annonce interne publiée dans <#${salon.id}>.`);
+        await salon.send({
+          embeds: [embed],
+          allowedMentions: { parse: [] }
+        });
+        return interaction.editReply(
+          `✅ Annonce interne publiée dans <#${salon.id}>.`
+        );
       } catch (e) {
         console.error('Erreur envoi annonce interne :', e);
-        return interaction.editReply('❌ Impossible de publier l’annonce (vérifie mes permissions).');
+        return interaction.editReply(
+          '❌ Impossible de publier l’annonce (vérifie mes permissions).'
+        );
       }
     }
 
@@ -377,13 +411,15 @@ module.exports = {
        ====================== */
     if (type === 'communique') {
       const imageFile = interaction.options.getAttachment('image_fichier') || null;
-      const imageUrl  = interaction.options.getString('image_url') || null;
+      const imageUrl = interaction.options.getString('image_url') || null;
       const boutonLibelle = interaction.options.getString('bouton_libelle') || null;
-      const boutonURL     = interaction.options.getString('bouton_url') || null;
-      const addReactions  = interaction.options.getBoolean('reactions') ?? false;
+      const boutonURL = interaction.options.getString('bouton_url') || null;
+      const addReactions = interaction.options.getBoolean('reactions') ?? false;
 
       if ((boutonLibelle && !boutonURL) || (!boutonLibelle && boutonURL)) {
-        return interaction.editReply('❌ Pour ajouter un bouton, renseigne **libellé + URL**.');
+        return interaction.editReply(
+          '❌ Pour ajouter un bouton, renseigne **libellé + URL**.'
+        );
       }
 
       const subtitle = `🛰️ Équipe **${clubName}** — *Annonce importante*`;
@@ -409,20 +445,17 @@ module.exports = {
 
       try {
         if (mentionLine) {
-          await salon.send({ content: mentionLine, allowedMentions: allowedMentionHeader });
+          await salon.send({
+            content: mentionLine,
+            allowedMentions: allowedMentionHeader
+          });
         }
 
-        const payload = {
+        const sent = await salon.send({
           embeds: [embed],
           components,
           allowedMentions: { parse: [] }
-        };
-
-        if (imageFile && !embed.data.image?.url) {
-          payload.files = [new AttachmentBuilder(imageFile.url)];
-        }
-
-        const sent = await salon.send(payload);
+        });
 
         if (addReactions) {
           try {
@@ -433,10 +466,14 @@ module.exports = {
           }
         }
 
-        return interaction.editReply(`✅ Communiqué publié dans <#${salon.id}>.`);
+        return interaction.editReply(
+          `✅ Communiqué publié dans <#${salon.id}>.`
+        );
       } catch (e) {
         console.error('Erreur envoi communiqué :', e);
-        return interaction.editReply('❌ Impossible de publier le communiqué (vérifie mes permissions).');
+        return interaction.editReply(
+          '❌ Impossible de publier le communiqué (vérifie mes permissions).'
+        );
       }
     }
 
