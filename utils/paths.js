@@ -3,33 +3,59 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * 📁 CHEMIN PERSISTANT POUR LES SNAPSHOTS
- * ----------------------------------------------------
- * - En LOCAL : crée ./data/snapshots
- * - SUR RAILWAY : écrit automatiquement dans /data/snapshots
- *   (Railway ne supprime pas /data à chaque redéploiement)
+ * ------------------------------------------------------
+ * 📁 GESTION PERSISTANTE DES SNAPSHOTS
+ * ------------------------------------------------------
  *
- * 👉 Aucun fichier snapshot ne sera effacé entre deux builds
+ * Railway => /data/snapshots     (persiste entre builds)
+ * Replit  => ./data/snapshots    (persiste dans le projet)
+ * Local   => ./data/snapshots    (fallback stable)
+ *
+ * IMPORTANT :
+ *  - AUCUN snapshot ne sera effacé
+ *  - Sécurisé, silencieux si déjà existant
+ *  - Compatible multi-plateforme
+ * ------------------------------------------------------
  */
 
-const DATA_BASE =
-  process.env.DATA_DIR        // Si Railway définit une variable
-  || '/data'                  // Sinon emplacement persistant par défaut
-  || path.join(process.cwd(), 'data');  // fallback local (jamais utilisé sur Railway)
+function resolveDataBase() {
+  // Railway peut définir DATA_DIR
+  if (process.env.DATA_DIR && process.env.DATA_DIR.trim() !== '') {
+    return process.env.DATA_DIR;
+  }
 
+  // Si Railway ne définit pas DATA_DIR → utiliser /data
+  // (emplacement persistant dans la plupart des hébergements)
+  if (fs.existsSync('/data')) {
+    return '/data';
+  }
+
+  // Sinon -> fallback local
+  return path.join(process.cwd(), 'data');
+}
+
+const DATA_BASE = resolveDataBase();
 const SNAPSHOT_DIR = path.join(DATA_BASE, 'snapshots');
 
-// 🔧 Vérification + création automatique
-try {
-  if (!fs.existsSync(SNAPSHOT_DIR)) {
-    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    console.log(`📁 Dossier snapshots créé : ${SNAPSHOT_DIR}`);
+/**
+ * Création automatique des dossiers nécessaires
+ * Sans crash sur permissions insuffisantes
+ * Et silencieux si existe déjà
+ */
+function ensureSnapshotDirectory() {
+  try {
+    if (!fs.existsSync(SNAPSHOT_DIR)) {
+      fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+      console.log(`📁 [paths] Dossier snapshots créé : ${SNAPSHOT_DIR}`);
+    }
+  } catch (err) {
+    console.error(`❌ [paths] Impossible de créer ${SNAPSHOT_DIR}`);
+    console.error(err);
   }
-} catch (err) {
-  console.error("❌ Impossible de créer le dossier snapshots :", SNAPSHOT_DIR);
-  console.error(err);
 }
 
 module.exports = {
-  SNAPSHOT_DIR
+  DATA_BASE,
+  SNAPSHOT_DIR,
+  ensureSnapshotDirectory
 };
