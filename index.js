@@ -17,16 +17,11 @@ const { ensureSnapshotDirectory } = require('./utils/paths'); // 📁 snapshots 
 // 🔧 S'assurer que le dossier des snapshots (et base data) existe
 ensureSnapshotDirectory();
 
-// --- IDs FIXES (deux serveurs) ---
-const IG_GUILD_ID = '1392639720491581551';                 // INTER GALACTIQUE
-const IG_ARRIVALS_CHANNEL_ID = '1393775051433840680';      // #arrivées IG
-const IG_COUNTER_CHANNEL_ID = '1393770717656514600';       // compteur membres IG
-
-const SUPPORT_GUILD_ID = '1444745566004449506';            // GalactiqueBot Support
-const SUPPORT_CATEGORY_ID = '1445186546335482037';         // Catégorie compteur
-const SUPPORT_ARRIVALS_CHANNEL_ID = '1445186724576628899'; // #arrivées support
-const SUPPORT_HELP_ROLE_ID = '1445374262029451334';        // rôle @Aide
-const SUPPORT_HELP_CHANNEL_ID = '1445186873063505960';     // salon #support
+// --- IDs fixes : uniquement les serveurs ---
+// INTER GALACTIQUE
+const IG_GUILD_ID = '1392639720491581551';
+// GalactiqueBot Support
+const SUPPORT_GUILD_ID = '1444745566004449506';
 
 // --- Initialisation du client Discord ---
 const client = new Client({
@@ -73,14 +68,24 @@ async function updateSupportMemberCounter() {
     const guild = client.guilds.cache.get(SUPPORT_GUILD_ID);
     if (!guild) return;
 
+    const cfg = getGuildConfig(SUPPORT_GUILD_ID) || {};
+    const counterId = cfg.memberCounterChannelId;
+    if (!counterId) {
+      console.warn('⚠️ [COUNTER] memberCounterChannelId manquant pour le serveur Support.');
+      return;
+    }
+
     await guild.members.fetch().catch(() => {});
     const count = guild.memberCount;
 
     const channel =
-      guild.channels.cache.get(SUPPORT_CATEGORY_ID) ||
-      await client.channels.fetch(SUPPORT_CATEGORY_ID).catch(() => null);
+      guild.channels.cache.get(counterId) ||
+      await client.channels.fetch(counterId).catch(() => null);
 
-    if (!channel) return;
+    if (!channel) {
+      console.warn(`⚠️ [COUNTER] Salon compteur introuvable (Support) : ${counterId}`);
+      return;
+    }
 
     const newName = buildSupportCounterName(count);
     if (channel.name === newName) return;
@@ -103,14 +108,24 @@ async function updateInterMemberCounter() {
     const guild = client.guilds.cache.get(IG_GUILD_ID);
     if (!guild) return;
 
+    const cfg = getGuildConfig(IG_GUILD_ID) || {};
+    const counterId = cfg.memberCounterChannelId;
+    if (!counterId) {
+      console.warn('⚠️ [COUNTER] memberCounterChannelId manquant pour INTER GALACTIQUE.');
+      return;
+    }
+
     await guild.members.fetch().catch(() => {});
     const count = guild.memberCount;
 
     const channel =
-      guild.channels.cache.get(IG_COUNTER_CHANNEL_ID) ||
-      await client.channels.fetch(IG_COUNTER_CHANNEL_ID).catch(() => null);
+      guild.channels.cache.get(counterId) ||
+      await client.channels.fetch(counterId).catch(() => null);
 
-    if (!channel) return;
+    if (!channel) {
+      console.warn(`⚠️ [COUNTER] Salon compteur introuvable (IG) : ${counterId}`);
+      return;
+    }
 
     const newName = buildInterCounterName(count);
     if (channel.name === newName) return;
@@ -203,7 +218,7 @@ client.once('ready', async () => {
   for (const guild of client.guilds.cache.values()) {
     const gConfig = getGuildConfig(guild.id) || {};
     const logChannelId = gConfig.logChannelId;
-    if (!logChannelId) continue;
+    if (!logChannelId || logChannelId === '0') continue;
 
     try {
       const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
@@ -226,7 +241,7 @@ client.once('ready', async () => {
   // Compteur membres INTER GALACTIQUE
   await updateInterMemberCounter();
 
-  // 🕒 Lancement du scheduler automatique (12h / 17h)
+  // 🕒 Lancement du scheduler automatique (10h / 12h / 17h / 22h + sync pseudos)
   initScheduler(client);
 });
 
@@ -236,8 +251,16 @@ client.once('ready', async () => {
 
 async function sendWelcomeInterGalactique(member) {
   try {
+    const cfg = getGuildConfig(member.guild.id) || {};
+    const welcomeId = cfg.welcomeChannelId;
+
+    if (!welcomeId) {
+      console.warn('⚠️ [WELCOME IG] welcomeChannelId manquant dans servers.json');
+      return;
+    }
+
     const channel = await member.guild.channels
-      .fetch(IG_ARRIVALS_CHANNEL_ID)
+      .fetch(welcomeId)
       .catch(() => null);
     if (!channel) return;
 
@@ -278,12 +301,25 @@ async function sendWelcomeInterGalactique(member) {
 
 async function sendWelcomeSupport(member) {
   try {
+    const cfg = getGuildConfig(member.guild.id) || {};
+    const welcomeId = cfg.welcomeChannelId;
+    const supportChannelId = cfg.supportChannelId;
+    const helpRoleId = cfg.helpRoleId;
+
+    if (!welcomeId) {
+      console.warn('⚠️ [WELCOME SUPPORT] welcomeChannelId manquant dans servers.json');
+      return;
+    }
+
     const channel = await member.guild.channels
-      .fetch(SUPPORT_ARRIVALS_CHANNEL_ID)
+      .fetch(welcomeId)
       .catch(() => null);
     if (!channel) return;
 
     const total = member.guild.memberCount;
+
+    const supportMention = supportChannelId ? `<#${supportChannelId}>` : '`#support`';
+    const helpRoleMention = helpRoleId ? `<@&${helpRoleId}>` : '`@Aide`';
 
     const embed = new EmbedBuilder()
       .setColor(getEmbedColorForGuild(member.guild.id))
@@ -291,12 +327,11 @@ async function sendWelcomeSupport(member) {
       .setDescription(
         `🐙 Bienvenue sur **GalactiqueBot Support** ${member} !\n` +
           `Nous sommes désormais **${total}** membres. 🎉\n\n` +
-          `» Tu peux demander de l'aide à notre équipe dans le salon ` +
-          `<#${SUPPORT_HELP_CHANNEL_ID}> en créant un nouveau message pour ton problème.\n` +
-          `Pense aussi à mentionner le rôle <@&${SUPPORT_HELP_ROLE_ID}> ` +
+          `» Tu peux demander de l'aide à notre équipe dans le salon ${supportMention} ` +
+          `en créant un nouveau message pour ton problème.\n` +
+          `Pense aussi à mentionner le rôle ${helpRoleMention} ` +
           `afin que ta demande soit traitée plus rapidement.\n\n` +
-          `If you speak English, you can also ask your questions in ` +
-          `<#${SUPPORT_HELP_CHANNEL_ID}> — the team will help you.`
+          `If you speak English, you can also ask your questions in ${supportMention} — the team will help you.`
       )
       .setFooter({ text: 'GalactiqueBot Support' })
       .setTimestamp();
