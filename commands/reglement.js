@@ -3,8 +3,7 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
-  ChannelType,
-  MessageFlags
+  ChannelType
 } = require('discord.js');
 
 const { getConfigFromInteraction } = require('../utils/config');
@@ -19,8 +18,9 @@ function getEmbedColor(cfg) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
+// Anti-mentions
 function sanitize(text) {
-  return String(text).replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
+  return String(text || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 }
 
 function buildMention(mention, role) {
@@ -66,27 +66,30 @@ module.exports = {
     if (mention === 'role' && !role) {
       return interaction.reply({
         content: '❌ Tu as choisi **Un rôle** mais aucun `role` n’a été fourni.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     // Config dynamique (couleur + nom club)
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const color = getEmbedColor(guildCfg);
-    const clubName = guildCfg?.clubName || interaction.guild.name || 'INTER GALACTIQUE';
+    const clubName =
+      guildCfg?.clubName ||
+      interaction.guild?.name ||
+      'INTER GALACTIQUE';
 
     // 🔐 Vérifie les permissions avant publication
     const me = interaction.guild.members.me;
     if (!channel.permissionsFor?.(me)?.has(['ViewChannel', 'SendMessages'])) {
       return interaction.reply({
         content: '❌ Je ne peux pas écrire dans ce salon.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     await interaction.reply({
       content: '🛰️ Publication du règlement…',
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
 
     const intro = sanitize(
@@ -171,10 +174,13 @@ module.exports = {
 
     const mentionLine = buildMention(mention, role);
     const allowedMentions =
-      mention === 'everyone' ? { parse: ['everyone'] }
-      : mention === 'here'   ? { parse: ['everyone'] } // @here via parse everyone
-      : mention === 'role'   ? { roles: [role.id] }
-      : { parse: [] };
+      mention === 'everyone'
+        ? { parse: ['everyone'] }
+        : mention === 'here'
+        ? { parse: ['everyone'] } // @here via parse everyone
+        : mention === 'role'
+        ? { roles: [role.id] }
+        : { parse: [] };
 
     try {
       if (mentionLine) {
