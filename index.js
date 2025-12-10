@@ -1,3 +1,4 @@
+// index.js
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -11,14 +12,18 @@ const {
 
 const { getGlobalConfig, getGuildConfig } = require('./utils/config');
 const { initScheduler } = require('./utils/scheduler'); // 🕒 scheduler
+const { ensureSnapshotDirectory } = require('./utils/paths'); // 📁 snapshots persistants
+
+// 🔧 S'assurer que le dossier des snapshots (et base data) existe
+ensureSnapshotDirectory();
 
 // --- IDs FIXES (deux serveurs) ---
-const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
-const IG_ARRIVALS_CHANNEL_ID = '1393775051433840680';   // #arrivées IG
-const IG_COUNTER_CHANNEL_ID = '1393770717656514600';    // compteur membres IG
+const IG_GUILD_ID = '1392639720491581551';                 // INTER GALACTIQUE
+const IG_ARRIVALS_CHANNEL_ID = '1393775051433840680';      // #arrivées IG
+const IG_COUNTER_CHANNEL_ID = '1393770717656514600';       // compteur membres IG
 
-const SUPPORT_GUILD_ID = '1444745566004449506';         // GalactiqueBot Support
-const SUPPORT_CATEGORY_ID = '1445186546335482037';      // Catégorie compteur
+const SUPPORT_GUILD_ID = '1444745566004449506';            // GalactiqueBot Support
+const SUPPORT_CATEGORY_ID = '1445186546335482037';         // Catégorie compteur
 const SUPPORT_ARRIVALS_CHANNEL_ID = '1445186724576628899'; // #arrivées support
 const SUPPORT_HELP_ROLE_ID = '1445374262029451334';        // rôle @Aide
 const SUPPORT_HELP_CHANNEL_ID = '1445186873063505960';     // salon #support
@@ -80,10 +85,16 @@ async function updateSupportMemberCounter() {
     const newName = buildSupportCounterName(count);
     if (channel.name === newName) return;
 
-    await channel.setName(newName, 'Mise à jour du compteur de membres GalactiqueBot');
+    await channel.setName(
+      newName,
+      'Mise à jour du compteur de membres GalactiqueBot'
+    );
     console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
   } catch (err) {
-    console.error('❌ Erreur lors de la mise à jour du compteur de membres (Support) :', err);
+    console.error(
+      '❌ Erreur lors de la mise à jour du compteur de membres (Support) :',
+      err
+    );
   }
 }
 
@@ -104,10 +115,16 @@ async function updateInterMemberCounter() {
     const newName = buildInterCounterName(count);
     if (channel.name === newName) return;
 
-    await channel.setName(newName, 'Mise à jour du compteur de membres INTER GALACTIQUE');
+    await channel.setName(
+      newName,
+      'Mise à jour du compteur de membres INTER GALACTIQUE'
+    );
     console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
   } catch (err) {
-    console.error('❌ Erreur lors de la mise à jour du compteur de membres (INTER) :', err);
+    console.error(
+      '❌ Erreur lors de la mise à jour du compteur de membres (INTER) :',
+      err
+    );
   }
 }
 
@@ -119,14 +136,16 @@ client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
 
 if (fs.existsSync(commandsPath)) {
-  const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+  const commandFiles = fs
+    .readdirSync(commandsPath)
+    .filter(file => file.endsWith('.js'));
 
   for (const file of commandFiles) {
     const filePath = path.join(commandsPath, file);
     const command = require(filePath);
 
     if (!command?.data?.name) {
-      console.warn(`⚠️ Commande ignorée : ${file}`);
+      console.warn(`⚠️ Commande ignorée (pas de .data.name) : ${file}`);
       continue;
     }
 
@@ -158,10 +177,12 @@ client.once('ready', async () => {
     const name = activities[activityIndex];
 
     client.user.setPresence({
-      activities: [{
-        name,
-        type: ActivityType.Watching
-      }],
+      activities: [
+        {
+          name,
+          type: ActivityType.Watching
+        }
+      ],
       status: 'online'
     });
 
@@ -178,6 +199,7 @@ client.once('ready', async () => {
     .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
     .setTimestamp();
 
+  // Envoi d'un log de démarrage sur chaque serveur configuré
   for (const guild of client.guilds.cache.values()) {
     const gConfig = getGuildConfig(guild.id) || {};
     const logChannelId = gConfig.logChannelId;
@@ -192,9 +214,9 @@ client.once('ready', async () => {
         .setDescription(`✅ Bot opérationnel sur **${guild.name}**`);
 
       await logChannel.send({ embeds: [embed] });
-      console.log(`📨 Log envoyé sur ${guild.name}`);
+      console.log(`📨 Log de démarrage envoyé sur ${guild.name}`);
     } catch (err) {
-      console.error(`❌ Erreur log ${guild.id}`, err);
+      console.error(`❌ Erreur envoi log démarrage ${guild.id}`, err);
     }
   }
 
@@ -246,7 +268,9 @@ async function sendWelcomeInterGalactique(member) {
       .setTimestamp();
 
     await channel.send({ content: `${member}`, embeds: [embed] });
-    console.log(`🙌 Message de bienvenue envoyé (INTER GALACTIQUE) pour ${member.id}`);
+    console.log(
+      `🙌 Message de bienvenue envoyé (INTER GALACTIQUE) pour ${member.id}`
+    );
   } catch (err) {
     console.error('❌ Erreur welcome INTER GALACTIQUE :', err);
   }
@@ -266,19 +290,21 @@ async function sendWelcomeSupport(member) {
       .setAuthor({ name: 'Ho ! Un nouveau membre !' })
       .setDescription(
         `🐙 Bienvenue sur **GalactiqueBot Support** ${member} !\n` +
-        `Nous sommes désormais **${total}** membres. 🎉\n\n` +
-        `» Tu peux demander de l'aide à notre équipe dans le salon ` +
-        `<#${SUPPORT_HELP_CHANNEL_ID}> en créant un nouveau message pour ton problème.\n` +
-        `Pense aussi à mentionner le rôle <@&${SUPPORT_HELP_ROLE_ID}> ` +
-        `afin que ta demande soit traitée plus rapidement.\n\n` +
-        `If you speak English, you can also ask your questions in ` +
-        `<#${SUPPORT_HELP_CHANNEL_ID}> — the team will help you.`
+          `Nous sommes désormais **${total}** membres. 🎉\n\n` +
+          `» Tu peux demander de l'aide à notre équipe dans le salon ` +
+          `<#${SUPPORT_HELP_CHANNEL_ID}> en créant un nouveau message pour ton problème.\n` +
+          `Pense aussi à mentionner le rôle <@&${SUPPORT_HELP_ROLE_ID}> ` +
+          `afin que ta demande soit traitée plus rapidement.\n\n` +
+          `If you speak English, you can also ask your questions in ` +
+          `<#${SUPPORT_HELP_CHANNEL_ID}> — the team will help you.`
       )
       .setFooter({ text: 'GalactiqueBot Support' })
       .setTimestamp();
 
     await channel.send({ content: `${member}`, embeds: [embed] });
-    console.log(`🙌 Message de bienvenue envoyé (Support) pour ${member.id}`);
+    console.log(
+      `🙌 Message de bienvenue envoyé (Support) pour ${member.id}`
+    );
   } catch (err) {
     console.error('❌ Erreur welcome SUPPORT :', err);
   }
@@ -288,7 +314,7 @@ async function sendWelcomeSupport(member) {
    ARRIVÉES / DÉPARTS
 ============================================================ */
 
-client.on('guildMemberAdd', async (member) => {
+client.on('guildMemberAdd', async member => {
   // 🔹 INTER GALACTIQUE
   if (member.guild.id === IG_GUILD_ID) {
     await sendWelcomeInterGalactique(member);
@@ -301,10 +327,15 @@ client.on('guildMemberAdd', async (member) => {
       if (recrueId) {
         const role = member.guild.roles.cache.get(recrueId);
         if (role) {
-          await member.roles.add(role, 'Arrivée sur le serveur — rôle recrue automatique');
+          await member.roles.add(
+            role,
+            'Arrivée sur le serveur — rôle recrue automatique'
+          );
           console.log(`🎫 Rôle "recrue" ajouté à ${member.user.tag}`);
         } else {
-          console.warn(`⚠️ Rôle "recrue" introuvable pour le guild ${member.guild.id}`);
+          console.warn(
+            `⚠️ Rôle "recrue" introuvable pour le guild ${member.guild.id}`
+          );
         }
       }
     } catch (err) {
@@ -323,7 +354,7 @@ client.on('guildMemberAdd', async (member) => {
   }
 });
 
-client.on('guildMemberRemove', async (member) => {
+client.on('guildMemberRemove', async member => {
   if (member.guild.id === SUPPORT_GUILD_ID) {
     await updateSupportMemberCounter();
   }
