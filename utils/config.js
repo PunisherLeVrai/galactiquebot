@@ -11,23 +11,34 @@ if (!fs.existsSync(configDir)) {
   fs.mkdirSync(configDir, { recursive: true });
 }
 
-// --- Chargement des configs ---
-// ⚠️ Aucun ID n'est défini ici : tout vient soit des fichiers JSON,
-// soit des commandes qui mettront à jour ces fichiers.
-
-let globalConfig = {};
-let serversConfig = {};
-
-try {
-  globalConfig = require(globalPath);
-} catch {
-  globalConfig = {};
+/**
+ * Chargement sécurisé d'un JSON
+ */
+function loadJsonSafe(filePath, fallback, label) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw.trim()) return fallback;
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error(`⚠️ Impossible de charger ${label || filePath} :`, err);
+    return fallback;
+  }
 }
 
-try {
-  serversConfig = require(serversPath);
-} catch {
-  serversConfig = {};
+// --- Chargement des configs ---
+// ⚠️ Aucun ID n'est défini en dur ici : tout vient soit des fichiers JSON,
+// soit des commandes qui mettront à jour ces fichiers.
+
+let globalConfig = loadJsonSafe(globalPath, {}, 'config/global.json');
+let serversConfig = loadJsonSafe(serversPath, {}, 'config/servers.json');
+
+// Valeurs par défaut soft pour la globale
+if (!globalConfig || typeof globalConfig !== 'object') {
+  globalConfig = {};
+}
+if (!globalConfig.botName) {
+  globalConfig.botName = 'GalactiqueBot';
 }
 
 /**
@@ -35,9 +46,29 @@ try {
  */
 function saveServersConfig() {
   try {
-    fs.writeFileSync(serversPath, JSON.stringify(serversConfig, null, 2), 'utf8');
+    fs.writeFileSync(
+      serversPath,
+      JSON.stringify(serversConfig, null, 2),
+      'utf8'
+    );
   } catch (err) {
     console.error('❌ Impossible d’écrire config/servers.json :', err);
+  }
+}
+
+/**
+ * Sauvegarde la config globale dans config/global.json
+ * (au cas où tu ajoutes une commande /config global)
+ */
+function saveGlobalConfig() {
+  try {
+    fs.writeFileSync(
+      globalPath,
+      JSON.stringify(globalConfig, null, 2),
+      'utf8'
+    );
+  } catch (err) {
+    console.error('❌ Impossible d’écrire config/global.json :', err);
   }
 }
 
@@ -54,7 +85,8 @@ function getGlobalConfig() {
  * {
  *   "logChannelId": "...",
  *   "mainDispoChannelId": "...",
- *   "roles": { "joueur": "...", "essai": "..." }
+ *   "roles": { "joueur": "...", "essai": "..." },
+ *   "nickname": { "hierarchy": [...], "teams": [...], "postes": [...] }
  * }
  */
 function getGuildConfig(guildId) {
@@ -86,10 +118,16 @@ function setGuildConfig(guildId, newConfig) {
 /**
  * Met à jour partiellement la config d’une guilde (merge superficiel).
  * Exemple : updateGuildConfig(guildId, { logChannelId: '123', roles: { joueur: '456' } })
+ *
+ * - Les autres propriétés existantes de la guilde sont conservées.
+ * - Pour "roles", on fait un merge superficiel :
+ *   ancien.roles + nouveaux roles fournis.
  */
 function updateGuildConfig(guildId, patch) {
-  if (!guildId) return;
+  if (!guildId || !patch || typeof patch !== 'object') return;
+
   const existing = serversConfig[guildId] || {};
+
   serversConfig[guildId] = {
     ...existing,
     ...patch,
@@ -98,6 +136,7 @@ function updateGuildConfig(guildId, patch) {
       ? { roles: { ...(existing.roles || {}), ...(patch.roles || {}) } }
       : {})
   };
+
   saveServersConfig();
 }
 
@@ -106,5 +145,8 @@ module.exports = {
   getGuildConfig,
   getConfigFromInteraction,
   setGuildConfig,
-  updateGuildConfig
+  updateGuildConfig,
+  // utilitaires au cas où tu en aies besoin plus tard
+  saveServersConfig,
+  saveGlobalConfig
 };
