@@ -1,3 +1,4 @@
+// utils/scheduler.js
 const fs = require('fs');
 const path = require('path');
 const {
@@ -8,8 +9,8 @@ const {
   PermissionFlagsBits
 } = require('discord.js');
 const { getGuildConfig } = require('./config');
+const { SNAPSHOT_DIR } = require('./paths'); // 📁 snapshots persistants
 
-const RAPPORTS_DIR = path.join(__dirname, '../rapports');
 const DEFAULT_COLOR = 0xff4db8;
 
 // IDs fixes pour INTER GALACTIQUE
@@ -304,7 +305,7 @@ async function sendDispoPanelIG(client) {
       new ButtonBuilder()
         .setLabel('VENDREDI')
         .setStyle(ButtonStyle.Link)
-        .setURL(urls.vendredi) // ✅ corrigé (.setURL)
+        .setURL(urls.vendredi)
     );
   }
   if (urls.samedi) {
@@ -535,10 +536,10 @@ async function closeDisposAt17IG(client) {
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
   const color = getEmbedColorFromConfig(guild.id);
 
-  // 1) Snapshot JSON
+  // 1) Snapshot JSON (dans SNAPSHOT_DIR persistant)
   try {
-    if (!fs.existsSync(RAPPORTS_DIR)) {
-      fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
+    if (!fs.existsSync(SNAPSHOT_DIR)) {
+      fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
     }
 
     const snapshot = {
@@ -553,8 +554,8 @@ async function closeDisposAt17IG(client) {
     };
 
     const snapPath = path.join(
-      RAPPORTS_DIR,
-      `snapshot-${jour}-${isoDate}.json`
+      SNAPSHOT_DIR,
+      `dispos-${jour}-${isoDate}.json`
     );
     fs.writeFileSync(snapPath, JSON.stringify(snapshot, null, 2), 'utf8');
 
