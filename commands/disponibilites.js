@@ -6,9 +6,7 @@ const {
   ChannelType,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle,
-  MessageFlags,
-  AttachmentBuilder
+  ButtonStyle
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -167,28 +165,28 @@ module.exports = {
     if (!dispoChannel) {
       return interaction.reply({
         content: '❌ Salon de disponibilités introuvable. (Pense à configurer `mainDispoChannelId` dans servers.json ou fournir `salon_dispos`.)',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     if (!messageId) {
       return interaction.reply({
         content: `❌ ID du message de disponibilités introuvable pour **${jour}**.\nConfigure \`dispoMessages.${jour}\` dans servers.json ou fournis l’option \`message_id\`.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     if (!roleJoueur && !roleEssai) {
       return interaction.reply({
-        content: '❌ Aucun rôle joueur/essai trouvé. Fournis `role_joueur` ou `role_essai`, ou configure-les via `/config roles` / servers.json.',
-        flags: MessageFlags.Ephemeral
+        content: '❌ Aucun rôle joueur/essai trouvé. Fournis `role_joueur` ou `role_essai`, ou configure-les via \`/config roles\` / servers.json.',
+        ephemeral: true
       });
     }
 
     if (!targetChannel) {
       return interaction.reply({
         content: '❌ Salon cible introuvable.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -198,13 +196,13 @@ module.exports = {
     if (!targetChannel.permissionsFor?.(me)?.has(needed)) {
       return interaction.reply({
         content: `❌ Je ne peux pas écrire dans ${targetChannel}.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     await guild.members.fetch().catch(() => {});
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ ephemeral: true });
 
     // 🔎 Récupération du message de disponibilités
     let message;
@@ -462,10 +460,6 @@ module.exports = {
         fs.writeFileSync(txtPath, rapportTexte.replace(/\r\n/g, '\n'), 'utf8');
       } catch {}
 
-      const attachment = new AttachmentBuilder(txtPath, {
-        name: `rapport-${jour}-simple-${dateStr}.txt`
-      });
-
       // Mise à jour de l’embed du message de dispo (ajout "Disponibilités fermées")
       try {
         const exist = message.embeds?.[0];
@@ -505,7 +499,7 @@ module.exports = {
         try {
           await targetChannel.send({
             content: `🔒 Rapport de fermeture — **${jour.toUpperCase()}**`,
-            files: [attachment],
+            files: [txtPath],
             allowedMentions: { parse: [] }
           });
         } catch {}
