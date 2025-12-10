@@ -1,8 +1,7 @@
 // commands/test_auto.js
 const {
   SlashCommandBuilder,
-  PermissionFlagsBits,
-  MessageFlags
+  PermissionFlagsBits
 } = require('discord.js');
 
 const {
@@ -42,13 +41,13 @@ module.exports = {
     if (interaction.guild.id !== IG_GUILD_ID) {
       return interaction.reply({
         content: '❌ Cette commande de test ne fonctionne que sur le serveur INTER GALACTIQUE.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     await interaction.reply({
       content: `⏳ Lancement du test **${action}**…`,
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
 
     try {
