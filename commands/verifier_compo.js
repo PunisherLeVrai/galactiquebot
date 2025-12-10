@@ -3,8 +3,7 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
-  ChannelType,
-  MessageFlags
+  ChannelType
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -56,19 +55,18 @@ module.exports = {
 
   async execute(interaction) {
     const guild = interaction.guild;
-
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const convoqueRoleId = guildConfig?.roles?.convoque || null;
     const embedColor = getEmbedColor(guildConfig);
-    const clubLabel = guildConfig?.clubName || guild.name;
+    const clubLabel = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
 
     const rappel = interaction.options.getBoolean('rappel') ?? false;
     const enregistrer = interaction.options.getBoolean('enregistrer_snapshot') ?? false;
 
     if (!convoqueRoleId) {
       return interaction.reply({
-        content: '❌ Rôle **convoqué** non configuré pour ce serveur (roles.convoque).',
-        flags: MessageFlags.Ephemeral
+        content: '❌ Rôle **convoqué** non configuré pour ce serveur (`roles.convoque` dans servers.json).',
+        ephemeral: true
       });
     }
 
@@ -79,14 +77,12 @@ module.exports = {
     if (!compoChannel || compoChannel.type !== ChannelType.GuildText) {
       return interaction.reply({
         content: '❌ Salon de composition invalide.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     const rapportChannelId =
-      guildConfig?.channels?.rapport ||
-      guildConfig?.rapportChannelId ||
-      null;
+      guildConfig?.rapportChannelId || null;
 
     const rapportChannel =
       interaction.options.getChannel('salon_rapport') ||
@@ -97,20 +93,23 @@ module.exports = {
     if (!rapportChannel?.permissionsFor(me)?.has(['ViewChannel', 'SendMessages'])) {
       return interaction.reply({
         content: `❌ Je ne peux pas écrire dans <#${rapportChannel?.id || 'inconnu'}>.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
     await interaction.reply({
       content: '🔎 Vérification de la composition en cours…',
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
 
+    // --- Récupération du message de compo ---
     let messageIdInput = interaction.options.getString('message');
     let compoMessage;
 
     if (messageIdInput) {
       messageIdInput = messageIdInput.trim();
+
+      // Si l’utilisateur a mis un lien de message, on récupère l’ID à la fin
       const linkMatch = messageIdInput.match(/\/(\d{17,20})$/);
       if (linkMatch) messageIdInput = linkMatch[1];
 
@@ -122,14 +121,17 @@ module.exports = {
         });
       }
     } else {
+      // Auto-détection : on regarde les 50 derniers messages du salon
       try {
         const fetched = await compoChannel.messages.fetch({ limit: 50 });
 
+        // 1️⃣ Priorité : message du bot avec footer "Compo officielle"
         compoMessage = fetched.find(msg =>
           msg.author.id === me.id &&
           msg.embeds?.[0]?.footer?.text?.includes('Compo officielle')
         );
 
+        // 2️⃣ Sinon : dernier message du bot avec réaction ✅
         if (!compoMessage) {
           compoMessage = fetched.find(msg =>
             msg.author.id === me.id &&
@@ -152,6 +154,7 @@ module.exports = {
       }
     }
 
+    // --- Récup membres / convoqués ---
     await guild.members.fetch().catch(() => {});
 
     const convoques = guild.members.cache.filter(
@@ -162,21 +165,28 @@ module.exports = {
       return interaction.editReply('ℹ️ Aucun convoqué trouvé (rôle vide).');
     }
 
+    // --- Qui a réagi ✅ ? ---
     const validesSet = new Set();
     for (const [, reaction] of compoMessage.reactions.cache) {
       if (reaction.emoji?.name !== '✅') continue;
+
       const users = await reaction.users.fetch().catch(() => null);
       if (!users) continue;
-      users.forEach(u => { if (!u.bot) validesSet.add(u.id); });
+
+      users.forEach(u => {
+        if (!u.bot) validesSet.add(u.id);
+      });
     }
 
     const valides = [];
     const nonValides = [];
 
     for (const m of convoques.values()) {
-      (validesSet.has(m.id) ? valides : nonValides).push(m);
+      if (validesSet.has(m.id)) valides.push(m);
+      else nonValides.push(m);
     }
 
+    // --- Snapshot JSON (optionnel) ---
     if (enregistrer) {
       try {
         if (!fs.existsSync(RAPPORTS_DIR)) {
@@ -188,7 +198,7 @@ module.exports = {
           date: dateStr,
           channelId: compoChannel.id,
           messageId: compoMessage.id,
-          convoques: convoques.map(m => m.id),
+          convoques: [...convoques.values()].map(m => m.id),
           valides: valides.map(m => m.id),
           non_valides: nonValides.map(m => m.id)
         };
@@ -215,8 +225,8 @@ module.exports = {
         `👥 Convoqués : **${convoques.size}**`,
         `✅ Validé : **${valides.length}**`,
         `⏳ Non validé : **${nonValides.length}**`,
-        enregistrer ? `💾 Snapshot enregistré.` : ''
-      ].join('\n'))
+        enregistrer ? '💾 Snapshot enregistré dans `/rapports`.' : ''
+      ].filter(Boolean).join('\n'))
       .addFields(
         {
           name: '✅ Validé',
