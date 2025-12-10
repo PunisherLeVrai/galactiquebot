@@ -4,8 +4,7 @@ const {
   PermissionFlagsBits,
   PermissionsBitField,
   EmbedBuilder,
-  ChannelType,
-  MessageFlags
+  ChannelType
 } = require('discord.js');
 
 const { getConfigFromInteraction } = require('../utils/config');
@@ -89,7 +88,7 @@ module.exports = {
         )
         .addAttachmentOption(opt =>
           opt.setName('image')
-            .setDescription('Image à utiliser en mode "image brute" (sans embed).')
+            .setDescription('Image à utiliser (intégrée dans l’embed si image_brute = false, seule si image_brute = true).')
             .setRequired(false)
         )
         .addBooleanOption(opt =>
@@ -151,7 +150,7 @@ module.exports = {
         )
         .addAttachmentOption(o =>
           o.setName('image')
-            .setDescription('Image à utiliser seule si image_brute = true.')
+            .setDescription('Image à utiliser (intégrée dans l’embed si image_brute = false, seule si image_brute = true).')
             .setRequired(false)
         )
         .addBooleanOption(o =>
@@ -242,7 +241,7 @@ module.exports = {
         )
         .addAttachmentOption(o =>
           o.setName('image')
-            .setDescription('Image à utiliser seule si image_brute = true.')
+            .setDescription('Image à utiliser (intégrée dans l’embed si image_brute = false, seule si image_brute = true).')
             .setRequired(false)
         )
         .addBooleanOption(o =>
@@ -275,12 +274,11 @@ module.exports = {
       if (imageBrute && !image) {
         return interaction.reply({
           content: '❌ Tu as activé **image_brute**, mais aucune `image` n’a été fournie.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
-      const regexMentions = /@everyone|@here|<@&\d+>/g;
-      if (regexMentions.test(desc)) desc = desc.replace(regexMentions, '[mention bloquée 🚫]');
+      desc = sanitize(desc);
 
       const needed = new PermissionsBitField([
         PermissionsBitField.Flags.ViewChannel,
@@ -289,13 +287,13 @@ module.exports = {
       if (!channel.permissionsFor?.(me)?.has(needed)) {
         return interaction.reply({
           content: `❌ Je n’ai pas la permission d’écrire dans ${channel}.`,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       await interaction.reply({
         content: `🛠️ Publication des messages de disponibilités dans ${channel}…`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
 
       const recap = [];
@@ -306,6 +304,7 @@ module.exports = {
           let msg;
 
           if (imageBrute && image) {
+            // Photo seule, sans embed
             msg = await channel.send({
               content: '',
               embeds: [],
@@ -319,6 +318,11 @@ module.exports = {
               .setTitle(titreMaj)
               .setDescription(desc)
               .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+            // Image intégrée dans l'embed si fournie
+            if (image) {
+              embed.setImage(image.url);
+            }
 
             msg = await channel.send({
               content: '',
@@ -354,7 +358,7 @@ module.exports = {
           lignesIds,
           '```'
         ].join('\n'),
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -373,33 +377,26 @@ module.exports = {
       if (error) {
         return interaction.reply({
           content: error,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       if (imageBrute && !image) {
         return interaction.reply({
           content: '❌ Tu as activé **image_brute**, mais aucune `image` n’a été fournie.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       if (!imageBrute && !texte) {
         return interaction.reply({
           content: '❌ Le champ **texte** est vide.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
-      texte = (texte || '').replace(/^["“”]|["“”]$/g, '').trim();
-      const regexMentions = /@everyone|@here|<@&\d+>/g;
-      if (regexMentions.test(texte)) texte = texte.replace(regexMentions, '[mention bloquée 🚫]');
-      if (titreOptionnel && regexMentions.test(titreOptionnel)) {
-        return interaction.reply({
-          content: '❌ Le titre contient une mention bloquée.',
-          flags: MessageFlags.Ephemeral
-        });
-      }
+      texte = sanitize((texte || '').replace(/^["“”]|["“”]$/g, '').trim());
+      const titreNettoye = titreOptionnel ? sanitize(titreOptionnel) : null;
 
       const permissionsNécessaires = new PermissionsBitField([
         PermissionsBitField.Flags.ViewChannel,
@@ -408,13 +405,13 @@ module.exports = {
       if (!channel.permissionsFor?.(me)?.has(permissionsNécessaires)) {
         return interaction.reply({
           content: `❌ Je n’ai pas la permission d’écrire dans ${channel}.`,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       await interaction.reply({
         content: `🛠️ Modification des disponibilités (${jourChoisi === 'all' ? 'toute la semaine' : jourChoisi}) en cours...`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
 
       const recap = [];
@@ -435,6 +432,7 @@ module.exports = {
           }
 
           if (imageBrute && image) {
+            // Image seule
             await msg.edit({
               content: '',
               embeds: [],
@@ -443,7 +441,7 @@ module.exports = {
             });
           } else {
             const exist = msg.embeds?.[0];
-            const titreBase = titreOptionnel || (exist?.title || TITRES[jour]);
+            const titreBase = titreNettoye || (exist?.title || TITRES[jour]);
             const titreFinal = titreBase.replace(/📅\s*/i, '📅 ').toUpperCase();
 
             const descriptionFinale = remplacer
@@ -455,6 +453,11 @@ module.exports = {
               .setTitle(titreFinal)
               .setDescription(descriptionFinale)
               .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+            // Image intégrée dans l'embed si fournie
+            if (image) {
+              embed.setImage(image.url);
+            }
 
             await msg.edit({ content: '', embeds: [embed], allowedMentions: { parse: [] } });
           }
@@ -487,7 +490,7 @@ module.exports = {
           recap.join('\n'),
           '```'
         ].join('\n'),
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -502,7 +505,7 @@ module.exports = {
       if (error) {
         return interaction.reply({
           content: error,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
@@ -516,13 +519,13 @@ module.exports = {
       if (!channel.permissionsFor?.(me)?.has(needPerms)) {
         return interaction.reply({
           content: '❌ Permissions insuffisantes dans le salon des disponibilités (lecture, historique, écrire, réactions, gérer les messages).',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       await interaction.reply({
         content: `🧹 Réinitialisation des disponibilités (${jourInput === 'all' ? 'tous les jours' : jourInput})...`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
 
       const recap = [];
@@ -573,7 +576,7 @@ module.exports = {
           recap.join('\n') || 'Aucune action effectuée.',
           '```'
         ].join('\n'),
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -582,7 +585,9 @@ module.exports = {
       const channel = interaction.options.getChannel('salon');
       const jourInput = interaction.options.getString('jour', true);
       const idsInput = interaction.options.getString('ids', true);
-      const description = sanitize(interaction.options.getString('description') || DESCRIPTION_DEFAUT_ROUVRIR);
+      const description = sanitize(
+        interaction.options.getString('description') || DESCRIPTION_DEFAUT_ROUVRIR
+      );
       const reAddReactions = interaction.options.getBoolean('reactions') ?? false;
       const image = interaction.options.getAttachment('image') || null;
       const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
@@ -591,14 +596,14 @@ module.exports = {
       if (error) {
         return interaction.reply({
           content: error,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       if (imageBrute && !image) {
         return interaction.reply({
           content: '❌ Tu as activé **image_brute**, mais aucune `image` n’a été fournie.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
@@ -610,13 +615,13 @@ module.exports = {
       if (!channel.permissionsFor?.(me)?.has(need)) {
         return interaction.reply({
           content: `❌ Permissions insuffisantes dans ${channel} (voir/écrire/historique).`,
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       await interaction.reply({
         content: '🔄 Réouverture des disponibilités…',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
 
       const recap = [];
@@ -649,6 +654,11 @@ module.exports = {
               .setDescription(description)
               .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
+            // Image intégrée dans l'embed si fournie
+            if (image) {
+              embed.setImage(image.url);
+            }
+
             await msg.edit({ content: '', embeds: [embed], allowedMentions: { parse: [] } });
           }
 
@@ -671,7 +681,7 @@ module.exports = {
           recap.join('\n'),
           '```'
         ].join('\n'),
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
   }
