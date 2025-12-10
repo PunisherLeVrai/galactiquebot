@@ -163,7 +163,7 @@ module.exports = {
       });
     }
 
-    const { global, guild: guildConfig } = getConfigFromInteraction(interaction);
+    const { global, guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const cfg = guildConfig || {};
 
     // -----------------------------------------------------------------------
@@ -311,11 +311,11 @@ module.exports = {
     // /config roles
     // -----------------------------------------------------------------------
     if (sub === 'roles') {
-      const rJoueur = interaction.options.getRole('joueur') || null;
-      const rEssai = interaction.options.getRole('essai') || null;
+      const rJoueur   = interaction.options.getRole('joueur')   || null;
+      const rEssai    = interaction.options.getRole('essai')    || null;
       const rConvoque = interaction.options.getRole('convoque') || null;
-      const rRecrue = interaction.options.getRole('recrue') || null;
-      const rHelp = interaction.options.getRole('help') || null;
+      const rRecrue   = interaction.options.getRole('recrue')   || null;
+      const rHelp     = interaction.options.getRole('help')     || null;
 
       if (!rJoueur && !rEssai && !rConvoque && !rRecrue && !rHelp) {
         return interaction.reply({
@@ -369,8 +369,8 @@ module.exports = {
     // -----------------------------------------------------------------------
     if (sub === 'style') {
       const couleurStr = interaction.options.getString('couleur') || null;
-      const tag = interaction.options.getString('tag') || null;
-      const clubName = interaction.options.getString('clubname') || null;
+      const tag        = interaction.options.getString('tag')      || null;
+      const clubName   = interaction.options.getString('clubname') || null;
 
       if (!couleurStr && !tag && !clubName) {
         return interaction.reply({
@@ -426,7 +426,7 @@ module.exports = {
       const jour = interaction.options.getString('jour', true); // lundi ... dimanche
       const messageId = interaction.options.getString('message_id', true);
 
-      const existing = (cfg.dispoMessages || {});
+      const existing = cfg.dispoMessages || {};
       const newDispoMessages = {
         ...existing,
         [jour]: messageId
