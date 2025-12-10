@@ -1,8 +1,7 @@
 // commands/synchroniser_pseudos.js
 const {
   SlashCommandBuilder,
-  PermissionFlagsBits,
-  MessageFlags
+  PermissionFlagsBits
 } = require('discord.js');
 
 const { getConfigFromInteraction } = require('../utils/config');
@@ -81,10 +80,10 @@ function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRo
       MAX_LEN - (fixedPrefix.length ? fixedPrefix.length + 1 : 0) - suffix.length
     );
 
-    const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
-    full = fixedPrefix.length
-      ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
-      : `${trimmedPseudo}${suffix}`;
+      const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
+      full = fixedPrefix.length
+        ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
+        : `${trimmedPseudo}${suffix}`;
   }
 
   return full.slice(0, MAX_LEN);
@@ -112,7 +111,7 @@ module.exports = {
     if (!me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
       return interaction.reply({
         content: '❌ Je n’ai pas la permission **Gérer les pseudos** sur ce serveur.',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -129,7 +128,7 @@ module.exports = {
       return interaction.reply({
         content:
           '❌ La configuration des rôles pour les pseudos est manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -137,7 +136,7 @@ module.exports = {
       content: simulation
         ? `🧪 Simulation de synchronisation des pseudos en cours… (tag : **${tag}**)`
         : `🔧 Synchronisation des pseudos en cours… (tag : **${tag}**)`,
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
 
     await interaction.guild.members.fetch().catch(() => {});
@@ -195,7 +194,7 @@ module.exports = {
       ]
         .filter(Boolean)
         .join('\n'),
-      flags: MessageFlags.Ephemeral
+      ephemeral: true
     });
   }
 };
