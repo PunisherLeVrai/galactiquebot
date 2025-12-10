@@ -3,8 +3,7 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   ChannelType,
-  EmbedBuilder,
-  MessageFlags
+  EmbedBuilder
 } = require('discord.js');
 
 const fs = require('fs');
@@ -28,7 +27,9 @@ function getEmbedColor(cfg) {
 function parseISODate(d) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
   if (!m) return null;
-  const y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]);
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
   if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
   return new Date(y, mo - 1, da, 0, 0, 0, 0);
 }
@@ -154,7 +155,7 @@ module.exports = {
       // Charge config dynamique
       const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
       const embedColor = getEmbedColor(guildConfig);
-      const clubLabel = guildConfig?.clubName || guild.name;
+      const clubLabel = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
 
       const rapportChannelId =
         guildConfig?.channels?.rapport ||
@@ -169,10 +170,10 @@ module.exports = {
 
       // Permissions
       const me = guild.members.me;
-      if (!targetChannel?.permissionsFor?.(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
+      if (!targetChannel || !targetChannel.permissionsFor?.(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
         return interaction.reply({
-          content: `❌ Je n’ai pas la permission d’écrire dans <#${targetChannel.id}>.`,
-          flags: MessageFlags.Ephemeral
+          content: `❌ Je n’ai pas la permission d’écrire dans <#${targetChannel?.id || 'inconnu'}>.`,
+          ephemeral: true
         });
       }
 
@@ -190,20 +191,20 @@ module.exports = {
       if (!fromDate || !toDate || fromDate > toDate) {
         return interaction.reply({
           content: '❌ Dates invalides. Format attendu : YYYY-MM-DD.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       await interaction.reply({
         content: `🔍 Analyse des snapshots du **${debutStr}** au **${finStr}**…`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
 
       const snaps = readSnapshotsInRange(fromDate, toDate);
       if (snaps.length === 0) {
         return interaction.followUp({
-          content: `⚠️ Aucun snapshot trouvé dans /rapports pour cette période.`,
-          flags: MessageFlags.Ephemeral
+          content: '⚠️ Aucun snapshot trouvé dans `/rapports` pour cette période.',
+          ephemeral: true
         });
       }
 
@@ -244,7 +245,7 @@ module.exports = {
         .sort((a, b) => b[1] - a[1]);
 
       const headerLines = [
-        `📅 **Analyse disponibilités (Snapshots)**`,
+        '📅 **Analyse disponibilités (Snapshots)**',
         `🗓️ Période : **${debutStr} → ${finStr}**`,
         `📂 Snapshots utilisés : **${snapshotsUsed}**`,
         snapshotsSkipped ? `⚠️ Ignorés : **${snapshotsSkipped}** (incomplets)` : '',
@@ -269,14 +270,18 @@ module.exports = {
           .setTimestamp();
 
         await targetChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
-        return interaction.followUp({ content: '📨 Rapport envoyé.', flags: MessageFlags.Ephemeral });
+        return interaction.followUp({
+          content: '📨 Rapport envoyé.',
+          ephemeral: true
+        });
       }
 
       /* -- Pagination -- */
       const pageSize = 20;
       const pages = [];
-      for (let i = 0; i < entries.length; i += pageSize)
+      for (let i = 0; i < entries.length; i += pageSize) {
         pages.push(entries.slice(i, i + pageSize));
+      }
 
       /* Première page */
       const first = pages.shift();
@@ -296,7 +301,9 @@ module.exports = {
 
       await targetChannel.send({
         embeds: [firstEmbed],
-        allowedMentions: mention ? { users: firstMentions } : { parse: [] }
+        allowedMentions: mention
+          ? { users: firstMentions, parse: [] }
+          : { parse: [] }
       });
 
       /* Pages suivantes */
@@ -333,13 +340,15 @@ module.exports = {
 
         await targetChannel.send({
           embeds: [embed],
-          allowedMentions: mention ? { users: mentions } : { parse: [] }
+          allowedMentions: mention
+            ? { users: mentions, parse: [] }
+            : { parse: [] }
         });
       }
 
       return interaction.followUp({
         content: `📨 Rapport envoyé dans <#${targetChannel.id}>.`,
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
     }
 
@@ -354,13 +363,13 @@ module.exports = {
       if (avantStr && !avantDate) {
         return interaction.reply({
           content: '❌ Format de date invalide. Attendu : YYYY-MM-DD.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
       await interaction.reply({
         content: '🧹 Analyse des snapshots en cours…',
-        flags: MessageFlags.Ephemeral
+        ephemeral: true
       });
 
       if (!fs.existsSync(RAPPORTS_DIR)) {
@@ -394,12 +403,13 @@ module.exports = {
             preview,
             toDelete.length > 20 ? `\n... (+${toDelete.length - 20} autres)` : '',
             '```',
-            `ℹ️ Relance avec \`simulation:false\` pour confirmer.`
+            'ℹ️ Relance avec `simulation:false` pour confirmer.'
           ].join('\n')
         });
       }
 
-      let ok = 0, fail = 0;
+      let ok = 0;
+      let fail = 0;
       const errors = [];
 
       for (const f of toDelete) {
