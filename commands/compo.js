@@ -4,8 +4,7 @@ const {
   PermissionFlagsBits,
   PermissionsBitField,
   EmbedBuilder,
-  ChannelType,
-  MessageFlags
+  ChannelType
 } = require('discord.js');
 
 const { getConfigFromInteraction } = require('../utils/config');
@@ -102,29 +101,39 @@ module.exports = {
       if (!channel || channel.type !== ChannelType.GuildText) {
         return interaction.reply({
           content: '❌ Salon invalide pour publier la composition.',
-          flags: MessageFlags.Ephemeral
+          ephemeral: true
         });
       }
 
-      const neededPerms = new PermissionsBitField([
+      // Permissions minimales
+      const permList = [
         PermissionsBitField.Flags.ViewChannel,
         PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.EmbedLinks,
-        PermissionsBitField.Flags.AddReactions
-      ]);
+        PermissionsBitField.Flags.EmbedLinks
+      ];
+      if (shouldReact) {
+        permList.push(PermissionsBitField.Flags.AddReactions);
+      }
+
+      const neededPerms = new PermissionsBitField(permList);
 
       if (!channel.permissionsFor?.(me)?.has(neededPerms)) {
         return interaction.reply({
-          content: `❌ Je n’ai pas les permissions nécessaires dans ${channel} (voir, écrire, embed, réactions).`,
-          flags: MessageFlags.Ephemeral
+          content: `❌ Je n’ai pas les permissions nécessaires dans ${channel} (voir, écrire, embed${shouldReact ? ', réactions' : ''}).`,
+          ephemeral: true
         });
       }
 
+      await interaction.reply({
+        content: `🛠️ Publication de la composition dans ${channel}...`,
+        ephemeral: true
+      });
+
       // Nettoyage des mentions sauvages dans l'embed
       texte = sanitize(texte || '').trim();
-      const titre = sanitize(
+      const titre = (sanitize(
         titreInput || '📋 Composition du match'
-      ).trim() || '📋 Composition du match';
+      ).trim()) || '📋 Composition du match';
 
       // On ajoute un petit rappel dans la description
       const descFinale = [
@@ -140,9 +149,16 @@ module.exports = {
         .setFooter({ text: `${clubName} ⚫ Compo officielle` }) // 🧷 marqueur pour /verifier_compo
         .setTimestamp();
 
+      // 🖼 Image de compo dans l’embed (et plus en pièce jointe séparée)
+      if (image) {
+        embed.setImage(image.url);
+      }
+
       // --- Construction du contenu (mentions) ---
       const contentParts = [];
       const allowedMentions = { parse: [] };
+
+      let warning = '';
 
       if (mentionEveryone) {
         contentParts.push('@everyone');
@@ -152,58 +168,47 @@ module.exports = {
       if (mentionConvoques) {
         if (convoqueRoleId) {
           contentParts.push(`<@&${convoqueRoleId}>`);
-          allowedMentions.parse.push('roles');
+          // on restreint aux rôles explicitement mentionnés
+          allowedMentions.roles = [convoqueRoleId];
         } else {
-          await interaction.reply({
-            content: '⚠️ Rôle **convoqué** non configuré dans la config (`roles.convoque`). La compo sera envoyée sans mention de ce rôle.',
-            flags: MessageFlags.Ephemeral
-          });
+          warning =
+            '⚠️ Rôle **convoqué** non configuré dans la config (`roles.convoque`). La compo a été envoyée sans mention de ce rôle.\n';
         }
       }
 
       const content = contentParts.join(' ').trim() || undefined;
-
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: `🛠️ Publication de la composition dans ${channel}...`,
-          flags: MessageFlags.Ephemeral
-        });
-      } else if (interaction.replied) {
-        await interaction.followUp({
-          content: `🛠️ Publication de la composition dans ${channel}...`,
-          flags: MessageFlags.Ephemeral
-        });
-      }
 
       let msg;
       try {
         msg = await channel.send({
           content,
           embeds: [embed],
-          files: image ? [{ attachment: image.url, name: image.name }] : [],
           allowedMentions
         });
       } catch (err) {
         console.error('Erreur envoi compo :', err);
-        return interaction.followUp({
-          content: '❌ Erreur lors de l’envoi de la compo (voir logs du bot).',
-          flags: MessageFlags.Ephemeral
+        return interaction.editReply({
+          content: '❌ Erreur lors de l’envoi de la compo (voir logs du bot).'
         });
       }
 
       if (msg && shouldReact) {
-        try { await msg.react('✅'); } catch (e) {
+        try {
+          await msg.react('✅');
+        } catch (e) {
           console.error('Erreur réaction ✅ sur compo :', e);
         }
       }
 
-      return interaction.followUp({
+      const lien = `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`;
+
+      return interaction.editReply({
         content: [
+          warning,
           '✅ **Composition publiée avec succès.**',
           `📨 Salon : ${channel}`,
-          `🔗 Lien : https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`
-        ].join('\n'),
-        flags: MessageFlags.Ephemeral
+          `🔗 Lien : ${lien}`
+        ].filter(Boolean).join('\n')
       });
     }
   }
