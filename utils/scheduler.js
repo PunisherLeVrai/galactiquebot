@@ -379,7 +379,7 @@ async function sendDispoPanelIG(client) {
       new ButtonBuilder()
         .setLabel('MERCREDI')
         .setStyle(ButtonStyle.Link)
-        .setURL(urls.mercredi)
+        .URL(urls.mercredi)
     );
   }
   if (urls.jeudi) {
@@ -607,7 +607,7 @@ async function sendDetailedReportIG(client, hourLabel) {
 }
 
 /* ============================================================
-   FERMETURE 17h (snapshot + verrouillage)
+   FERMETURE 17h (snapshot + verrouillage) — DISPONIBILITÉS
 ============================================================ */
 
 async function closeDisposAt17IG(client) {
@@ -848,29 +848,29 @@ async function autoSyncNicknamesIG(client) {
 }
 
 /* ============================================================
-   AUTO VERIFIER_COMPO (18h / 19h / 19h30)
+   LOGIQUE COMPO — PARTAGÉE (rappels + final)
 ============================================================ */
 
-async function autoVerifierCompoIG(client, label = '') {
+async function getCompoContextIG(client) {
   const guild = client.guilds.cache.get(IG_GUILD_ID);
-  if (!guild) return;
+  if (!guild) return null;
 
   const cfg = getGuildConfig(guild.id) || {};
   const convoqueRoleId = cfg.roles?.convoque || null;
   if (!convoqueRoleId) {
     console.warn('⚠️ [AUTO COMPO] roles.convoque manquant dans servers.json');
-    return;
+    return null;
   }
 
   const compoChannel = await guild.channels.fetch(COMPO_CHANNEL_ID).catch(() => null);
   if (!compoChannel || !compoChannel.isTextBased()) {
     console.warn('⚠️ [AUTO COMPO] Salon composition introuvable ou non textuel');
-    return;
+    return null;
   }
 
   const botId = client.user.id;
 
-  // Auto-détection du message de compo (comme la commande)
+  // Auto-détection du message de compo
   let compoMessage;
   try {
     const fetched = await compoChannel.messages.fetch({ limit: 50 });
@@ -889,11 +889,11 @@ async function autoVerifierCompoIG(client, label = '') {
 
     if (!compoMessage) {
       console.warn('⚠️ [AUTO COMPO] Aucun message de compo trouvé (auto-détection)');
-      return;
+      return null;
     }
   } catch (e) {
     console.error('❌ [AUTO COMPO] Erreur recherche auto compo :', e);
-    return;
+    return null;
   }
 
   await guild.members.fetch().catch(() => {});
@@ -903,7 +903,7 @@ async function autoVerifierCompoIG(client, label = '') {
   );
   if (!convoques.size) {
     console.warn('⚠️ [AUTO COMPO] Aucun convoqué trouvé (rôle vide).');
-    return;
+    return null;
   }
 
   const validesSet = new Set();
@@ -926,29 +926,35 @@ async function autoVerifierCompoIG(client, label = '') {
     else nonValides.push(m);
   }
 
-  // Snapshot JSON (toujours enregistré pour l’auto)
-  try {
-    if (!fs.existsSync(RAPPORTS_DIR)) {
-      fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
-    }
-    const dateStr = new Date().toISOString().split('T')[0];
-    const snap = {
-      type: 'compo',
-      date: dateStr,
-      channelId: compoChannel.id,
-      messageId: compoMessage.id,
-      convoques: [...convoques.values()].map(m => m.id),
-      valides: valides.map(m => m.id),
-      non_valides: nonValides.map(m => m.id)
-    };
-    const filePath = path.join(
-      RAPPORTS_DIR,
-      `compo-${dateStr}-${compoMessage.id}.json`
-    );
-    fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
-  } catch (e) {
-    console.error('❌ [AUTO COMPO] Erreur snapshot compo :', e);
-  }
+  return {
+    guild,
+    cfg,
+    compoChannel,
+    compoMessage,
+    convoques,
+    valides,
+    nonValides
+  };
+}
+
+/* ============================================================
+   AUTO VERIFIER_COMPO — RAPPEL (18h / 19h / 19h30)
+   → RAPPEL AVEC MENTIONS, PAS DE SNAPSHOT, PAS DE SUPPRESSION
+============================================================ */
+
+async function autoVerifierCompoReminderIG(client, label = '') {
+  const ctx = await getCompoContextIG(client);
+  if (!ctx) return;
+
+  const {
+    guild,
+    cfg,
+    compoChannel,
+    compoMessage,
+    convoques,
+    valides,
+    nonValides
+  } = ctx;
 
   const color = getEmbedColorFromConfig(guild.id);
   const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
@@ -962,12 +968,12 @@ async function autoVerifierCompoIG(client, label = '') {
     `👥 Convoqués : **${convoques.size}**`,
     `✅ Validé : **${valides.length}**`,
     `⏳ Non validé : **${nonValides.length}**`,
-    '💾 Snapshot enregistré dans `/rapports`.'
+    `🕒 Rappel automatique : **${label || 'auto'}**`
   ].join('\n');
 
   const embedCompo = new EmbedBuilder()
     .setColor(color)
-    .setTitle('📋 Vérification de la composition')
+    .setTitle('📋 Vérification de la composition (rappel)')
     .setDescription(baseDescription)
     .addFields(
       {
@@ -982,12 +988,8 @@ async function autoVerifierCompoIG(client, label = '') {
     .setFooter({ text: `${clubLabel} • Vérification compo (rappel ${label || ''})` })
     .setTimestamp();
 
-  const embedRapport = EmbedBuilder.from(embedCompo)
-    .setFooter({ text: `${clubLabel} • Vérification compo (archive auto ${label || ''})` });
-
   const nonValidesIds = nonValides.map(m => m.id);
 
-  // 1️⃣ Rapport + mention dans le salon des compos
   try {
     await compoChannel.send({
       content: nonValidesIds.length
@@ -999,27 +1001,140 @@ async function autoVerifierCompoIG(client, label = '') {
         : { parse: [] }
     });
   } catch (e) {
-    console.error('❌ [AUTO COMPO] Erreur envoi dans le salon compos :', e);
-  }
-
-  // 2️⃣ Rapport + snapshot sans mention dans le salon rapports
-  try {
-    const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
-    const rapportChannel = await guild.channels.fetch(rapportChannelId).catch(() => null);
-    if (!rapportChannel) {
-      console.warn('⚠️ [AUTO COMPO] Salon rapports introuvable pour IG.');
-    } else {
-      await rapportChannel.send({
-        embeds: [embedRapport],
-        allowedMentions: { parse: [] }
-      });
-    }
-  } catch (e) {
-    console.error('❌ [AUTO COMPO] Erreur envoi dans le salon rapports :', e);
+    console.error('❌ [AUTO COMPO] Erreur envoi rappel compo :', e);
   }
 
   console.log(
-    `📋 [AUTO COMPO] Vérification compo auto (${label || 'auto'}) envoyée. Non validés: ${nonValidesIds.length}`
+    `📋 [AUTO COMPO] Rappel compo ${label || 'auto'} envoyé. Non validés: ${nonValidesIds.length}`
+  );
+}
+
+/* ============================================================
+   AUTO VERIFIER_COMPO — FINAL 20h
+   → RAPPORT FINAL SANS MENTIONS + SNAPSHOT /rapports + CLEAR REACTIONS
+============================================================ */
+
+async function autoVerifierCompoIG(client, label = '20h') {
+  const { isoDate } = getParisParts();
+  const ctx = await getCompoContextIG(client);
+  if (!ctx) return;
+
+  const {
+    guild,
+    cfg,
+    compoChannel,
+    compoMessage,
+    convoques,
+    valides,
+    nonValides
+  } = ctx;
+
+  const color = getEmbedColorFromConfig(guild.id);
+  const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
+  const url = `https://discord.com/channels/${guild.id}/${compoChannel.id}/${compoMessage.id}`;
+
+  const formatMentions = (arr) =>
+    arr.length ? arr.map(m => `<@${m.id}>`).join(' - ') : '_Aucun_';
+
+  // 1️⃣ Snapshot final UNIQUE dans /rapports
+  try {
+    if (!fs.existsSync(RAPPORTS_DIR)) {
+      fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
+    }
+
+    const snap = {
+      type: 'compo',
+      date: isoDate,
+      channelId: compoChannel.id,
+      messageId: compoMessage.id,
+      convoques: [...convoques.values()].map(m => m.id),
+      valides: valides.map(m => m.id),
+      non_valides: nonValides.map(m => m.id)
+    };
+
+    const filePath = path.join(
+      RAPPORTS_DIR,
+      `compo-${isoDate}-${compoMessage.id}.json`
+    );
+    fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
+
+    console.log(`💾 [AUTO COMPO] Snapshot final compo : ${filePath}`);
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Erreur snapshot compo final :', e);
+  }
+
+  // 2️⃣ Suppression des réactions sur la compo
+  try {
+    await compoMessage.reactions.removeAll();
+    console.log('🧹 [AUTO COMPO] Réactions supprimées sur la compo.');
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Impossible de supprimer les réactions sur la compo :', e);
+  }
+
+  // 3️⃣ Rapport final (embed) SANS mentions
+  const baseDescription = [
+    `📨 Message : [Lien vers la compo](${url})`,
+    `👥 Convoqués : **${convoques.size}**`,
+    `✅ Validé : **${valides.length}**`,
+    `⏳ Non validé : **${nonValides.length}**`,
+    `💾 Snapshot final enregistré dans \`/rapports\`.`,
+    `🕒 Rapport final automatique : **${label}**`
+  ].join('\n');
+
+  const embedFinal = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('📋 Vérification finale de la composition')
+    .setDescription(baseDescription)
+    .addFields(
+      {
+        name: '✅ Validé',
+        value: formatMentions(valides).slice(0, 1024)
+      },
+      {
+        name: '⏳ Non validé',
+        value: formatMentions(nonValides).slice(0, 1024)
+      }
+    )
+    .setFooter({ text: `${clubLabel} • Vérification compo (finale ${label})` })
+    .setTimestamp();
+
+  const embedArchive = EmbedBuilder.from(embedFinal)
+    .setFooter({ text: `${clubLabel} • Vérification compo (archive auto ${label})` });
+
+  const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
+  let rapportChannel = null;
+  if (rapportChannelId && rapportChannelId !== '0') {
+    rapportChannel = await guild.channels.fetch(rapportChannelId).catch(() => null);
+    if (!rapportChannel) {
+      console.warn('⚠️ [AUTO COMPO] Salon rapports introuvable pour IG.');
+    }
+  }
+
+  // Envoi dans le salon compo (sans mention)
+  try {
+    await compoChannel.send({
+      content: '📋 **Rapport final de la composition (20h)**',
+      embeds: [embedFinal],
+      allowedMentions: { parse: [] }
+    });
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Erreur envoi rapport final dans le salon compos :', e);
+  }
+
+  // Envoi dans le salon rapports (archive, sans mention)
+  if (rapportChannel) {
+    try {
+      await rapportChannel.send({
+        embeds: [embedArchive],
+        allowedMentions: { parse: [] }
+      });
+    } catch (e) {
+      console.error('❌ [AUTO COMPO] Erreur envoi rapport final dans le salon rapports :', e);
+    }
+  }
+
+  console.log(
+    `📋 [AUTO COMPO] Rapport final compo ${label} envoyé. Non validés: ${nonValides.length}`
   );
 }
 
@@ -1359,15 +1474,16 @@ async function autoWeekDispoReportIG(client) {
 ============================================================ */
 
 function initScheduler(client) {
-  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 18h / 19h / 19h30 / 22h + sync pseudos)…');
+  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 18h / 19h / 19h30 / 20h / 22h + sync pseudos)…');
 
   let lastPanelKey = null;     // 10h & 22h panneau
   let lastNoonKey = null;      // 12h
-  let last17Key = null;        // 17h
+  let last17Key = null;        // 17h (dispos)
   let lastNickKey = null;      // sync pseudos
-  let lastCompo18Key = null;   // 18h vérif compo
-  let lastCompo19Key = null;   // 19h vérif compo
-  let lastCompo1930Key = null; // 19h30 vérif compo
+  let lastCompo18Key = null;   // 18h vérif compo (rappel)
+  let lastCompo19Key = null;   // 19h vérif compo (rappel)
+  let lastCompo1930Key = null; // 19h30 vérif compo (rappel)
+  let lastCompo20Key = null;   // 20h vérif compo finale
   let lastWeekKey = null;      // 22h rapports semaine (mercredi / dimanche)
 
   setInterval(async () => {
@@ -1402,7 +1518,7 @@ function initScheduler(client) {
       }
     }
 
-    // 17h → rapport final + fermeture (fenêtre 0-2 minutes)
+    // 17h → rapport final + fermeture dispos (fenêtre 0-2 minutes)
     if (hour === 17 && minute >= 0 && minute <= 2) {
       const key17 = `${dateKey}-17`;
       if (last17Key !== key17) {
@@ -1417,44 +1533,58 @@ function initScheduler(client) {
       }
     }
 
-    // 18h → vérification compo auto (rappel + snapshot)
+    // 18h → vérification compo auto (rappel)
     if (hour === 18 && minute >= 0 && minute <= 2) {
       const key = `${dateKey}-18-compo`;
       if (lastCompo18Key !== key) {
         lastCompo18Key = key;
         console.log(`⏰ [AUTO] Tick vérification compo 18h pour ${dateKey}`);
         try {
-          await autoVerifierCompoIG(client, '18h');
+          await autoVerifierCompoReminderIG(client, '18h');
         } catch (e) {
           console.error('❌ [AUTO] Erreur tâche vérification compo 18h :', e);
         }
       }
     }
 
-    // 19h → vérification compo auto
+    // 19h → vérification compo auto (rappel)
     if (hour === 19 && minute >= 0 && minute <= 2) {
       const key = `${dateKey}-19-compo`;
       if (lastCompo19Key !== key) {
         lastCompo19Key = key;
         console.log(`⏰ [AUTO] Tick vérification compo 19h pour ${dateKey}`);
         try {
-          await autoVerifierCompoIG(client, '19h');
+          await autoVerifierCompoReminderIG(client, '19h');
         } catch (e) {
           console.error('❌ [AUTO] Erreur tâche vérification compo 19h :', e);
         }
       }
     }
 
-    // 19h30 → vérification compo auto (fenêtre 30-32)
+    // 19h30 → vérification compo auto (rappel) (fenêtre 30-32)
     if (hour === 19 && minute >= 30 && minute <= 32) {
       const key = `${dateKey}-1930-compo`;
       if (lastCompo1930Key !== key) {
         lastCompo1930Key = key;
         console.log(`⏰ [AUTO] Tick vérification compo 19h30 pour ${dateKey}`);
         try {
-          await autoVerifierCompoIG(client, '19h30');
+          await autoVerifierCompoReminderIG(client, '19h30');
         } catch (e) {
           console.error('❌ [AUTO] Erreur tâche vérification compo 19h30 :', e);
+        }
+      }
+    }
+
+    // 20h → vérification compo finale (snapshot + clear réactions, SANS mentions)
+    if (hour === 20 && minute >= 0 && minute <= 2) {
+      const key = `${dateKey}-20-compo-final`;
+      if (lastCompo20Key !== key) {
+        lastCompo20Key = key;
+        console.log(`⏰ [AUTO] Tick vérification compo finale 20h pour ${dateKey}`);
+        try {
+          await autoVerifierCompoIG(client, '20h');
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche vérification compo finale 20h :', e);
         }
       }
     }
@@ -1501,8 +1631,9 @@ module.exports = {
   sendDetailedReportIG,
   closeDisposAt17IG,
   autoSyncNicknamesIG,
-  // nouveaux exports pour tests manuels
-  autoVerifierCompoIG,
+  // exports compos
+  autoVerifierCompoIG,           // final 20h
+  autoVerifierCompoReminderIG,   // rappels
   autoCompoWeekReportIG,
   autoWeekDispoReportIG
 };
