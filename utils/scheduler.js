@@ -16,6 +16,13 @@ const DEFAULT_COLOR = 0xff4db8;
 // IDs fixes : uniquement le serveur INTER GALACTIQUE
 const IG_GUILD_ID = '1392639720491581551';
 
+// 📁 Dossier des snapshots /rapports (compos)
+const RAPPORTS_DIR = path.join(__dirname, '../rapports');
+
+// 🔧 Channels fixes pour IG
+const COMPO_CHANNEL_ID = '1393774911557861407';     // Salon compositions
+const RAPPORT_CHANNEL_ID_IG = '1446471718943326259'; // Salon rapports détaillés
+
 // ⚙️ Options d’automatisation pour IG
 const IG_AUTOMATION = {
   timezone: 'Europe/Paris',
@@ -101,6 +108,90 @@ function idsLine(colOrArray) {
 
   // Si ce sont des IDs
   return arr.map(id => `<@${id}>`).join(' - ');
+}
+
+/* ------------------------- Utils dates ------------------------- */
+
+function parseISODate(d) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+  return new Date(y, mo - 1, da, 0, 0, 0, 0);
+}
+
+function toISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(d, delta) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() + delta);
+  return x;
+}
+
+/* --------------------- Lecture snapshots COMPO (/rapports) ----------------------- */
+
+function readCompoSnapshotsInRange(fromDate, toDate) {
+  const snaps = [];
+  if (!fs.existsSync(RAPPORTS_DIR)) return snaps;
+
+  const files = fs.readdirSync(RAPPORTS_DIR)
+    .filter(f => f.startsWith('compo-') && f.endsWith('.json'));
+
+  for (const f of files) {
+    try {
+      const full = path.join(RAPPORTS_DIR, f);
+      const js = JSON.parse(fs.readFileSync(full, 'utf8'));
+
+      if (js.type !== 'compo') continue;
+
+      const fileDate = js.date ? parseISODate(js.date) : null;
+      if (!fileDate) continue;
+
+      if (fileDate >= fromDate && fileDate <= toDate) {
+        snaps.push({ file: f, date: fileDate, data: js });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  snaps.sort((a, b) => a.date - b.date);
+  return snaps;
+}
+
+/* --------------------- Lecture snapshots DISPOS (SNAPSHOT_DIR) ------------------- */
+
+const DISPO_SNAP_REGEX = /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
+
+function readDispoSnapshotsInRange(fromDate, toDate) {
+  const snaps = [];
+  if (!fs.existsSync(SNAPSHOT_DIR)) return snaps;
+
+  const files = fs.readdirSync(SNAPSHOT_DIR)
+    .filter(f => DISPO_SNAP_REGEX.test(f));
+
+  for (const f of files) {
+    const m = DISPO_SNAP_REGEX.exec(f);
+    if (!m) continue;
+    const fileDate = parseISODate(m[2]);
+    if (!fileDate) continue;
+
+    if (fileDate >= fromDate && fileDate <= toDate) {
+      try {
+        const js = JSON.parse(fs.readFileSync(path.join(SNAPSHOT_DIR, f), 'utf8'));
+        snaps.push({ file: f, date: fileDate, data: js });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  snaps.sort((a, b) => a.date - b.date);
+  return snaps;
 }
 
 // Récupère toutes les infos de disponibilités du jour
@@ -446,7 +537,7 @@ async function runNoonReminderIG(client) {
 }
 
 /* ============================================================
-   RAPPORTS 12h & 17h — même embed que /disponibilites mode "embed_detaille"
+   RAPPORTS 12h & 17h — mêmes infos que /disponibilites mode "embed_detaille"
 ============================================================ */
 
 async function sendDetailedReportIG(client, hourLabel) {
@@ -470,7 +561,7 @@ async function sendDetailedReportIG(client, hourLabel) {
   const color = getEmbedColorFromConfig(guild.id);
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
 
-  const reportChannelId = cfg.rapportChannelId;
+  const reportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
   if (!reportChannelId || reportChannelId === '0') {
     console.warn('⚠️ [AUTO] rapportChannelId manquant pour IG');
     return;
@@ -757,19 +848,530 @@ async function autoSyncNicknamesIG(client) {
 }
 
 /* ============================================================
+   AUTO VERIFIER_COMPO (18h / 19h / 19h30)
+============================================================ */
+
+async function autoVerifierCompoIG(client, label = '') {
+  const guild = client.guilds.cache.get(IG_GUILD_ID);
+  if (!guild) return;
+
+  const cfg = getGuildConfig(guild.id) || {};
+  const convoqueRoleId = cfg.roles?.convoque || null;
+  if (!convoqueRoleId) {
+    console.warn('⚠️ [AUTO COMPO] roles.convoque manquant dans servers.json');
+    return;
+  }
+
+  const compoChannel = await guild.channels.fetch(COMPO_CHANNEL_ID).catch(() => null);
+  if (!compoChannel || !compoChannel.isTextBased()) {
+    console.warn('⚠️ [AUTO COMPO] Salon composition introuvable ou non textuel');
+    return;
+  }
+
+  const botId = client.user.id;
+
+  // Auto-détection du message de compo (comme la commande)
+  let compoMessage;
+  try {
+    const fetched = await compoChannel.messages.fetch({ limit: 50 });
+
+    compoMessage = fetched.find(msg =>
+      msg.author.id === botId &&
+      msg.embeds?.[0]?.footer?.text?.includes('Compo officielle')
+    );
+
+    if (!compoMessage) {
+      compoMessage = fetched.find(msg =>
+        msg.author.id === botId &&
+        msg.reactions?.cache?.some(r => r.emoji?.name === '✅')
+      );
+    }
+
+    if (!compoMessage) {
+      console.warn('⚠️ [AUTO COMPO] Aucun message de compo trouvé (auto-détection)');
+      return;
+    }
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Erreur recherche auto compo :', e);
+    return;
+  }
+
+  await guild.members.fetch().catch(() => {});
+
+  const convoques = guild.members.cache.filter(
+    m => !m.user.bot && m.roles.cache.has(convoqueRoleId)
+  );
+  if (!convoques.size) {
+    console.warn('⚠️ [AUTO COMPO] Aucun convoqué trouvé (rôle vide).');
+    return;
+  }
+
+  const validesSet = new Set();
+  for (const [, reaction] of compoMessage.reactions.cache) {
+    if (reaction.emoji?.name !== '✅') continue;
+
+    const users = await reaction.users.fetch().catch(() => null);
+    if (!users) continue;
+
+    users.forEach(u => {
+      if (!u.bot) validesSet.add(u.id);
+    });
+  }
+
+  const valides = [];
+  const nonValides = [];
+
+  for (const m of convoques.values()) {
+    if (validesSet.has(m.id)) valides.push(m);
+    else nonValides.push(m);
+  }
+
+  // Snapshot JSON (toujours enregistré pour l’auto)
+  try {
+    if (!fs.existsSync(RAPPORTS_DIR)) {
+      fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
+    }
+    const dateStr = new Date().toISOString().split('T')[0];
+    const snap = {
+      type: 'compo',
+      date: dateStr,
+      channelId: compoChannel.id,
+      messageId: compoMessage.id,
+      convoques: [...convoques.values()].map(m => m.id),
+      valides: valides.map(m => m.id),
+      non_valides: nonValides.map(m => m.id)
+    };
+    const filePath = path.join(
+      RAPPORTS_DIR,
+      `compo-${dateStr}-${compoMessage.id}.json`
+    );
+    fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Erreur snapshot compo :', e);
+  }
+
+  const color = getEmbedColorFromConfig(guild.id);
+  const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
+  const url = `https://discord.com/channels/${guild.id}/${compoChannel.id}/${compoMessage.id}`;
+
+  const formatMentions = (arr) =>
+    arr.length ? arr.map(m => `<@${m.id}>`).join(' - ') : '_Aucun_';
+
+  const baseDescription = [
+    `📨 Message : [Lien vers la compo](${url})`,
+    `👥 Convoqués : **${convoques.size}**`,
+    `✅ Validé : **${valides.length}**`,
+    `⏳ Non validé : **${nonValides.length}**`,
+    '💾 Snapshot enregistré dans `/rapports`.'
+  ].join('\n');
+
+  const embedCompo = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('📋 Vérification de la composition')
+    .setDescription(baseDescription)
+    .addFields(
+      {
+        name: '✅ Validé',
+        value: formatMentions(valides).slice(0, 1024)
+      },
+      {
+        name: '⏳ Non validé',
+        value: formatMentions(nonValides).slice(0, 1024)
+      }
+    )
+    .setFooter({ text: `${clubLabel} • Vérification compo (rappel ${label || ''})` })
+    .setTimestamp();
+
+  const embedRapport = EmbedBuilder.from(embedCompo)
+    .setFooter({ text: `${clubLabel} • Vérification compo (archive auto ${label || ''})` });
+
+  const nonValidesIds = nonValides.map(m => m.id);
+
+  // 1️⃣ Rapport + mention dans le salon des compos
+  try {
+    await compoChannel.send({
+      content: nonValidesIds.length
+        ? nonValidesIds.map(id => `<@${id}>`).join(' - ')
+        : '✅ Tous les convoqués ont validé la compo.',
+      embeds: [embedCompo],
+      allowedMentions: nonValidesIds.length
+        ? { users: nonValidesIds, parse: [] }
+        : { parse: [] }
+    });
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Erreur envoi dans le salon compos :', e);
+  }
+
+  // 2️⃣ Rapport + snapshot sans mention dans le salon rapports
+  try {
+    const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
+    const rapportChannel = await guild.channels.fetch(rapportChannelId).catch(() => null);
+    if (!rapportChannel) {
+      console.warn('⚠️ [AUTO COMPO] Salon rapports introuvable pour IG.');
+    } else {
+      await rapportChannel.send({
+        embeds: [embedRapport],
+        allowedMentions: { parse: [] }
+      });
+    }
+  } catch (e) {
+    console.error('❌ [AUTO COMPO] Erreur envoi dans le salon rapports :', e);
+  }
+
+  console.log(
+    `📋 [AUTO COMPO] Vérification compo auto (${label || 'auto'}) envoyée. Non validés: ${nonValidesIds.length}`
+  );
+}
+
+/* ============================================================
+   AUTO VERIFIER_COMPO_SEMAINE (mercredi & dimanche 22h)
+============================================================ */
+
+async function autoCompoWeekReportIG(client) {
+  const guild = client.guilds.cache.get(IG_GUILD_ID);
+  if (!guild) return;
+
+  const cfg = getGuildConfig(guild.id) || {};
+  const color = getEmbedColorFromConfig(guild.id);
+  const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
+  const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
+
+  const rapportChannel = await guild.channels.fetch(rapportChannelId).catch(() => null);
+  if (!rapportChannel) {
+    console.warn('⚠️ [AUTO COMPO SEMAINE] Salon rapports introuvable pour IG.');
+    return;
+  }
+
+  const nowParis = getParisParts();
+  const defaultEnd = new Date(nowParis.year, nowParis.month - 1, nowParis.day);
+  const defaultStart = addDays(defaultEnd, -6);
+
+  const debutStr = toISO(defaultStart);
+  const finStr = toISO(defaultEnd);
+
+  const fromDate = parseISODate(debutStr);
+  const toDate = parseISODate(finStr);
+
+  const snaps = readCompoSnapshotsInRange(fromDate, toDate);
+  if (snaps.length === 0) {
+    const embedEmpty = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('📅 Vérification compos (auto semaine)')
+      .setDescription(
+        `⚠️ Aucun snapshot de compo trouvé dans \`/rapports\` sur la période **${debutStr} → ${finStr}**.`
+      )
+      .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots auto)` })
+      .setTimestamp();
+
+    await rapportChannel.send({ embeds: [embedEmpty], allowedMentions: { parse: [] } });
+    console.log('⚠️ [AUTO COMPO SEMAINE] Aucun snapshot sur la période.');
+    return;
+  }
+
+  await guild.members.fetch().catch(() => {});
+  const currentIds = new Set(guild.members.cache.filter(m => !m.user.bot).map(m => m.id));
+
+  const misses = new Map();      // id -> nb de compo non validées
+  const convocCount = new Map(); // id -> nb de compo où il était convoqué
+  let snapshotsUsed = 0;
+
+  for (const s of snaps) {
+    const data = s.data || {};
+    const convoques = Array.isArray(data.convoques) ? data.convoques : null;
+    const nonValid = Array.isArray(data.non_valides) ? data.non_valides : null;
+    if (!convoques || !nonValid) continue;
+
+    snapshotsUsed++;
+    const nonSet = new Set(nonValid);
+
+    for (const id of convoques) {
+      // On garde aussi ceux hors serveur, comme la commande avec include_hors_serveur = true
+      if (!convocCount.has(id)) convocCount.set(id, 0);
+      convocCount.set(id, convocCount.get(id) + 1);
+
+      if (nonSet.has(id)) {
+        if (!misses.has(id)) misses.set(id, 0);
+        misses.set(id, misses.get(id) + 1);
+      }
+    }
+  }
+
+  const entries = [...misses.entries()]
+    .filter(([_, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  const headerLines = [
+    `📅 **Vérification des compositions (auto / snapshots)**`,
+    `Période : **${debutStr} → ${finStr}**`,
+    `Snapshots pris en compte : **${snapshotsUsed}**`,
+    'Portée : **Convoqués (serveur + hors serveur via snapshots)**'
+  ];
+
+  const asLine = (id, count) => {
+    const member = guild.members.cache.get(id);
+    const name = member ? member.displayName : `Utilisateur ${id}`;
+    const suffix = member ? '' : ' *(hors serveur)*';
+    const totalConv = convocCount.get(id) || count;
+    return `${member ? `<@${id}>` : `\`${name}\``}${suffix} — **${count}** compo non validée(s) sur **${totalConv}** convocation(s)`;
+  };
+
+  if (!entries.length) {
+    const embedOK = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('✅ Aucun convoqué avec compo non validée sur la période (auto)')
+      .setDescription(headerLines.join('\n'))
+      .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots auto)` })
+      .setTimestamp();
+
+    await rapportChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
+    console.log('✅ [AUTO COMPO SEMAINE] Aucun joueur avec compo non validée.');
+    return;
+  }
+
+  const pageSize = 20;
+  const pages = [];
+  for (let i = 0; i < entries.length; i += pageSize) {
+    pages.push(entries.slice(i, i + pageSize));
+  }
+
+  const first = pages.shift();
+  const firstEmbed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`⏳ Convoqués n’ayant pas validé (auto, total ${entries.length})`)
+    .setDescription(headerLines.join('\n'))
+    .addFields({
+      name: 'Liste',
+      value: first.map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
+    })
+    .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots auto)` })
+    .setTimestamp();
+
+  await rapportChannel.send({
+    embeds: [firstEmbed],
+    allowedMentions: { parse: [] }
+  });
+
+  for (const page of pages) {
+    const chunks = [];
+    let cur = [];
+    let curLen = 0;
+    for (const [id, n] of page) {
+      const line = `• ${asLine(id, n)}\n`;
+      if (curLen + line.length > 1024) {
+        chunks.push(cur.join(''));
+        cur = [line];
+        curLen = line.length;
+      } else {
+        cur.push(line);
+        curLen += line.length;
+      }
+    }
+    if (cur.length) chunks.push(cur.join(''));
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('Suite')
+      .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots auto)` })
+      .setTimestamp();
+
+    chunks.forEach((block, idx) => {
+      embed.addFields({ name: idx === 0 ? 'Liste (suite)' : '…', value: block });
+    });
+
+    await rapportChannel.send({
+      embeds: [embed],
+      allowedMentions: { parse: [] }
+    });
+  }
+
+  console.log(`📊 [AUTO COMPO SEMAINE] Rapport auto envoyé (${debutStr} → ${finStr}).`);
+}
+
+/* ============================================================
+   AUTO VERIFIER_SEMAINE dispo (snapshots 17h)
+============================================================ */
+
+async function autoWeekDispoReportIG(client) {
+  const guild = client.guilds.cache.get(IG_GUILD_ID);
+  if (!guild) return;
+
+  const cfg = getGuildConfig(guild.id) || {};
+  const color = getEmbedColorFromConfig(guild.id);
+  const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
+  const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
+
+  const rapportChannel = await guild.channels.fetch(rapportChannelId).catch(() => null);
+  if (!rapportChannel) {
+    console.warn('⚠️ [AUTO SEMAINE DISPO] Salon rapports introuvable pour IG.');
+    return;
+  }
+
+  const nowParis = getParisParts();
+  const defaultEnd = new Date(nowParis.year, nowParis.month - 1, nowParis.day);
+  const defaultStart = addDays(defaultEnd, -6);
+
+  const debutStr = toISO(defaultStart);
+  const finStr = toISO(defaultEnd);
+
+  const fromDate = parseISODate(debutStr);
+  const toDate = parseISODate(finStr);
+
+  const snaps = readDispoSnapshotsInRange(fromDate, toDate);
+  if (snaps.length === 0) {
+    const embedEmpty = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('📅 Analyse disponibilités (auto semaine)')
+      .setDescription(
+        `⚠️ Aucun snapshot de disponibilités trouvé dans \`${SNAPSHOT_DIR}\` pour **${debutStr} → ${finStr}**.`
+      )
+      .setFooter({ text: `${clubLabel} • Rapport snapshots auto` })
+      .setTimestamp();
+
+    await rapportChannel.send({ embeds: [embedEmpty], allowedMentions: { parse: [] } });
+    console.log('⚠️ [AUTO SEMAINE DISPO] Aucun snapshot sur la période.');
+    return;
+  }
+
+  await guild.members.fetch().catch(() => {});
+  const currentIds = new Set(guild.members.cache.filter(m => !m.user.bot).map(m => m.id));
+
+  const misses = new Map();      // id -> nb de jours sans réaction
+  const daysCount = new Map();   // id -> nb de jours éligibles
+  let snapshotsUsed = 0;
+  let snapshotsSkipped = 0;
+
+  for (const s of snaps) {
+    const data = s.data || {};
+    const reacted = new Set(Array.isArray(data.reacted) ? data.reacted : []);
+    const eligibles = Array.isArray(data.eligibles) ? data.eligibles : null;
+
+    if (!eligibles || eligibles.length === 0) {
+      snapshotsSkipped++;
+      continue;
+    }
+
+    snapshotsUsed++;
+
+    for (const id of eligibles) {
+      // On garde aussi hors serveur comme la commande avec include_hors_serveur = true
+      if (!misses.has(id)) misses.set(id, 0);
+      if (!daysCount.has(id)) daysCount.set(id, 0);
+
+      daysCount.set(id, daysCount.get(id) + 1);
+      if (!reacted.has(id)) misses.set(id, misses.get(id) + 1);
+    }
+  }
+
+  const entries = [...misses.entries()]
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  const headerLines = [
+    '📅 **Analyse disponibilités (Snapshots auto)**',
+    `🗓️ Période : **${debutStr} → ${finStr}**`,
+    `📂 Snapshots utilisés : **${snapshotsUsed}**`,
+    snapshotsSkipped ? `⚠️ Ignorés : **${snapshotsSkipped}** (incomplets)` : '',
+    '🌐 Portée : membres du serveur + hors serveur'
+  ].filter(Boolean);
+
+  const asLine = (id, n) => {
+    const m = guild.members.cache.get(id);
+    return m
+      ? `<@${id}> — **${n}** jour(s) sans réaction`
+      : `\`${id}\` *(hors serveur)* — **${n}** jour(s)`;
+  };
+
+  if (entries.length === 0) {
+    const embedOK = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('✅ Tous ont réagi au moins une fois (auto semaine)')
+      .setDescription(headerLines.join('\n'))
+      .setFooter({ text: `${clubLabel} • Rapport snapshots auto` })
+      .setTimestamp();
+
+    await rapportChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
+    console.log('✅ [AUTO SEMAINE DISPO] Tous ont réagi au moins une fois.');
+    return;
+  }
+
+  const pageSize = 20;
+  const pages = [];
+  for (let i = 0; i < entries.length; i += pageSize) {
+    pages.push(entries.slice(i, i + pageSize));
+  }
+
+  const first = pages.shift();
+  const firstEmbed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`⏳ Membres n’ayant pas réagi (auto, total : ${entries.length})`)
+    .setDescription(headerLines.join('\n'))
+    .addFields({
+      name: 'Liste',
+      value: first.map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
+    })
+    .setFooter({ text: `${clubLabel} • Rapport snapshots auto` })
+    .setTimestamp();
+
+  await rapportChannel.send({
+    embeds: [firstEmbed],
+    allowedMentions: { parse: [] }
+  });
+
+  for (const page of pages) {
+    const chunks = [];
+    let cur = [];
+    let len = 0;
+
+    for (const [id, n] of page) {
+      const line = `• ${asLine(id, n)}\n`;
+      if (len + line.length > 1024) {
+        chunks.push(cur.join(''));
+        cur = [line];
+        len = line.length;
+      } else {
+        cur.push(line);
+        len += line.length;
+      }
+    }
+    if (cur.length) chunks.push(cur.join(''));
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('Suite')
+      .setFooter({ text: `${clubLabel} • Rapport snapshots auto` })
+      .setTimestamp();
+
+    chunks.forEach((c, i) => {
+      embed.addFields({ name: i === 0 ? 'Liste (suite)' : '…', value: c });
+    });
+
+    await rapportChannel.send({
+      embeds: [embed],
+      allowedMentions: { parse: [] }
+    });
+  }
+
+  console.log(`📊 [AUTO SEMAINE DISPO] Rapport auto envoyé (${debutStr} → ${finStr}).`);
+}
+
+/* ============================================================
    INIT SCHEDULER
 ============================================================ */
 
 function initScheduler(client) {
-  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 22h + sync pseudos)…');
+  console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 18h / 19h / 19h30 / 22h + sync pseudos)…');
 
-  let lastPanelKey = null; // pour 10h & 22h
-  let lastNoonKey = null;  // pour 12h
-  let last17Key = null;    // pour 17h
-  let lastNickKey = null;  // pour sync pseudos horaire
+  let lastPanelKey = null;     // 10h & 22h panneau
+  let lastNoonKey = null;      // 12h
+  let last17Key = null;        // 17h
+  let lastNickKey = null;      // sync pseudos
+  let lastCompo18Key = null;   // 18h vérif compo
+  let lastCompo19Key = null;   // 19h vérif compo
+  let lastCompo1930Key = null; // 19h30 vérif compo
+  let lastWeekKey = null;      // 22h rapports semaine (mercredi / dimanche)
 
   setInterval(async () => {
-    const { hour, minute, isoDate: dateKey } = getParisParts();
+    const { hour, minute, isoDate: dateKey, jour } = getParisParts();
 
     // 10h00 & 22h00 → panneau de disponibilités (fenêtre 0-2 minutes)
     if ((hour === 10 || hour === 22) && minute >= 0 && minute <= 2) {
@@ -815,6 +1417,66 @@ function initScheduler(client) {
       }
     }
 
+    // 18h → vérification compo auto (rappel + snapshot)
+    if (hour === 18 && minute >= 0 && minute <= 2) {
+      const key = `${dateKey}-18-compo`;
+      if (lastCompo18Key !== key) {
+        lastCompo18Key = key;
+        console.log(`⏰ [AUTO] Tick vérification compo 18h pour ${dateKey}`);
+        try {
+          await autoVerifierCompoIG(client, '18h');
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche vérification compo 18h :', e);
+        }
+      }
+    }
+
+    // 19h → vérification compo auto
+    if (hour === 19 && minute >= 0 && minute <= 2) {
+      const key = `${dateKey}-19-compo`;
+      if (lastCompo19Key !== key) {
+        lastCompo19Key = key;
+        console.log(`⏰ [AUTO] Tick vérification compo 19h pour ${dateKey}`);
+        try {
+          await autoVerifierCompoIG(client, '19h');
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche vérification compo 19h :', e);
+        }
+      }
+    }
+
+    // 19h30 → vérification compo auto (fenêtre 30-32)
+    if (hour === 19 && minute >= 30 && minute <= 32) {
+      const key = `${dateKey}-1930-compo`;
+      if (lastCompo1930Key !== key) {
+        lastCompo1930Key = key;
+        console.log(`⏰ [AUTO] Tick vérification compo 19h30 pour ${dateKey}`);
+        try {
+          await autoVerifierCompoIG(client, '19h30');
+        } catch (e) {
+          console.error('❌ [AUTO] Erreur tâche vérification compo 19h30 :', e);
+        }
+      }
+    }
+
+    // 22h → rapports semaine (compo + dispo) les MERCREDI & DIMANCHE (fenêtre 0-2 minutes)
+    if (hour === 22 && minute >= 0 && minute <= 2) {
+      const weekKey = `${dateKey}-22-week`;
+      if (lastWeekKey !== weekKey) {
+        lastWeekKey = weekKey;
+
+        if (jour === 'mercredi' || jour === 'dimanche') {
+          console.log(`⏰ [AUTO] Tick rapports semaine (${jour}) pour ${dateKey}`);
+          try {
+            await autoCompoWeekReportIG(client);   // Vérifier Compo semaine
+            await autoWeekDispoReportIG(client);   // Vérifier semaine (dispos)
+          } catch (e) {
+            console.error('❌ [AUTO] Erreur rapports semaine (22h) :', e);
+          }
+        }
+      }
+    }
+
     // 🔁 Sync pseudos automatique — toutes les heures à H:10
     if (minute === 10) {
       const nickKey = `${dateKey}-${hour}`;
@@ -838,5 +1500,9 @@ module.exports = {
   runNoonReminderIG,
   sendDetailedReportIG,
   closeDisposAt17IG,
-  autoSyncNicknamesIG
+  autoSyncNicknamesIG,
+  // nouveaux exports pour tests manuels
+  autoVerifierCompoIG,
+  autoCompoWeekReportIG,
+  autoWeekDispoReportIG
 };
