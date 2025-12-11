@@ -1,7 +1,8 @@
 // commands/test_auto.js
 const {
   SlashCommandBuilder,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  MessageFlags
 } = require('discord.js');
 
 const {
@@ -9,7 +10,10 @@ const {
   runNoonReminderIG,
   sendDetailedReportIG,
   closeDisposAt17IG,
-  autoSyncNicknamesIG
+  autoSyncNicknamesIG,
+  autoVerifierCompoIG,
+  autoCompoWeekReportIG,
+  autoWeekDispoReportIG
 } = require('../utils/scheduler');
 
 // Même ID que dans scheduler.js
@@ -30,7 +34,10 @@ module.exports = {
           { name: 'Rapport 12h (embed détaillé)', value: 'rapport_12h' },
           { name: 'Rapport 17h (embed détaillé)', value: 'rapport_17h' },
           { name: 'Fermeture 17h (snapshot + 🔒)', value: 'fermeture_17h' },
-          { name: 'Sync pseudos automatique', value: 'sync_pseudos' }
+          { name: 'Sync pseudos automatique', value: 'sync_pseudos' },
+          { name: 'Vérifier compo (auto, maintenant)', value: 'verif_compo_now' },
+          { name: 'Vérifier compo semaine (auto)', value: 'verif_compo_semaine_now' },
+          { name: 'Vérifier semaine dispos (auto)', value: 'verif_semaine_now' }
         )
     ),
 
@@ -41,13 +48,13 @@ module.exports = {
     if (interaction.guild.id !== IG_GUILD_ID) {
       return interaction.reply({
         content: '❌ Cette commande de test ne fonctionne que sur le serveur INTER GALACTIQUE.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
 
     await interaction.reply({
       content: `⏳ Lancement du test **${action}**…`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
 
     try {
@@ -74,6 +81,18 @@ module.exports = {
 
         case 'sync_pseudos':
           await autoSyncNicknamesIG(interaction.client);
+          break;
+
+        case 'verif_compo_now':
+          await autoVerifierCompoIG(interaction.client, 'TEST');
+          break;
+
+        case 'verif_compo_semaine_now':
+          await autoCompoWeekReportIG(interaction.client);
+          break;
+
+        case 'verif_semaine_now':
+          await autoWeekDispoReportIG(interaction.client);
           break;
 
         default:
