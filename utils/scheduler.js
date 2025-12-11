@@ -379,7 +379,7 @@ async function sendDispoPanelIG(client) {
       new ButtonBuilder()
         .setLabel('MERCREDI')
         .setStyle(ButtonStyle.Link)
-        .URL(urls.mercredi)
+        .setURL(urls.mercredi) // 🔧 fix .setURL
     );
   }
   if (urls.jeudi) {
@@ -1011,7 +1011,8 @@ async function autoVerifierCompoReminderIG(client, label = '') {
 
 /* ============================================================
    AUTO VERIFIER_COMPO — FINAL 20h
-   → RAPPORT FINAL SANS MENTIONS + SNAPSHOT /rapports + CLEAR REACTIONS
+   → RAPPORT FINAL SANS MENTIONS DANS RAPPORTS AUTO UNIQUEMENT
+   + SNAPSHOT /rapports + CLEAR REACTIONS
 ============================================================ */
 
 async function autoVerifierCompoIG(client, label = '20h') {
@@ -1071,7 +1072,7 @@ async function autoVerifierCompoIG(client, label = '20h') {
     console.error('❌ [AUTO COMPO] Impossible de supprimer les réactions sur la compo :', e);
   }
 
-  // 3️⃣ Rapport final (embed) SANS mentions
+  // 3️⃣ Rapport final (embed) SANS mentions → UNIQUEMENT DANS RAPPORTS AUTO
   const baseDescription = [
     `📨 Message : [Lien vers la compo](${url})`,
     `👥 Convoqués : **${convoques.size}**`,
@@ -1098,9 +1099,6 @@ async function autoVerifierCompoIG(client, label = '20h') {
     .setFooter({ text: `${clubLabel} • Vérification compo (finale ${label})` })
     .setTimestamp();
 
-  const embedArchive = EmbedBuilder.from(embedFinal)
-    .setFooter({ text: `${clubLabel} • Vérification compo (archive auto ${label})` });
-
   const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
   let rapportChannel = null;
   if (rapportChannelId && rapportChannelId !== '0') {
@@ -1110,22 +1108,11 @@ async function autoVerifierCompoIG(client, label = '20h') {
     }
   }
 
-  // Envoi dans le salon compo (sans mention)
-  try {
-    await compoChannel.send({
-      content: '📋 **Rapport final de la composition (20h)**',
-      embeds: [embedFinal],
-      allowedMentions: { parse: [] }
-    });
-  } catch (e) {
-    console.error('❌ [AUTO COMPO] Erreur envoi rapport final dans le salon compos :', e);
-  }
-
-  // Envoi dans le salon rapports (archive, sans mention)
+  // 👉 UNIQUEMENT dans le salon de rapports auto, SANS mentions
   if (rapportChannel) {
     try {
       await rapportChannel.send({
-        embeds: [embedArchive],
+        embeds: [embedFinal],
         allowedMentions: { parse: [] }
       });
     } catch (e) {
@@ -1134,7 +1121,7 @@ async function autoVerifierCompoIG(client, label = '20h') {
   }
 
   console.log(
-    `📋 [AUTO COMPO] Rapport final compo ${label} envoyé. Non validés: ${nonValides.length}`
+    `📋 [AUTO COMPO] Rapport final compo ${label} envoyé (rapports auto uniquement). Non validés: ${nonValides.length}`
   );
 }
 
@@ -1575,7 +1562,7 @@ function initScheduler(client) {
       }
     }
 
-    // 20h → vérification compo finale (snapshot + clear réactions, SANS mentions)
+    // 20h → vérification compo finale (snapshot + clear réactions, SANS mentions, rapports auto uniquement)
     if (hour === 20 && minute >= 0 && minute <= 2) {
       const key = `${dateKey}-20-compo-final`;
       if (lastCompo20Key !== key) {
