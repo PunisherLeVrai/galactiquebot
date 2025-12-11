@@ -1,15 +1,31 @@
 // utils/config.js
 const fs = require('fs');
 const path = require('path');
+const { DATA_BASE } = require('./paths'); // même base que pour les snapshots
 
-const configDir = path.join(__dirname, '../config');
-const globalPath = path.join(configDir, 'global.json');
-const serversPath = path.join(configDir, 'servers.json');
+/**
+ * Dossiers de config
+ * - repoConfigDir       : dans le projet (fichiers versionnés)
+ * - persistentConfigDir : dans /data/config (ou $DATA_DIR/config) → persistant
+ */
+const repoConfigDir = path.join(__dirname, '../config');
+const persistentConfigDir = path.join(DATA_BASE, 'config');
 
-// --- Sécurisation du dossier config ---
-if (!fs.existsSync(configDir)) {
-  fs.mkdirSync(configDir, { recursive: true });
+// --- Sécurisation des dossiers ---
+if (!fs.existsSync(repoConfigDir)) {
+  fs.mkdirSync(repoConfigDir, { recursive: true });
 }
+if (!fs.existsSync(persistentConfigDir)) {
+  fs.mkdirSync(persistentConfigDir, { recursive: true });
+}
+
+// Fichiers dans le repo (valeurs par défaut versionnées)
+const repoGlobalPath = path.join(repoConfigDir, 'global.json');
+const repoServersPath = path.join(repoConfigDir, 'servers.json');
+
+// Fichiers persistants (Railway / Replit / local)
+const globalPath = path.join(persistentConfigDir, 'global.json');
+const serversPath = path.join(persistentConfigDir, 'servers.json');
 
 /**
  * Chargement sécurisé d'un JSON
@@ -26,12 +42,55 @@ function loadJsonSafe(filePath, fallback, label) {
   }
 }
 
-// --- Chargement des configs ---
-// ⚠️ Aucun ID n'est défini en dur ici : tout vient soit des fichiers JSON,
-// soit des commandes qui mettront à jour ces fichiers.
+/**
+ * Charge d'abord le fichier PERSISTANT.
+ * Si absent / vide → charge le fichier du REPO en fallback,
+ * puis le recopie dans le chemin persistant.
+ */
+function loadWithPersistentFallback(persistentPath, repoPath, defaultValue, label) {
+  // 1) Essayer la version persistante
+  const persisted = loadJsonSafe(persistentPath, null, label + ' (persistant)');
+  if (persisted && typeof persisted === 'object') {
+    return persisted;
+  }
 
-let globalConfig = loadJsonSafe(globalPath, {}, 'config/global.json');
-let serversConfig = loadJsonSafe(serversPath, {}, 'config/servers.json');
+  // 2) Essayer le fichier du repo (valeurs par défaut versionnées)
+  const fromRepo = loadJsonSafe(repoPath, defaultValue, label + ' (repo)');
+  if (fromRepo && typeof fromRepo === 'object') {
+    // 3) Le recopier en persistant pour la prochaine fois
+    try {
+      fs.writeFileSync(
+        persistentPath,
+        JSON.stringify(fromRepo, null, 2),
+        'utf8'
+      );
+    } catch (err) {
+      console.error(`❌ Impossible d’écrire ${label} persistant :`, err);
+    }
+    return fromRepo;
+  }
+
+  // 4) Rien trouvé → valeur par défaut
+  return defaultValue;
+}
+
+// --- Chargement des configs ---
+// Tout vit maintenant en PERSISTANT (/data/config),
+// avec fallback sur les fichiers du repo à la première exécution.
+
+let globalConfig = loadWithPersistentFallback(
+  globalPath,
+  repoGlobalPath,
+  {},
+  'config/global.json'
+);
+
+let serversConfig = loadWithPersistentFallback(
+  serversPath,
+  repoServersPath,
+  {},
+  'config/servers.json'
+);
 
 // Valeurs par défaut soft pour la globale
 if (!globalConfig || typeof globalConfig !== 'object') {
@@ -42,7 +101,7 @@ if (!globalConfig.botName) {
 }
 
 /**
- * Sauvegarde la config de tous les serveurs dans config/servers.json
+ * Sauvegarde la config de tous les serveurs dans le fichier PERSISTANT
  */
 function saveServersConfig() {
   try {
@@ -52,13 +111,12 @@ function saveServersConfig() {
       'utf8'
     );
   } catch (err) {
-    console.error('❌ Impossible d’écrire config/servers.json :', err);
+    console.error('❌ Impossible d’écrire config/servers.json (persistant) :', err);
   }
 }
 
 /**
- * Sauvegarde la config globale dans config/global.json
- * (au cas où tu ajoutes une commande /config global)
+ * Sauvegarde la config globale dans le fichier PERSISTANT
  */
 function saveGlobalConfig() {
   try {
@@ -68,7 +126,7 @@ function saveGlobalConfig() {
       'utf8'
     );
   } catch (err) {
-    console.error('❌ Impossible d’écrire config/global.json :', err);
+    console.error('❌ Impossible d’écrire config/global.json (persistant) :', err);
   }
 }
 
@@ -81,13 +139,6 @@ function getGlobalConfig() {
 
 /**
  * Retourne la config d’une guilde (serveur) précise.
- * Exemple de contenu possible :
- * {
- *   "logChannelId": "...",
- *   "mainDispoChannelId": "...",
- *   "roles": { "joueur": "...", "essai": "..." },
- *   "nickname": { "hierarchy": [...], "teams": [...], "postes": [...] }
- * }
  */
 function getGuildConfig(guildId) {
   if (!guildId) return null;
@@ -107,7 +158,6 @@ function getConfigFromInteraction(interaction) {
 
 /**
  * Remplace complètement la config d’une guilde.
- * ⚠️ Utiliser plutôt updateGuildConfig pour des modifications partielles.
  */
 function setGuildConfig(guildId, newConfig) {
   if (!guildId) return;
@@ -117,11 +167,12 @@ function setGuildConfig(guildId, newConfig) {
 
 /**
  * Met à jour partiellement la config d’une guilde (merge superficiel).
- * Exemple : updateGuildConfig(guildId, { logChannelId: '123', roles: { joueur: '456' } })
  *
- * - Les autres propriétés existantes de la guilde sont conservées.
- * - Pour "roles", on fait un merge superficiel :
- *   ancien.roles + nouveaux roles fournis.
+ * Exemple :
+ *   updateGuildConfig(guildId, {
+ *     logChannelId: '123',
+ *     roles: { joueur: '456' }
+ *   })
  */
 function updateGuildConfig(guildId, patch) {
   if (!guildId || !patch || typeof patch !== 'object') return;
@@ -146,7 +197,7 @@ module.exports = {
   getConfigFromInteraction,
   setGuildConfig,
   updateGuildConfig,
-  // utilitaires au cas où tu en aies besoin plus tard
+  // utilitaires
   saveServersConfig,
   saveGlobalConfig
 };
