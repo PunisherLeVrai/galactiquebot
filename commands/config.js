@@ -63,6 +63,12 @@ module.exports = {
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
+        .addChannelOption(o =>
+          o.setName('panel')
+            .setDescription('Salon du panneau de disponibilités (boutons LUNDI→DIMANCHE).')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false)
+        )
     )
 
     // /config roles
@@ -185,18 +191,11 @@ module.exports = {
       const salonsLines = [
         `• Logs : ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : '_non défini_'}`,
         `• Disponibilités : ${cfg.mainDispoChannelId ? `<#${cfg.mainDispoChannelId}>` : '_non défini_'}`,
-        `• Rapports : ${cfg.rapportChannelId ? `<#${cfg.rapportChannelId}>` : '_non défini_'}`
+        `• Rapports : ${cfg.rapportChannelId ? `<#${cfg.rapportChannelId}>` : '_non défini_'}`,
+        `• Bienvenue : ${cfg.welcomeChannelId ? `<#${cfg.welcomeChannelId}>` : '_non défini_'}`,
+        `• Support : ${cfg.supportChannelId ? `<#${cfg.supportChannelId}>` : '_non défini_'}`,
+        `• Panneau de dispos : ${cfg.panelChannelId ? `<#${cfg.panelChannelId}>` : '_non défini_'}`
       ];
-
-      // Salon de bienvenue
-      salonsLines.push(
-        `• Bienvenue : ${cfg.welcomeChannelId ? `<#${cfg.welcomeChannelId}>` : '_non défini_'}`
-      );
-
-      // Salon support (pour le serveur support)
-      salonsLines.push(
-        `• Support : ${cfg.supportChannelId ? `<#${cfg.supportChannelId}>` : '_non défini_'}`
-      );
 
       fields.push({
         name: '📡 Salons',
@@ -259,13 +258,21 @@ module.exports = {
     // /config channels
     // -----------------------------------------------------------------------
     if (sub === 'channels') {
-      const logsChannel = interaction.options.getChannel('logs') || null;
-      const dispoChannel = interaction.options.getChannel('dispos') || null;
-      const rapportsChannel = interaction.options.getChannel('rapports') || null;
+      const logsChannel    = interaction.options.getChannel('logs')    || null;
+      const dispoChannel   = interaction.options.getChannel('dispos')  || null;
+      const rapportsChannel= interaction.options.getChannel('rapports')|| null;
       const welcomeChannel = interaction.options.getChannel('welcome') || null;
       const supportChannel = interaction.options.getChannel('support') || null;
+      const panelChannel   = interaction.options.getChannel('panel')   || null;
 
-      if (!logsChannel && !dispoChannel && !rapportsChannel && !welcomeChannel && !supportChannel) {
+      if (
+        !logsChannel &&
+        !dispoChannel &&
+        !rapportsChannel &&
+        !welcomeChannel &&
+        !supportChannel &&
+        !panelChannel
+      ) {
         return interaction.reply({
           content: 'ℹ️ Aucun salon fourni. Merci de choisir au moins une option.',
           ephemeral: true
@@ -294,6 +301,10 @@ module.exports = {
       if (supportChannel) {
         patch.supportChannelId = supportChannel.id;
         changes.push(`• Support → <#${supportChannel.id}>`);
+      }
+      if (panelChannel) {
+        patch.panelChannelId = panelChannel.id;
+        changes.push(`• Panneau de dispos → <#${panelChannel.id}>`);
       }
 
       updateGuildConfig(guild.id, patch);
