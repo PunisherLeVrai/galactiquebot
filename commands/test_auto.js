@@ -12,6 +12,7 @@ const {
   closeDisposAt17IG,
   autoSyncNicknamesIG,
   autoVerifierCompoIG,
+  autoVerifierCompoReminderIG,
   autoCompoWeekReportIG,
   autoWeekDispoReportIG
 } = require('../utils/scheduler');
@@ -35,7 +36,8 @@ module.exports = {
           { name: 'Rapport 17h (embed détaillé)', value: 'rapport_17h' },
           { name: 'Fermeture 17h (snapshot + 🔒)', value: 'fermeture_17h' },
           { name: 'Sync pseudos automatique', value: 'sync_pseudos' },
-          { name: 'Vérifier compo (auto, maintenant)', value: 'verif_compo_now' },
+          { name: 'Rappel compo (comme 18h/19h/19h30)', value: 'verif_compo_rappel' },
+          { name: 'Vérifier compo finale (comme 20h)', value: 'verif_compo_final' },
           { name: 'Vérifier compo semaine (auto)', value: 'verif_compo_semaine_now' },
           { name: 'Vérifier semaine dispos (auto)', value: 'verif_semaine_now' }
         )
@@ -83,8 +85,14 @@ module.exports = {
           await autoSyncNicknamesIG(interaction.client);
           break;
 
-        case 'verif_compo_now':
-          await autoVerifierCompoIG(interaction.client, 'TEST');
+        // 🔔 Rappel compo (simule 18h/19h/19h30, avec mentions des non-validés)
+        case 'verif_compo_rappel':
+          await autoVerifierCompoReminderIG(interaction.client, 'TEST-RAPPEL');
+          break;
+
+        // ✅ Rapport final compo (simule 20h : snapshot + clear réactions + embed dans rapports auto uniquement)
+        case 'verif_compo_final':
+          await autoVerifierCompoIG(interaction.client, 'TEST-FINAL');
           break;
 
         case 'verif_compo_semaine_now':
