@@ -1,85 +1,35 @@
 {
-  "1392639720491581551": {
-    "clubName": "INTER GALACTIQUE",
+  "1410246320324870217": {
+    "clubName": "XIG DOR",
     "tag": "XIG",
-    "embedColor": "ff4db8",
+    "embedColor": "f1c40f",
 
-    "logChannelId": "1393776090086117426",
-    "rapportChannelId": "1446471718943326259",
-    "mainDispoChannelId": "1429059902852173936",
+    "logChannelId": "1448726984795488286",
+    "mainDispoChannelId": "1441625985559691304",
+    "rapportChannelId": "1448731756478857337",
 
-    "memberCounterChannelId": "1393770717656514600",
-    "panelChannelId": "1393774851218735216",
+    "panelChannelId": "0",
 
-    "welcomeChannelId": "1393775051433840680",
+    "welcomeChannelId": "0",
+    "memberCounterChannelId": "0",
 
     "dispoMessages": {
-      "lundi": "1429061125307105290",
-      "mardi": "1429061128742502450",
-      "mercredi": "1429061132596936725",
-      "jeudi": "1429061136246112308",
-      "vendredi": "1429061140201209888",
-      "samedi": "1429061144428937326",
-      "dimanche": "1429061148459794504"
+      "lundi": "1449021079505862798",
+      "mardi": "1449021127874707538",
+      "mercredi": "1449021167477456957",
+      "jeudi": "1449021204458639371",
+      "vendredi": "1449021260653924473",
+      "samedi": "0",
+      "dimanche": "1449021028129832971"
     },
 
     "roles": {
-      "joueur": "1393784530124668988",
-      "essai": "1393784904809975850",
-      "convoque": "1439759021371428955",
-      "recrue": "1393785087132172429"
+      "joueur": "0",
+      "essai": "0",
+      "convoque": "0",
+      "recrue": "0"
     },
 
-    "nickname": {
-      "hierarchy": [
-        { "id": "1393784275853246666", "label": "PRÉSIDENT" },
-        { "id": "1393891243368386641", "label": "GM" },
-        { "id": "1393891684752031814", "label": "coGM" },
-        { "id": "1393892611382575185", "label": "STAFF" },
-        { "id": "1393892474170114169", "label": "HoF" },
-        { "id": "1393892334613172275", "label": "DEP" },
-        { "id": "1393785087132172429", "label": "NEW" },
-        { "id": "1393784530124668988", "label": "IGA" },
-        { "id": "1393784904809975850", "label": "TEST" }
-      ],
-      "teams": [
-        { "id": "1423016118448296056", "label": "A" },
-        { "id": "1423016177751429191", "label": "B" },
-        { "id": "1423016222659706992", "label": "C" }
-      ],
-      "postes": [
-        { "id": "1429389198531498085", "label": "GK" },
-        { "id": "1429389245935779953", "label": "DC" },
-        { "id": "1429389286742036560", "label": "DG" },
-        { "id": "1444317466468810854", "label": "DD" },
-        { "id": "1429389418958946346", "label": "MDC" },
-        { "id": "1429389494863532062", "label": "MC" },
-        { "id": "1429389702842290206", "label": "MG" },
-        { "id": "1444317534084923392", "label": "MD" },
-        { "id": "1429389840767516794", "label": "MOC" },
-        { "id": "1429389901157236806", "label": "AG" },
-        { "id": "1444317591781769217", "label": "AD" },
-        { "id": "1429389946183090377", "label": "BU" },
-        { "id": "1444317669859004518", "label": "ATG" },
-        { "id": "1444317741505974333", "label": "ATD" }
-      ]
-    }
-  },
-
-  "1444745566004449506": {
-    "clubName": "GalactiqueBot Support",
-    "tag": "GBS",
-    "embedColor": "5865F2",
-
-    "logChannelId": "0",
-    "rapportChannelId": "0",
-    "mainDispoChannelId": "0",
-
-    "welcomeChannelId": "1445186724576628899",
-    "supportChannelId": "1445186873063505960",
-    "helpRoleId": "1445374262029451334",
-
-    "roles": {},
     "nickname": {
       "hierarchy": [],
       "teams": [],
