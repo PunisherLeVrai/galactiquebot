@@ -1,4 +1,3 @@
-// commands/dispos_admin.js
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -7,14 +6,14 @@ const {
   ChannelType
 } = require('discord.js');
 
-const { getConfigFromInteraction } = require('../utils/config');
+const {
+  getConfigFromInteraction,
+  updateGuildConfig
+} = require('../utils/config');
 
 const JOURS = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'];
+
 const TITRES = {
-  lundi: '📅 Lundi', mardi: '📅 Mardi', mercredi: '📅 Mercredi',
-  jeudi: '📅 Jeudi', vendredi: '📅 Vendredi', samedi: '📅 Samedi', dimanche: '📅 Dimanche'
-};
-const TITRES_MAJ = {
   lundi: '📅 LUNDI',
   mardi: '📅 MARDI',
   mercredi: '📅 MERCREDI',
@@ -26,10 +25,9 @@ const TITRES_MAJ = {
 
 const DESC_PAR_DEFAUT = 'Réagissez ci-dessous :\n\n✅ **Présent**  |  ❌ **Absent**';
 const DESCRIPTION_DEFAUT_ROUVRIR = '🕓 Session à 20h45 — merci de réagir ci-dessous ✅ / ❌';
-
 const DEFAULT_COLOR = 0xff4db8;
 
-// Anti-mentions
+// 🔒 Anti-mentions
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
@@ -41,648 +39,245 @@ function getEmbedColor(cfg) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
-function parseIdsByJour(jourChoisi, idsInput) {
-  const clean = String(idsInput || '').trim();
-  if (!clean) return { error: '❌ Tu dois fournir au moins un ID de message.' };
+/* ============================================================
+   🔁 RÉSOLUTION IDS (ids optionnels, fallback servers.json)
+============================================================ */
 
-  const parts = clean.split(/[\s,;]+/).filter(Boolean);
+function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
+  const dispo = guildCfg?.dispoMessages || {};
 
-  if (jourChoisi === 'all') {
-    if (parts.length !== 7) {
-      return {
-        error: '❌ Pour **Tous les jours**, tu dois fournir **7 IDs** dans l’ordre : lundi mardi mercredi jeudi vendredi samedi dimanche.'
-      };
+  // 🔹 Override manuel
+  if (idsInput) {
+    const parts = idsInput.split(/[\s,;]+/).filter(Boolean);
+
+    if (jourChoisi === 'all') {
+      if (parts.length !== 7) {
+        return { error: '❌ Pour **tous les jours**, tu dois fournir 7 IDs.' };
+      }
+      const mapping = {};
+      JOURS.forEach((j, i) => mapping[j] = parts[i]);
+      return { mapping, joursCibles: [...JOURS] };
     }
-    const mapping = {};
-    JOURS.forEach((j, idx) => { mapping[j] = parts[idx]; });
-    return { mapping, joursCibles: [...JOURS] };
+
+    return {
+      mapping: { [jourChoisi]: parts[0] },
+      joursCibles: [jourChoisi]
+    };
   }
 
-  // un seul jour
+  // 🔹 Fallback servers.json
+  if (jourChoisi === 'all') {
+    const missing = JOURS.filter(j => !dispo[j]);
+    if (missing.length) {
+      return { error: `❌ IDs manquants dans servers.json → ${missing.join(', ')}` };
+    }
+    return { mapping: { ...dispo }, joursCibles: [...JOURS] };
+  }
+
+  if (!dispo[jourChoisi]) {
+    return { error: `❌ ID manquant dans servers.json → dispoMessages.${jourChoisi}` };
+  }
+
   return {
-    mapping: { [jourChoisi]: parts[0] },
+    mapping: { [jourChoisi]: dispo[jourChoisi] },
     joursCibles: [jourChoisi]
   };
 }
 
+/* ============================================================
+   📦 COMMANDE
+============================================================ */
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('dispos_admin')
-    .setDescription('Gère les messages de disponibilités (création, édition, reset, réouverture).')
+    .setDescription('Gestion avancée des disponibilités (IDs auto via servers.json)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
-    // 🔹 /dispos_admin publier
+    /* -------------------- PUBLIER -------------------- */
     .addSubcommand(sc =>
       sc.setName('publier')
-        .setDescription('Publie les 7 messages de disponibilités dans un salon donné.')
-        .addChannelOption(opt =>
-          opt.setName('salon')
-            .setDescription('Salon où publier les messages de disponibilités.')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true)
-        )
-        .addStringOption(opt =>
-          opt.setName('texte')
-            .setDescription('Description commune (sinon texte par défaut). Ignoré si image_brute = true.')
-            .setRequired(false)
-        )
-        .addAttachmentOption(opt =>
-          opt.setName('image')
-            .setDescription('Image à utiliser (intégrée dans l’embed si image_brute = false, seule si image_brute = true).')
-            .setRequired(false)
-        )
-        .addBooleanOption(opt =>
-          opt.setName('image_brute')
-            .setDescription('Si vrai, poste uniquement la photo (sans embed).')
-            .setRequired(false)
-        )
-        .addBooleanOption(opt =>
-          opt.setName('reactions')
-            .setDescription('Ajouter automatiquement ✅ et ❌ (défaut : oui).')
-            .setRequired(false)
-        )
-    )
-
-    // 🔹 /dispos_admin modifier
-    .addSubcommand(sc =>
-      sc.setName('modifier')
-        .setDescription('Modifie le contenu d’un ou plusieurs messages de disponibilités.')
+        .setDescription('Publie les 7 messages et sauvegarde les IDs automatiquement.')
         .addChannelOption(o =>
           o.setName('salon')
-            .setDescription('Salon où se trouvent les messages de disponibilités.')
+            .setDescription('Salon des disponibilités')
             .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName('jour')
-            .setDescription('Choisis le jour à modifier ou "tous".')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Tous les jours', value: 'all' },
-              { name: 'Lundi', value: 'lundi' },
-              { name: 'Mardi', value: 'mardi' },
-              { name: 'Mercredi', value: 'mercredi' },
-              { name: 'Jeudi', value: 'jeudi' },
-              { name: 'Vendredi', value: 'vendredi' },
-              { name: 'Samedi', value: 'samedi' },
-              { name: 'Dimanche', value: 'dimanche' }
-            )
-        )
-        .addStringOption(o =>
-          o.setName('ids')
-            .setDescription('ID du message (ou 7 IDs séparés pour "Tous les jours").')
             .setRequired(true)
         )
         .addStringOption(o =>
           o.setName('texte')
-            .setDescription('Nouveau texte à afficher (ignoré si image_brute = true).')
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName('titre')
-            .setDescription('Titre personnalisé (facultatif).')
-            .setRequired(false)
+            .setDescription('Texte personnalisé (facultatif)')
         )
         .addBooleanOption(o =>
-          o.setName('remplacer')
-            .setDescription('Remplace entièrement la description de l’embed.')
-            .setRequired(false)
-        )
-        .addAttachmentOption(o =>
-          o.setName('image')
-            .setDescription('Image à utiliser (intégrée dans l’embed si image_brute = false, seule si image_brute = true).')
-            .setRequired(false)
-        )
-        .addBooleanOption(o =>
-          o.setName('image_brute')
-            .setDescription('Si vrai, remplace l’embed par l’image seule.')
-            .setRequired(false)
+          o.setName('reactions')
+            .setDescription('Ajouter ✅ ❌ (défaut : oui)')
         )
     )
 
-    // 🔹 /dispos_admin reinitialiser
+    /* -------------------- MODIFIER -------------------- */
     .addSubcommand(sc =>
-      sc.setName('reinitialiser')
-        .setDescription('Réinitialise les réactions d’un jour ou de tous les jours.')
+      sc.setName('modifier')
+        .setDescription('Modifie les messages (IDs auto depuis servers.json)')
         .addChannelOption(o =>
           o.setName('salon')
-            .setDescription('Salon où se trouvent les messages de disponibilités.')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true)
-        )
-        .addStringOption(option =>
-          option
-            .setName('jour')
-            .setDescription('Choisis un jour ou "tous".')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Tous les jours', value: 'all' },
-              { name: 'Lundi', value: 'lundi' },
-              { name: 'Mardi', value: 'mardi' },
-              { name: 'Mercredi', value: 'mercredi' },
-              { name: 'Jeudi', value: 'jeudi' },
-              { name: 'Vendredi', value: 'vendredi' },
-              { name: 'Samedi', value: 'samedi' },
-              { name: 'Dimanche', value: 'dimanche' }
-            )
-        )
-        .addStringOption(o =>
-          o.setName('ids')
-            .setDescription('ID du message (ou 7 IDs séparés pour "Tous les jours").')
-            .setRequired(true)
-        )
-        .addBooleanOption(option =>
-          option
-            .setName('mention')
-            .setDescription('Mentionner @everyone dans l’annonce publique.')
-            .setRequired(false)
-        )
-    )
-
-    // 🔹 /dispos_admin rouvrir
-    .addSubcommand(sc =>
-      sc.setName('rouvrir')
-        .setDescription('Rouvre un ou plusieurs messages de disponibilités.')
-        .addChannelOption(o =>
-          o.setName('salon')
-            .setDescription('Salon où se trouvent les messages de disponibilités.')
+            .setDescription('Salon des disponibilités')
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(true)
         )
         .addStringOption(o =>
           o.setName('jour')
-            .setDescription('Choisis un jour ou "tous".')
+            .setDescription('Jour ou tous')
             .setRequired(true)
             .addChoices(
-              { name: 'Tous les jours', value: 'all' },
-              { name: 'Lundi', value: 'lundi' },
-              { name: 'Mardi', value: 'mardi' },
-              { name: 'Mercredi', value: 'mercredi' },
-              { name: 'Jeudi', value: 'jeudi' },
-              { name: 'Vendredi', value: 'vendredi' },
-              { name: 'Samedi', value: 'samedi' },
-              { name: 'Dimanche', value: 'dimanche' }
+              { name: 'Tous', value: 'all' },
+              ...JOURS.map(j => ({ name: j, value: j }))
+            )
+        )
+        .addStringOption(o =>
+          o.setName('texte')
+            .setDescription('Nouveau texte')
+            .setRequired(true)
+        )
+        .addStringOption(o =>
+          o.setName('ids')
+            .setDescription('Override ID(s) (optionnel)')
+        )
+    )
+
+    /* -------------------- RESET -------------------- */
+    .addSubcommand(sc =>
+      sc.setName('reinitialiser')
+        .setDescription('Reset réactions (IDs auto)')
+        .addChannelOption(o =>
+          o.setName('salon')
+            .setDescription('Salon des disponibilités')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true)
+        )
+        .addStringOption(o =>
+          o.setName('jour')
+            .setDescription('Jour ou tous')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Tous', value: 'all' },
+              ...JOURS.map(j => ({ name: j, value: j }))
             )
         )
         .addStringOption(o =>
           o.setName('ids')
-            .setDescription('ID du message (ou 7 IDs séparés pour "Tous les jours").')
+            .setDescription('Override ID(s) (optionnel)')
+        )
+    )
+
+    /* -------------------- ROUVRIR -------------------- */
+    .addSubcommand(sc =>
+      sc.setName('rouvrir')
+        .setDescription('Rouvre les disponibilités')
+        .addChannelOption(o =>
+          o.setName('salon')
+            .setDescription('Salon des disponibilités')
+            .addChannelTypes(ChannelType.GuildText)
             .setRequired(true)
         )
         .addStringOption(o =>
-          o.setName('description')
-            .setDescription('Description à afficher (défaut : texte standard). Ignoré si image_brute = true.')
-            .setRequired(false)
+          o.setName('jour')
+            .setDescription('Jour ou tous')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Tous', value: 'all' },
+              ...JOURS.map(j => ({ name: j, value: j }))
+            )
         )
-        .addBooleanOption(o =>
-          o.setName('reactions')
-            .setDescription('Réajouter automatiquement ✅ et ❌.')
-            .setRequired(false)
-        )
-        .addAttachmentOption(o =>
-          o.setName('image')
-            .setDescription('Image à utiliser (intégrée dans l’embed si image_brute = false, seule si image_brute = true).')
-            .setRequired(false)
-        )
-        .addBooleanOption(o =>
-          o.setName('image_brute')
-            .setDescription('Si vrai, remplace l’embed par l’image seule.')
-            .setRequired(false)
+        .addStringOption(o =>
+          o.setName('ids')
+            .setDescription('Override ID(s) (optionnel)')
         )
     ),
 
+  /* ============================================================
+     ⚙️ EXECUTE
+  ============================================================ */
+
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
+    const channel = interaction.options.getChannel('salon');
     const guild = interaction.guild;
     const me = guild.members.me;
 
-    // Config dynamique (couleur + nom club)
-    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
+    const { guild: guildCfg } = getConfigFromInteraction(interaction);
     const color = getEmbedColor(guildCfg);
-    const clubName = guildCfg?.clubName || guild.name || 'INTER GALACTIQUE';
+    const clubName = guildCfg?.clubName || guild.name;
 
-    /* -------------------- SUBCOMMAND : PUBLIER -------------------- */
+    /* -------------------- PUBLIER -------------------- */
     if (sub === 'publier') {
-      const channel = interaction.options.getChannel('salon');
-      const image = interaction.options.getAttachment('image') || null;
-      const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
-      const reactionsOpt = interaction.options.getBoolean('reactions');
-      const shouldReact = reactionsOpt ?? true; // défaut : vrai
+      const texte = sanitize(interaction.options.getString('texte') || DESC_PAR_DEFAUT);
+      const reactions = interaction.options.getBoolean('reactions') ?? true;
 
-      let desc = interaction.options.getString('texte')?.trim() || DESC_PAR_DEFAUT;
-
-      if (imageBrute && !image) {
-        return interaction.reply({
-          content: '❌ Tu as activé **image_brute**, mais aucune `image` n’a été fournie.',
-          ephemeral: true
-        });
-      }
-
-      desc = sanitize(desc);
-
-      const needed = new PermissionsBitField([
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.SendMessages
-      ]);
-      if (!channel.permissionsFor?.(me)?.has(needed)) {
-        return interaction.reply({
-          content: `❌ Je n’ai pas la permission d’écrire dans ${channel}.`,
-          ephemeral: true
-        });
-      }
-
-      await interaction.reply({
-        content: `🛠️ Publication des messages de disponibilités dans ${channel}…`,
-        ephemeral: true
-      });
-
-      const recap = [];
       const idsByJour = {};
 
       for (const jour of JOURS) {
-        try {
-          let msg;
+        const embed = new EmbedBuilder()
+          .setColor(color)
+          .setTitle(TITRES[jour])
+          .setDescription(texte)
+          .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
-          if (imageBrute && image) {
-            // Photo seule, sans embed
-            msg = await channel.send({
-              content: '',
-              embeds: [],
-              files: [{ attachment: image.url, name: image.name }],
-              allowedMentions: { parse: [] }
-            });
-          } else {
-            const titreMaj = TITRES[jour].replace(/📅\s*/i, '📅 ').toUpperCase();
-            const embed = new EmbedBuilder()
-              .setColor(color)
-              .setTitle(titreMaj)
-              .setDescription(desc)
-              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-            // Image intégrée dans l'embed si fournie
-            if (image) {
-              embed.setImage(image.url);
-            }
-
-            msg = await channel.send({
-              content: '',
-              embeds: [embed],
-              allowedMentions: { parse: [] }
-            });
-          }
-
-          if (msg && shouldReact) {
-            try { await msg.react('✅'); } catch {}
-            try { await msg.react('❌'); } catch {}
-          }
-
-          idsByJour[jour] = msg.id;
-          recap.push(`✅ ${jour} : message créé (ID: ${msg.id})`);
-        } catch (err) {
-          console.error(`Erreur ${jour}:`, err);
-          recap.push(`❌ ${jour} : échec (voir console).`);
+        const msg = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+        if (reactions) {
+          await msg.react('✅');
+          await msg.react('❌');
         }
+        idsByJour[jour] = msg.id;
       }
 
-      const lignesIds = JOURS.map(j => `${j.padEnd(9, ' ')} → ${idsByJour[j] || '—'}`).join('\n');
+      // 💾 Sauvegarde automatique
+      await updateGuildConfig(guild.id, { dispoMessages: idsByJour });
 
-      return interaction.followUp({
-        content: [
-          '✅ **Messages de disponibilités créés**',
-          '```',
-          recap.join('\n'),
-          '```',
-          '',
-          '🧾 **Récap IDs (à conserver quelque part, pour /disponibilites et /dispos_admin)** :',
-          '```',
-          lignesIds,
-          '```'
-        ].join('\n'),
+      return interaction.reply({
+        content: '✅ Messages publiés **et IDs sauvegardés automatiquement dans servers.json**.',
         ephemeral: true
       });
     }
 
-    /* -------------------- SUBCOMMAND : MODIFIER -------------------- */
-    if (sub === 'modifier') {
-      const channel = interaction.options.getChannel('salon');
-      const jourChoisi = interaction.options.getString('jour', true);
-      let texte = interaction.options.getString('texte')?.trim();
-      const titreOptionnel = interaction.options.getString('titre')?.trim() || null;
-      const remplacer = interaction.options.getBoolean('remplacer') ?? false;
-      const image = interaction.options.getAttachment('image') || null;
-      const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
-      const idsInput = interaction.options.getString('ids', true);
+    /* -------------------- MODIFIER / RESET / ROUVRIR -------------------- */
+    const jour = interaction.options.getString('jour');
+    const idsInput = interaction.options.getString('ids');
+    const { error, mapping, joursCibles } =
+      resolveIdsMapping(guildCfg, jour, idsInput);
 
-      const { error, mapping, joursCibles } = parseIdsByJour(jourChoisi, idsInput);
-      if (error) {
-        return interaction.reply({
-          content: error,
-          ephemeral: true
-        });
-      }
-
-      if (imageBrute && !image) {
-        return interaction.reply({
-          content: '❌ Tu as activé **image_brute**, mais aucune `image` n’a été fournie.',
-          ephemeral: true
-        });
-      }
-
-      if (!imageBrute && !texte) {
-        return interaction.reply({
-          content: '❌ Le champ **texte** est vide.',
-          ephemeral: true
-        });
-      }
-
-      texte = sanitize((texte || '').replace(/^["“”]|["“”]$/g, '').trim());
-      const titreNettoye = titreOptionnel ? sanitize(titreOptionnel) : null;
-
-      const permissionsNécessaires = new PermissionsBitField([
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.SendMessages
-      ]);
-      if (!channel.permissionsFor?.(me)?.has(permissionsNécessaires)) {
-        return interaction.reply({
-          content: `❌ Je n’ai pas la permission d’écrire dans ${channel}.`,
-          ephemeral: true
-        });
-      }
-
-      await interaction.reply({
-        content: `🛠️ Modification des disponibilités (${jourChoisi === 'all' ? 'toute la semaine' : jourChoisi}) en cours...`,
-        ephemeral: true
-      });
-
-      const recap = [];
-      const joursModifies = [];
-
-      for (const jour of joursCibles) {
-        const messageId = mapping[jour];
-        if (!messageId) {
-          recap.push(`⚠️ ${jour} : aucun ID fourni.`);
-          continue;
-        }
-
-        try {
-          const msg = await channel.messages.fetch(messageId).catch(() => null);
-          if (!msg) {
-            recap.push(`❌ ${jour} : message introuvable (ID invalide ?).`);
-            continue;
-          }
-
-          if (imageBrute && image) {
-            // Image seule
-            await msg.edit({
-              content: '',
-              embeds: [],
-              files: [{ attachment: image.url, name: image.name }],
-              allowedMentions: { parse: [] }
-            });
-          } else {
-            const exist = msg.embeds?.[0];
-            const titreBase = titreNettoye || (exist?.title || TITRES[jour]);
-            const titreFinal = titreBase.replace(/📅\s*/i, '📅 ').toUpperCase();
-
-            const descriptionFinale = remplacer
-              ? texte
-              : `${texte}\n\n✅ **Présent**  |  ❌ **Absent**`;
-
-            const embed = new EmbedBuilder()
-              .setColor(color)
-              .setTitle(titreFinal)
-              .setDescription(descriptionFinale)
-              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-            // Image intégrée dans l'embed si fournie
-            if (image) {
-              embed.setImage(image.url);
-            }
-
-            await msg.edit({ content: '', embeds: [embed], allowedMentions: { parse: [] } });
-          }
-
-          recap.push(`✅ ${jour} : message mis à jour.`);
-          joursModifies.push(TITRES_MAJ[jour]);
-        } catch (err) {
-          console.error(`Erreur sur ${jour}:`, err);
-          recap.push(`❌ ${jour} : échec de modification.`);
-        }
-      }
-
-      if (joursModifies.length > 0) {
-        const annonce = [
-          '📢 **Mise à jour des disponibilités effectuée !**',
-          `${joursModifies.join(' • ')}`,
-          '\nMerci de vérifier et de réagir si nécessaire ✅❌'
-        ].join('\n');
-        try {
-          await channel.send({ content: annonce, allowedMentions: { parse: [] } });
-        } catch (err) {
-          console.error('Erreur envoi annonce :', err);
-        }
-      }
-
-      return interaction.followUp({
-        content: [
-          '✍️ **Modification terminée**',
-          '```',
-          recap.join('\n'),
-          '```'
-        ].join('\n'),
-        ephemeral: true
-      });
+    if (error) {
+      return interaction.reply({ content: error, ephemeral: true });
     }
 
-    /* -------------------- SUBCOMMAND : REINITIALISER -------------------- */
-    if (sub === 'reinitialiser') {
-      const channel = interaction.options.getChannel('salon');
-      const jourInput = interaction.options.getString('jour', true);
-      const idsInput = interaction.options.getString('ids', true);
-      const mentionEveryone = interaction.options.getBoolean('mention') ?? false;
+    for (const j of joursCibles) {
+      const msg = await channel.messages.fetch(mapping[j]).catch(() => null);
+      if (!msg) continue;
 
-      const { error, mapping, joursCibles } = parseIdsByJour(jourInput, idsInput);
-      if (error) {
-        return interaction.reply({
-          content: error,
-          ephemeral: true
-        });
+      if (sub === 'modifier') {
+        const texte = sanitize(interaction.options.getString('texte'));
+        const embed = EmbedBuilder.from(msg.embeds[0])
+          .setColor(color)
+          .setDescription(`${texte}\n\n✅ **Présent** | ❌ **Absent**`);
+        await msg.edit({ embeds: [embed] });
       }
 
-      const needPerms = [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.AddReactions,
-        PermissionFlagsBits.ManageMessages,
-      ];
-      if (!channel.permissionsFor?.(me)?.has(needPerms)) {
-        return interaction.reply({
-          content: '❌ Permissions insuffisantes dans le salon des disponibilités (lecture, historique, écrire, réactions, gérer les messages).',
-          ephemeral: true
-        });
+      if (sub === 'reinitialiser') {
+        await msg.reactions.removeAll();
+        await msg.react('✅');
+        await msg.react('❌');
       }
 
-      await interaction.reply({
-        content: `🧹 Réinitialisation des disponibilités (${jourInput === 'all' ? 'tous les jours' : jourInput})...`,
-        ephemeral: true
-      });
-
-      const recap = [];
-      const joursResetOK = [];
-
-      for (const jour of joursCibles) {
-        const messageId = mapping[jour];
-        if (!messageId) {
-          recap.push(`⚠️ ${TITRES[jour]} : aucun ID fourni.`);
-          continue;
-        }
-
-        try {
-          const message = await channel.messages.fetch(messageId);
-          await message.reactions.removeAll();
-          await message.react('✅');
-          await message.react('❌');
-          recap.push(`✅ ${TITRES[jour]} : réactions réinitialisées.`);
-          joursResetOK.push(TITRES[jour]);
-        } catch (err) {
-          console.error(`Erreur reset ${jour}:`, err);
-          recap.push(`❌ ${TITRES[jour]} : erreur lors de la réinitialisation.`);
-        }
+      if (sub === 'rouvrir') {
+        const embed = EmbedBuilder.from(msg.embeds[0])
+          .setColor(color)
+          .setDescription(DESCRIPTION_DEFAUT_ROUVRIR);
+        await msg.edit({ embeds: [embed] });
       }
-
-      if (joursResetOK.length > 0) {
-        const annonce = [
-          mentionEveryone ? '@everyone' : '',
-          '🧹 **Réinitialisation des disponibilités effectuée !**',
-          `${joursResetOK.join(' • ')}`,
-          '\nRéagissez dès maintenant : ✅ Présent  |  ❌ Absent'
-        ].filter(Boolean).join('\n');
-
-        try {
-          await channel.send({
-            content: annonce,
-            allowedMentions: mentionEveryone ? { parse: ['everyone'] } : { parse: [] }
-          });
-        } catch (err) {
-          console.error('Erreur envoi annonce publique :', err);
-        }
-      }
-
-      return interaction.followUp({
-        content: [
-          '🧹 **Réinitialisation terminée**',
-          '```',
-          recap.join('\n') || 'Aucune action effectuée.',
-          '```'
-        ].join('\n'),
-        ephemeral: true
-      });
     }
 
-    /* -------------------- SUBCOMMAND : ROUVRIR -------------------- */
-    if (sub === 'rouvrir') {
-      const channel = interaction.options.getChannel('salon');
-      const jourInput = interaction.options.getString('jour', true);
-      const idsInput = interaction.options.getString('ids', true);
-      const description = sanitize(
-        interaction.options.getString('description') || DESCRIPTION_DEFAUT_ROUVRIR
-      );
-      const reAddReactions = interaction.options.getBoolean('reactions') ?? false;
-      const image = interaction.options.getAttachment('image') || null;
-      const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
-
-      const { error, mapping, joursCibles } = parseIdsByJour(jourInput, idsInput);
-      if (error) {
-        return interaction.reply({
-          content: error,
-          ephemeral: true
-        });
-      }
-
-      if (imageBrute && !image) {
-        return interaction.reply({
-          content: '❌ Tu as activé **image_brute**, mais aucune `image` n’a été fournie.',
-          ephemeral: true
-        });
-      }
-
-      const need = new PermissionsBitField([
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.ReadMessageHistory,
-        PermissionsBitField.Flags.SendMessages,
-      ]);
-      if (!channel.permissionsFor?.(me)?.has(need)) {
-        return interaction.reply({
-          content: `❌ Permissions insuffisantes dans ${channel} (voir/écrire/historique).`,
-          ephemeral: true
-        });
-      }
-
-      await interaction.reply({
-        content: '🔄 Réouverture des disponibilités…',
-        ephemeral: true
-      });
-
-      const recap = [];
-
-      for (const jour of joursCibles) {
-        const messageId = mapping[jour];
-        if (!messageId) {
-          recap.push(`⚠️ ${jour} : aucun ID fourni.`);
-          continue;
-        }
-
-        try {
-          const msg = await channel.messages.fetch(messageId).catch(() => null);
-          if (!msg) {
-            recap.push(`❌ ${jour} : message introuvable (ID invalide ?).`);
-            continue;
-          }
-
-          if (imageBrute && image) {
-            await msg.edit({
-              content: '',
-              embeds: [],
-              files: [{ attachment: image.url, name: image.name }],
-              allowedMentions: { parse: [] }
-            });
-          } else {
-            const embed = new EmbedBuilder()
-              .setColor(color)
-              .setTitle(TITRES_MAJ[jour])
-              .setDescription(description)
-              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-            // Image intégrée dans l'embed si fournie
-            if (image) {
-              embed.setImage(image.url);
-            }
-
-            await msg.edit({ content: '', embeds: [embed], allowedMentions: { parse: [] } });
-          }
-
-          if (reAddReactions) {
-            try { await msg.react('✅'); } catch {}
-            try { await msg.react('❌'); } catch {}
-          }
-
-          recap.push(`✅ ${jour} : rouvert${reAddReactions ? ' (+ réactions)' : ''}.`);
-        } catch (err) {
-          console.error(`Erreur sur ${jour}:`, err);
-          recap.push(`❌ ${jour} : erreur lors de la mise à jour.`);
-        }
-      }
-
-      return interaction.followUp({
-        content: [
-          '✅ **Réouverture terminée.**',
-          '```',
-          recap.join('\n'),
-          '```'
-        ].join('\n'),
-        ephemeral: true
-      });
-    }
+    return interaction.reply({
+      content: `✅ **${sub} effectué** via servers.json.`,
+      ephemeral: true
+    });
   }
 };
