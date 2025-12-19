@@ -16,8 +16,7 @@ const DEFAULT_COLOR = 0xff4db8;
 
 // ✅ Fallback si tu n’envoies pas targetGuildIds depuis index.js
 const DEFAULT_ALLOWED_GUILDS = [
-  '1392639720491581551', // IGA
-  '1410246320324870217'  // DOR
+  '1392639720491581551' // IGA
 ];
 
 const AUTOMATION = {
