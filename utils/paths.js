@@ -6,31 +6,29 @@ const path = require('path');
  * ------------------------------------------------------
  * 📁 GESTION PERSISTANTE DES SNAPSHOTS
  * ------------------------------------------------------
- *
- * Railway => /data/snapshots     (persiste entre builds)
- * Replit  => ./data/snapshots    (persiste dans le projet)
- * Local   => ./data/snapshots    (fallback stable)
- *
- * IMPORTANT :
- *  - AUCUN snapshot ne sera effacé
- *  - Sécurisé, silencieux si déjà existant
- *  - Compatible multi-plateforme
+ * Railway => /app/data/snapshots (volume monté)
+ * (fallback) => /data/snapshots
+ * Replit/Local => ./data/snapshots
  * ------------------------------------------------------
  */
 
+function safeExists(p) {
+  try { return fs.existsSync(p); } catch { return false; }
+}
+
 function resolveDataBase() {
-  // Railway peut définir DATA_DIR
-  if (process.env.DATA_DIR && process.env.DATA_DIR.trim() !== '') {
-    return process.env.DATA_DIR;
+  // 1) Priorité: variable d'env explicite
+  if (process.env.DATA_DIR && String(process.env.DATA_DIR).trim() !== '') {
+    return String(process.env.DATA_DIR).trim();
   }
 
-  // Si Railway ne définit pas DATA_DIR → utiliser /data
-  // (emplacement persistant dans la plupart des hébergements)
-  if (fs.existsSync('/data')) {
-    return '/data';
-  }
+  // 2) Railway le plus fréquent : volume monté dans /app/data
+  if (safeExists('/app/data')) return '/app/data';
 
-  // Sinon -> fallback local
+  // 3) Fallback: certains environnements utilisent /data
+  if (safeExists('/data')) return '/data';
+
+  // 4) Local / Replit
   return path.join(process.cwd(), 'data');
 }
 
@@ -39,17 +37,21 @@ const SNAPSHOT_DIR = path.join(DATA_BASE, 'snapshots');
 
 /**
  * Création automatique des dossiers nécessaires
- * Sans crash sur permissions insuffisantes
- * Et silencieux si existe déjà
+ * Silencieux si existe déjà
  */
 function ensureSnapshotDirectory() {
   try {
-    if (!fs.existsSync(SNAPSHOT_DIR)) {
+    if (!safeExists(DATA_BASE)) {
+      fs.mkdirSync(DATA_BASE, { recursive: true });
+      console.log(`📁 [paths] Dossier data créé : ${DATA_BASE}`);
+    }
+
+    if (!safeExists(SNAPSHOT_DIR)) {
       fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
       console.log(`📁 [paths] Dossier snapshots créé : ${SNAPSHOT_DIR}`);
     }
   } catch (err) {
-    console.error(`❌ [paths] Impossible de créer ${SNAPSHOT_DIR}`);
+    console.error(`❌ [paths] Impossible de créer les dossiers data/snapshots`);
     console.error(err);
   }
 }
