@@ -77,139 +77,130 @@ module.exports = {
 
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
+    if (sub !== 'publier') {
+      return interaction.reply({ content: '❌ Sous-commande inconnue.', ephemeral: true }).catch(() => {});
+    }
+
     const guild = interaction.guild;
-    const me = guild.members.me;
+    if (!guild) {
+      return interaction.reply({ content: '❌ Cette commande doit être utilisée dans un serveur.', ephemeral: true }).catch(() => {});
+    }
+
+    // ✅ “me” peut être null selon le cache → fetchMe
+    let me = guild.members.me;
+    if (!me) {
+      me = await guild.members.fetchMe().catch(() => null);
+    }
+    if (!me) {
+      return interaction.reply({ content: '❌ Impossible de récupérer mes permissions (fetchMe).', ephemeral: true }).catch(() => {});
+    }
 
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const color = getEmbedColor(guildCfg);
     const clubName = guildCfg?.clubName || guild.name || 'INTER GALACTIQUE';
     const convoqueRoleId = guildCfg?.roles?.convoque || null;
 
-    if (sub === 'publier') {
-      const channel =
-        interaction.options.getChannel('salon') ||
-        interaction.channel;
+    const channel = interaction.options.getChannel('salon') || interaction.channel;
+    const titreInput = interaction.options.getString('titre');
+    let texte = interaction.options.getString('texte', true);
+    const image = interaction.options.getAttachment('image') || null;
+    const mentionConvoques = interaction.options.getBoolean('mention_convoques') ?? false;
+    const mentionEveryone = interaction.options.getBoolean('mention_everyone') ?? false;
+    const reactionsOpt = interaction.options.getBoolean('reactions');
+    const shouldReact = reactionsOpt ?? true; // défaut : vrai
 
-      const titreInput = interaction.options.getString('titre');
-      let texte = interaction.options.getString('texte', true);
-      const image = interaction.options.getAttachment('image') || null;
-      const mentionConvoques = interaction.options.getBoolean('mention_convoques') ?? false;
-      const mentionEveryone = interaction.options.getBoolean('mention_everyone') ?? false;
-      const reactionsOpt = interaction.options.getBoolean('reactions');
-      const shouldReact = reactionsOpt ?? true; // défaut : vrai
-
-      if (!channel || channel.type !== ChannelType.GuildText) {
-        return interaction.reply({
-          content: '❌ Salon invalide pour publier la composition.',
-          ephemeral: true
-        });
-      }
-
-      // Permissions minimales
-      const permList = [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.EmbedLinks
-      ];
-      if (shouldReact) {
-        permList.push(PermissionsBitField.Flags.AddReactions);
-      }
-
-      const neededPerms = new PermissionsBitField(permList);
-
-      if (!channel.permissionsFor?.(me)?.has(neededPerms)) {
-        return interaction.reply({
-          content: `❌ Je n’ai pas les permissions nécessaires dans ${channel} (voir, écrire, embed${shouldReact ? ', réactions' : ''}).`,
-          ephemeral: true
-        });
-      }
-
-      await interaction.reply({
-        content: `🛠️ Publication de la composition dans ${channel}...`,
+    // salon valide texte
+    if (!channel || channel.type !== ChannelType.GuildText || !channel.isTextBased?.()) {
+      return interaction.reply({
+        content: '❌ Salon invalide pour publier la composition.',
         ephemeral: true
-      });
-
-      // Nettoyage des mentions sauvages dans l'embed
-      texte = sanitize(texte || '').trim();
-      const titre = (sanitize(
-        titreInput || '📋 Composition du match'
-      ).trim()) || '📋 Composition du match';
-
-      // On ajoute un petit rappel dans la description
-      const descFinale = [
-        texte,
-        '',
-        '✅ **Réagissez avec cette réaction pour valider votre présence.**'
-      ].join('\n');
-
-      const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(titre)
-        .setDescription(descFinale)
-        .setFooter({ text: `${clubName} ⚫ Compo officielle` }) // 🧷 marqueur pour /verifier_compo
-        .setTimestamp();
-
-      // 🖼 Image de compo dans l’embed (et plus en pièce jointe séparée)
-      if (image) {
-        embed.setImage(image.url);
-      }
-
-      // --- Construction du contenu (mentions) ---
-      const contentParts = [];
-      const allowedMentions = { parse: [] };
-
-      let warning = '';
-
-      if (mentionEveryone) {
-        contentParts.push('@everyone');
-        allowedMentions.parse.push('everyone');
-      }
-
-      if (mentionConvoques) {
-        if (convoqueRoleId) {
-          contentParts.push(`<@&${convoqueRoleId}>`);
-          // on restreint aux rôles explicitement mentionnés
-          allowedMentions.roles = [convoqueRoleId];
-        } else {
-          warning =
-            '⚠️ Rôle **convoqué** non configuré dans la config (`roles.convoque`). La compo a été envoyée sans mention de ce rôle.\n';
-        }
-      }
-
-      const content = contentParts.join(' ').trim() || undefined;
-
-      let msg;
-      try {
-        msg = await channel.send({
-          content,
-          embeds: [embed],
-          allowedMentions
-        });
-      } catch (err) {
-        console.error('Erreur envoi compo :', err);
-        return interaction.editReply({
-          content: '❌ Erreur lors de l’envoi de la compo (voir logs du bot).'
-        });
-      }
-
-      if (msg && shouldReact) {
-        try {
-          await msg.react('✅');
-        } catch (e) {
-          console.error('Erreur réaction ✅ sur compo :', e);
-        }
-      }
-
-      const lien = `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`;
-
-      return interaction.editReply({
-        content: [
-          warning,
-          '✅ **Composition publiée avec succès.**',
-          `📨 Salon : ${channel}`,
-          `🔗 Lien : ${lien}`
-        ].filter(Boolean).join('\n')
-      });
+      }).catch(() => {});
     }
+
+    // Permissions minimales
+    const permList = [
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.EmbedLinks
+    ];
+    if (shouldReact) permList.push(PermissionsBitField.Flags.AddReactions);
+
+    const neededPerms = new PermissionsBitField(permList);
+    if (!channel.permissionsFor(me)?.has(neededPerms)) {
+      return interaction.reply({
+        content: `❌ Je n’ai pas les permissions nécessaires dans ${channel} (voir, écrire, embed${shouldReact ? ', réactions' : ''}).`,
+        ephemeral: true
+      }).catch(() => {});
+    }
+
+    await interaction.reply({
+      content: `🛠️ Publication de la composition dans ${channel}...`,
+      ephemeral: true
+    }).catch(() => {});
+
+    // Nettoyage des mentions sauvages dans l'embed
+    texte = sanitize(texte || '').trim();
+    const titre = (sanitize(titreInput || '📋 Composition du match').trim()) || '📋 Composition du match';
+
+    const descFinale = [
+      texte,
+      '',
+      '✅ **Réagissez avec cette réaction pour valider votre présence.**'
+    ].join('\n');
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(titre)
+      .setDescription(descFinale)
+      .setFooter({ text: `${clubName} ⚫ Compo officielle` }) // ✅ marqueur (footerContains)
+      .setTimestamp();
+
+    if (image) embed.setImage(image.url);
+
+    // --- Mentions (contenu) ---
+    const contentParts = [];
+    const allowedMentions = { parse: [] };
+
+    let warning = '';
+
+    if (mentionEveryone) {
+      contentParts.push('@everyone');
+      allowedMentions.parse.push('everyone');
+    }
+
+    if (mentionConvoques) {
+      if (convoqueRoleId && convoqueRoleId !== '0') {
+        contentParts.push(`<@&${convoqueRoleId}>`);
+        allowedMentions.roles = [convoqueRoleId];
+      } else {
+        warning =
+          '⚠️ Rôle **convoqué** non configuré (`roles.convoque`). Compo envoyée sans mention de ce rôle.\n';
+      }
+    }
+
+    const content = contentParts.join(' ').trim() || undefined;
+
+    let msg;
+    try {
+      msg = await channel.send({ content, embeds: [embed], allowedMentions });
+    } catch (err) {
+      console.error('Erreur envoi compo :', err);
+      return interaction.editReply({ content: '❌ Erreur lors de l’envoi de la compo (voir logs du bot).' }).catch(() => {});
+    }
+
+    if (msg && shouldReact) {
+      try { await msg.react('✅'); } catch (e) { console.error('Erreur réaction ✅ sur compo :', e); }
+    }
+
+    const lien = `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`;
+
+    return interaction.editReply({
+      content: [
+        warning,
+        '✅ **Composition publiée avec succès.**',
+        `📨 Salon : ${channel}`,
+        `🔗 Lien : ${lien}`
+      ].filter(Boolean).join('\n')
+    }).catch(() => {});
   }
 };
