@@ -6,26 +6,28 @@ const {
   EmbedBuilder
 } = require('discord.js');
 
-const {
-  getConfigFromInteraction,
-  updateGuildConfig
-} = require('../utils/config');
+const { getConfigFromInteraction, updateGuildConfig } = require('../utils/config');
 
-const DEFAULT_COLOR = 0xff4db8; // couleur par défaut si aucune couleur définie en config
+const DEFAULT_COLOR = 0xff4db8;
 
 function getEmbedColor(cfg) {
   const hex = cfg?.embedColor;
   if (!hex) return DEFAULT_COLOR;
-  // hex peut être "ff4db8" ou "#ff4db8" ou "0xff4db8"
   const clean = String(hex).replace(/^0x/i, '').replace('#', '');
   const num = parseInt(clean, 16);
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
+function safeHexLabel(hex) {
+  if (!hex) return '_par défaut_';
+  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
+  return /^[0-9a-fA-F]{6}$/.test(clean) ? `#${clean.toLowerCase()}` : '_invalide_';
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('config')
-    .setDescription('Configure GalactiqueBot pour ce serveur.')
+    .setDescription('Configure le bot pour ce serveur.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     // /config channels
@@ -35,7 +37,7 @@ module.exports = {
         .setDescription('Configurer les salons utilisés par le bot.')
         .addChannelOption(o =>
           o.setName('logs')
-            .setDescription('Salon des logs (démarrage / arrêt du bot).')
+            .setDescription('Salon des logs (optionnel).')
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
@@ -47,25 +49,7 @@ module.exports = {
         )
         .addChannelOption(o =>
           o.setName('rapports')
-            .setDescription('Salon où envoyer les rapports (dispos, compos, etc.).')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
-        )
-        .addChannelOption(o =>
-          o.setName('welcome')
-            .setDescription('Salon de bienvenue des nouveaux membres.')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
-        )
-        .addChannelOption(o =>
-          o.setName('support')
-            .setDescription('Salon support (pour le serveur GalactiqueBot Support, par ex.).')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
-        )
-        .addChannelOption(o =>
-          o.setName('panel')
-            .setDescription('Salon du panneau de disponibilités (boutons LUNDI→DIMANCHE).')
+            .setDescription('Salon où envoyer les rapports (12h/17h/semaine).')
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
@@ -88,34 +72,24 @@ module.exports = {
         )
         .addRoleOption(o =>
           o.setName('convoque')
-            .setDescription('Rôle des joueurs convoqués (pour compo).')
-            .setRequired(false)
-        )
-        .addRoleOption(o =>
-          o.setName('recrue')
-            .setDescription('Rôle des recrues (nouveaux joueurs).')
-            .setRequired(false)
-        )
-        .addRoleOption(o =>
-          o.setName('help')
-            .setDescription('Rôle d’aide / support (helpRoleId, pour le serveur support).')
+            .setDescription('Rôle des joueurs convoqués (compo).')
             .setRequired(false)
         )
     )
 
-    // /config style (couleur, tag, nom du club)
+    // /config style
     .addSubcommand(sc =>
       sc
         .setName('style')
-        .setDescription('Configurer le style du bot (couleur des embeds, tag, nom du club).')
+        .setDescription('Configurer le style (couleur, tag, nom du club).')
         .addStringOption(o =>
           o.setName('couleur')
-            .setDescription('Couleur des embeds au format hexadécimal (ex : ff4db8 ou #ff4db8).')
+            .setDescription('Hex 6 caractères (ex : ff4db8 ou #ff4db8).')
             .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('tag')
-            .setDescription('Tag utilisé dans certains messages (ex : XIG).')
+            .setDescription('Tag (ex : XIG).')
             .setRequired(false)
         )
         .addStringOption(o =>
@@ -125,7 +99,7 @@ module.exports = {
         )
     )
 
-    // /config dispos (messages de dispo par jour)
+    // /config dispos
     .addSubcommand(sc =>
       sc
         .setName('dispos')
@@ -153,9 +127,7 @@ module.exports = {
 
     // /config view
     .addSubcommand(sc =>
-      sc
-        .setName('view')
-        .setDescription('Afficher la configuration actuelle pour ce serveur.')
+      sc.setName('view').setDescription('Afficher la configuration actuelle.')
     ),
 
   async execute(interaction) {
@@ -163,231 +135,126 @@ module.exports = {
     const guild = interaction.guild;
 
     if (!guild) {
-      return interaction.reply({
-        content: '❌ Cette commande doit être utilisée dans un serveur.',
-        ephemeral: true
-      });
+      return interaction.reply({ content: '❌ Utilise cette commande dans un serveur.', ephemeral: true });
     }
 
     const { global, guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const cfg = guildConfig || {};
 
-    // -----------------------------------------------------------------------
     // /config view
-    // -----------------------------------------------------------------------
     if (sub === 'view') {
-      const fields = [];
-
-      // Style (couleur / tag / clubName)
-      fields.push({
-        name: '🎨 Style',
-        value: [
-          `• Nom du club : ${cfg.clubName || guild.name}`,
-          `• Tag : ${cfg.tag || '_non défini_'}`,
-          `• Couleur embeds : ${cfg.embedColor ? `#${cfg.embedColor}` : '_par défaut_'}`
-        ].join('\n')
-      });
-
-      const salonsLines = [
-        `• Logs : ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : '_non défini_'}`,
-        `• Disponibilités : ${cfg.mainDispoChannelId ? `<#${cfg.mainDispoChannelId}>` : '_non défini_'}`,
-        `• Rapports : ${cfg.rapportChannelId ? `<#${cfg.rapportChannelId}>` : '_non défini_'}`,
-        `• Bienvenue : ${cfg.welcomeChannelId ? `<#${cfg.welcomeChannelId}>` : '_non défini_'}`,
-        `• Support : ${cfg.supportChannelId ? `<#${cfg.supportChannelId}>` : '_non défini_'}`,
-        `• Panneau de dispos : ${cfg.panelChannelId ? `<#${cfg.panelChannelId}>` : '_non défini_'}`
-      ];
-
-      fields.push({
-        name: '📡 Salons',
-        value: salonsLines.join('\n')
-      });
-
       const rolesCfg = cfg.roles || {};
-      const rolesLines = [
-        `• Joueur : ${rolesCfg.joueur ? `<@&${rolesCfg.joueur}>` : '_non défini_'}`,
-        `• Essai : ${rolesCfg.essai ? `<@&${rolesCfg.essai}>` : '_non défini_'}`,
-        `• Convoqué : ${rolesCfg.convoque ? `<@&${rolesCfg.convoque}>` : '_non défini_'}`,
-        `• Recrue : ${rolesCfg.recrue ? `<@&${rolesCfg.recrue}>` : '_non défini_'}`
-      ];
-
-      // Rôle d’aide séparé (helpRoleId)
-      rolesLines.push(
-        `• Rôle d’aide / support : ${cfg.helpRoleId ? `<@&${cfg.helpRoleId}>` : '_non défini_'}`
-      );
-
-      fields.push({
-        name: '🎭 Rôles',
-        value: rolesLines.join('\n')
-      });
-
-      // Dispos messages (on affiche juste un résumé)
-      const dispoMessages = cfg.dispoMessages || {};
-      const dispoLines = [
-        `• Lundi : ${dispoMessages.lundi ? `\`${dispoMessages.lundi}\`` : '_non défini_'}`,
-        `• Mardi : ${dispoMessages.mardi ? `\`${dispoMessages.mardi}\`` : '_non défini_'}`,
-        `• Mercredi : ${dispoMessages.mercredi ? `\`${dispoMessages.mercredi}\`` : '_non défini_'}`,
-        `• Jeudi : ${dispoMessages.jeudi ? `\`${dispoMessages.jeudi}\`` : '_non défini_'}`,
-        `• Vendredi : ${dispoMessages.vendredi ? `\`${dispoMessages.vendredi}\`` : '_non défini_'}`,
-        `• Samedi : ${dispoMessages.samedi ? `\`${dispoMessages.samedi}\`` : '_non défini_'}`,
-        `• Dimanche : ${dispoMessages.dimanche ? `\`${dispoMessages.dimanche}\`` : '_non défini_'}`,
-      ];
-
-      fields.push({
-        name: '📅 Messages de disponibilités',
-        value: dispoLines.join('\n')
-      });
+      const dispo = cfg.dispoMessages || {};
 
       const embed = new EmbedBuilder()
         .setColor(getEmbedColor(cfg))
-        .setTitle('⚙️ Configuration GalactiqueBot')
+        .setTitle('⚙️ Configuration du bot')
         .setDescription(
           `Serveur : **${guild.name}**\n` +
           `Bot : **${(global && global.botName) || 'GalactiqueBot'}**`
         )
-        .addFields(fields)
-        .setFooter({ text: 'GalactiqueBot • /config pour modifier' })
+        .addFields(
+          {
+            name: '🎨 Style',
+            value: [
+              `• Nom du club : ${cfg.clubName || guild.name}`,
+              `• Tag : ${cfg.tag || '_non défini_'}`,
+              `• Couleur embeds : ${safeHexLabel(cfg.embedColor)}`
+            ].join('\n')
+          },
+          {
+            name: '📡 Salons',
+            value: [
+              `• Dispos : ${cfg.mainDispoChannelId ? `<#${cfg.mainDispoChannelId}>` : '_non défini_'}`,
+              `• Rapports : ${cfg.rapportChannelId ? `<#${cfg.rapportChannelId}>` : '_non défini_'}`,
+              `• Logs : ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : '_non défini_'}`
+            ].join('\n')
+          },
+          {
+            name: '🎭 Rôles',
+            value: [
+              `• Joueur : ${rolesCfg.joueur ? `<@&${rolesCfg.joueur}>` : '_non défini_'}`,
+              `• Essai : ${rolesCfg.essai ? `<@&${rolesCfg.essai}>` : '_non défini_'}`,
+              `• Convoqué : ${rolesCfg.convoque ? `<@&${rolesCfg.convoque}>` : '_non défini_'}`
+            ].join('\n')
+          },
+          {
+            name: '📅 Messages de dispos',
+            value: [
+              `• Lundi : ${dispo.lundi ? `\`${dispo.lundi}\`` : '_—_'}`,
+              `• Mardi : ${dispo.mardi ? `\`${dispo.mardi}\`` : '_—_'}`,
+              `• Mercredi : ${dispo.mercredi ? `\`${dispo.mercredi}\`` : '_—_'}`,
+              `• Jeudi : ${dispo.jeudi ? `\`${dispo.jeudi}\`` : '_—_'}`,
+              `• Vendredi : ${dispo.vendredi ? `\`${dispo.vendredi}\`` : '_—_'}`,
+              `• Samedi : ${dispo.samedi ? `\`${dispo.samedi}\`` : '_—_'}`,
+              `• Dimanche : ${dispo.dimanche ? `\`${dispo.dimanche}\`` : '_—_'}`
+            ].join('\n')
+          }
+        )
+        .setFooter({ text: 'Commande : /config' })
         .setTimestamp();
 
-      return interaction.reply({
-        embeds: [embed],
-        ephemeral: true
-      });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // -----------------------------------------------------------------------
     // /config channels
-    // -----------------------------------------------------------------------
     if (sub === 'channels') {
-      const logsChannel    = interaction.options.getChannel('logs')    || null;
-      const dispoChannel   = interaction.options.getChannel('dispos')  || null;
-      const rapportsChannel= interaction.options.getChannel('rapports')|| null;
-      const welcomeChannel = interaction.options.getChannel('welcome') || null;
-      const supportChannel = interaction.options.getChannel('support') || null;
-      const panelChannel   = interaction.options.getChannel('panel')   || null;
+      const logs = interaction.options.getChannel('logs') || null;
+      const dispos = interaction.options.getChannel('dispos') || null;
+      const rapports = interaction.options.getChannel('rapports') || null;
 
-      if (
-        !logsChannel &&
-        !dispoChannel &&
-        !rapportsChannel &&
-        !welcomeChannel &&
-        !supportChannel &&
-        !panelChannel
-      ) {
-        return interaction.reply({
-          content: 'ℹ️ Aucun salon fourni. Merci de choisir au moins une option.',
-          ephemeral: true
-        });
+      if (!logs && !dispos && !rapports) {
+        return interaction.reply({ content: 'ℹ️ Donne au moins un salon.', ephemeral: true });
       }
 
       const patch = {};
       const changes = [];
 
-      if (logsChannel) {
-        patch.logChannelId = logsChannel.id;
-        changes.push(`• Logs → <#${logsChannel.id}>`);
-      }
-      if (dispoChannel) {
-        patch.mainDispoChannelId = dispoChannel.id;
-        changes.push(`• Disponibilités → <#${dispoChannel.id}>`);
-      }
-      if (rapportsChannel) {
-        patch.rapportChannelId = rapportsChannel.id;
-        changes.push(`• Rapports → <#${rapportsChannel.id}>`);
-      }
-      if (welcomeChannel) {
-        patch.welcomeChannelId = welcomeChannel.id;
-        changes.push(`• Bienvenue → <#${welcomeChannel.id}>`);
-      }
-      if (supportChannel) {
-        patch.supportChannelId = supportChannel.id;
-        changes.push(`• Support → <#${supportChannel.id}>`);
-      }
-      if (panelChannel) {
-        patch.panelChannelId = panelChannel.id;
-        changes.push(`• Panneau de dispos → <#${panelChannel.id}>`);
-      }
+      if (logs) { patch.logChannelId = logs.id; changes.push(`• Logs → <#${logs.id}>`); }
+      if (dispos) { patch.mainDispoChannelId = dispos.id; changes.push(`• Dispos → <#${dispos.id}>`); }
+      if (rapports) { patch.rapportChannelId = rapports.id; changes.push(`• Rapports → <#${rapports.id}>`); }
 
       updateGuildConfig(guild.id, patch);
 
       return interaction.reply({
-        content: [
-          '✅ Configuration des **salons** mise à jour :',
-          ...changes
-        ].join('\n'),
+        content: ['✅ Salons mis à jour :', ...changes].join('\n'),
         ephemeral: true
       });
     }
 
-    // -----------------------------------------------------------------------
     // /config roles
-    // -----------------------------------------------------------------------
     if (sub === 'roles') {
-      const rJoueur   = interaction.options.getRole('joueur')   || null;
-      const rEssai    = interaction.options.getRole('essai')    || null;
-      const rConvoque = interaction.options.getRole('convoque') || null;
-      const rRecrue   = interaction.options.getRole('recrue')   || null;
-      const rHelp     = interaction.options.getRole('help')     || null;
+      const joueur = interaction.options.getRole('joueur') || null;
+      const essai = interaction.options.getRole('essai') || null;
+      const convoque = interaction.options.getRole('convoque') || null;
 
-      if (!rJoueur && !rEssai && !rConvoque && !rRecrue && !rHelp) {
-        return interaction.reply({
-          content: 'ℹ️ Aucun rôle fourni. Merci de choisir au moins une option.',
-          ephemeral: true
-        });
+      if (!joueur && !essai && !convoque) {
+        return interaction.reply({ content: 'ℹ️ Donne au moins un rôle.', ephemeral: true });
       }
 
       const rolesPatch = {};
-      const patch = {};
       const changes = [];
 
-      if (rJoueur) {
-        rolesPatch.joueur = rJoueur.id;
-        changes.push(`• Joueur → <@&${rJoueur.id}>`);
-      }
-      if (rEssai) {
-        rolesPatch.essai = rEssai.id;
-        changes.push(`• Essai → <@&${rEssai.id}>`);
-      }
-      if (rConvoque) {
-        rolesPatch.convoque = rConvoque.id;
-        changes.push(`• Convoqué → <@&${rConvoque.id}>`);
-      }
-      if (rRecrue) {
-        rolesPatch.recrue = rRecrue.id;
-        changes.push(`• Recrue → <@&${rRecrue.id}>`);
-      }
-      if (rHelp) {
-        patch.helpRoleId = rHelp.id;
-        changes.push(`• Rôle d’aide / support → <@&${rHelp.id}>`);
-      }
+      if (joueur) { rolesPatch.joueur = joueur.id; changes.push(`• Joueur → <@&${joueur.id}>`); }
+      if (essai) { rolesPatch.essai = essai.id; changes.push(`• Essai → <@&${essai.id}>`); }
+      if (convoque) { rolesPatch.convoque = convoque.id; changes.push(`• Convoqué → <@&${convoque.id}>`); }
 
-      if (Object.keys(rolesPatch).length > 0) {
-        patch.roles = rolesPatch;
-      }
-
-      updateGuildConfig(guild.id, patch);
+      updateGuildConfig(guild.id, { roles: rolesPatch });
 
       return interaction.reply({
-        content: [
-          '✅ Configuration des **rôles** mise à jour :',
-          ...changes
-        ].join('\n'),
+        content: ['✅ Rôles mis à jour :', ...changes].join('\n'),
         ephemeral: true
       });
     }
 
-    // -----------------------------------------------------------------------
     // /config style
-    // -----------------------------------------------------------------------
     if (sub === 'style') {
       const couleurStr = interaction.options.getString('couleur') || null;
-      const tag        = interaction.options.getString('tag')      || null;
-      const clubName   = interaction.options.getString('clubname') || null;
+      const tag = interaction.options.getString('tag') || null;
+      const clubName = interaction.options.getString('clubname') || null;
 
       if (!couleurStr && !tag && !clubName) {
-        return interaction.reply({
-          content: 'ℹ️ Aucun paramètre fourni. Tu peux définir `couleur`, `tag` ou `clubname`.',
-          ephemeral: true
-        });
+        return interaction.reply({ content: 'ℹ️ Donne `couleur`, `tag` ou `clubname`.', ephemeral: true });
       }
 
       const patch = {};
@@ -396,57 +263,37 @@ module.exports = {
       if (couleurStr) {
         const raw = couleurStr.trim();
         const clean = raw.replace(/^0x/i, '').replace('#', '');
-        const validHex = /^[0-9a-fA-F]{6}$/.test(clean);
-
-        if (!validHex) {
+        if (!/^[0-9a-fA-F]{6}$/.test(clean)) {
           return interaction.reply({
-            content: '❌ Couleur invalide. Utilise un hex sur 6 caractères, ex : `ff4db8` ou `#ff4db8`.',
+            content: '❌ Couleur invalide. Ex : `ff4db8` ou `#ff4db8`.',
             ephemeral: true
           });
         }
-
         patch.embedColor = clean.toLowerCase();
-        changes.push(`• Couleur des embeds → \`#${clean.toLowerCase()}\``);
+        changes.push(`• Couleur → \`#${clean.toLowerCase()}\``);
       }
 
-      if (tag) {
-        patch.tag = tag.trim();
-        changes.push(`• Tag → \`${tag.trim()}\``);
-      }
-
-      if (clubName) {
-        patch.clubName = clubName.trim();
-        changes.push(`• Nom du club → **${clubName.trim()}**`);
-      }
+      if (tag) { patch.tag = tag.trim(); changes.push(`• Tag → \`${tag.trim()}\``); }
+      if (clubName) { patch.clubName = clubName.trim(); changes.push(`• Club → **${clubName.trim()}**`); }
 
       updateGuildConfig(guild.id, patch);
 
       return interaction.reply({
-        content: [
-          '✅ Configuration du **style** mise à jour :',
-          ...changes
-        ].join('\n'),
+        content: ['✅ Style mis à jour :', ...changes].join('\n'),
         ephemeral: true
       });
     }
 
-    // -----------------------------------------------------------------------
     // /config dispos
-    // -----------------------------------------------------------------------
     if (sub === 'dispos') {
-      const jour = interaction.options.getString('jour', true); // lundi ... dimanche
+      const jour = interaction.options.getString('jour', true);
       const messageId = interaction.options.getString('message_id', true);
 
       const existing = cfg.dispoMessages || {};
-      const newDispoMessages = {
-        ...existing,
-        [jour]: messageId
-      };
-
-      updateGuildConfig(guild.id, { dispoMessages: newDispoMessages });
+      updateGuildConfig(guild.id, { dispoMessages: { ...existing, [jour]: messageId } });
 
       return interaction.reply({
-        content: `✅ Message de disponibilités configuré pour **${jour.toUpperCase()}** → \`${messageId}\``,
+        content: `✅ Dispo **${jour.toUpperCase()}** → \`${messageId}\``,
         ephemeral: true
       });
     }
