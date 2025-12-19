@@ -2,6 +2,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 const {
   Client,
@@ -23,6 +24,36 @@ ensureSnapshotDirectory();
 const IG_GUILD_ID  = '1392639720491581551';
 const DOR_GUILD_ID = '1410246320324870217';
 const TARGET_GUILD_IDS = new Set([IG_GUILD_ID, DOR_GUILD_ID]);
+
+/* ============================================================
+   HEALTHCHECK (Railway Web Service)
+   - Si PORT existe, on ouvre un mini serveur HTTP "OK"
+   - Si PORT n'existe pas, on ne fait rien (worker / autre)
+============================================================ */
+let healthServer = null;
+
+function startHealthcheck() {
+  const port = process.env.PORT;
+  if (!port) {
+    console.log('ℹ️ [HEALTH] PORT absent → pas de serveur HTTP (OK si non requis).');
+    return;
+  }
+  if (healthServer) return;
+
+  healthServer = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('OK');
+  });
+
+  healthServer.listen(Number(port), '0.0.0.0', () => {
+    console.log(`🌐 [HEALTH] OK sur :${port}`);
+  });
+
+  healthServer.on('error', (e) => {
+    console.error('❌ [HEALTH] Erreur serveur:', e);
+  });
+}
+startHealthcheck();
 
 /* ============================================================
    CLIENT DISCORD
@@ -63,7 +94,7 @@ client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
   console.log(`🟢 ${BOT_NAME} prêt (IGA + DOR).`);
 
-  // Presence (optionnel mais léger)
+  // Presence (léger)
   const activities = [
     'Dispos 12h/17h',
     'Snapshots 17h',
@@ -81,7 +112,7 @@ client.once('ready', async () => {
   updatePresence();
   setInterval(updatePresence, 300000);
 
-  // ✅ Scheduler (le filtrage IGA/DOR se fera dedans au besoin)
+  // ✅ Scheduler
   initScheduler(client, { targetGuildIds: TARGET_GUILD_IDS });
 });
 
@@ -118,14 +149,16 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 /* ============================================================
-   LOG ERREURS
+   LOG ERREURS + ARRÊT PROPRE
 ============================================================ */
 process.on('unhandledRejection', (e) => console.error('🚨 unhandledRejection:', e));
 process.on('uncaughtException', (e) => console.error('💥 uncaughtException:', e));
 
 process.on('SIGTERM', async () => {
   console.log('🛑 SIGTERM reçu — fermeture propre...');
+  try { if (healthServer) healthServer.close(); } catch {}
   try { await client.destroy(); } catch {}
+  // pas de process.exit() forcé
 });
 
 /* ============================================================
