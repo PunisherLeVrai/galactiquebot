@@ -2,6 +2,8 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const http = require('http'); // ✅ Healthcheck Railway
+
 const {
   Client,
   Collection,
@@ -50,6 +52,26 @@ function getEmbedColorForGuild(guildId) {
 }
 
 /* ============================================================
+   ✅ RAILWAY HEALTHCHECK (évite SIGTERM / restart)
+   Railway “web service” attend souvent un PORT ouvert.
+============================================================ */
+let healthServer = null;
+
+function startHealthcheckServer() {
+  const port = process.env.PORT;
+  if (!port) return;
+
+  healthServer = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('OK');
+  });
+
+  healthServer.listen(port, () => {
+    console.log(`🌐 [HEALTH] Serveur healthcheck en écoute sur le port ${port}`);
+  });
+}
+
+/* ============================================================
    COMPTEURS DE MEMBRES
 ============================================================ */
 
@@ -66,7 +88,7 @@ async function updateMemberCounter(guildId) {
     const cfg = getGuildConfig(guildId) || {};
     const counterId = cfg.memberCounterChannelId;
 
-    if (!counterId) {
+    if (!counterId || counterId === '0') {
       console.warn(`⚠️ [COUNTER] memberCounterChannelId manquant pour ${guildId}`);
       return;
     }
@@ -127,6 +149,9 @@ if (fs.existsSync(commandsPath)) {
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
 
+  // ✅ Healthcheck une fois le bot prêt (Railway)
+  startHealthcheckServer();
+
   // Rotation automatique du "Regarde ..."
   const activities = [
     'Surveillance du club',
@@ -182,7 +207,7 @@ client.once('ready', async () => {
   await updateMemberCounter(SUPPORT_GUILD_ID);
   await updateMemberCounter(IG_GUILD_ID);
 
-  // 🕒 Lancement du scheduler automatique (corrigé anti-bug 22h)
+  // 🕒 Lancement du scheduler automatique
   initScheduler(client);
 });
 
@@ -195,7 +220,7 @@ async function sendWelcomeInterGalactique(member) {
     const cfg = getGuildConfig(member.guild.id) || {};
     const welcomeId = cfg.welcomeChannelId;
 
-    if (!welcomeId) {
+    if (!welcomeId || welcomeId === '0') {
       console.warn('⚠️ [WELCOME IG] welcomeChannelId manquant dans servers.json');
       return;
     }
@@ -240,7 +265,7 @@ async function sendWelcomeSupport(member) {
     const supportChannelId = cfg.supportChannelId;
     const helpRoleId = cfg.helpRoleId;
 
-    if (!welcomeId) {
+    if (!welcomeId || welcomeId === '0') {
       console.warn('⚠️ [WELCOME SUPPORT] welcomeChannelId manquant dans servers.json');
       return;
     }
@@ -287,7 +312,7 @@ client.on('guildMemberAdd', async member => {
       const cfg = getGuildConfig(member.guild.id) || {};
       const recrueId = cfg.roles?.recrue;
 
-      if (recrueId) {
+      if (recrueId && recrueId !== '0') {
         const role = member.guild.roles.cache.get(recrueId);
         if (role) {
           await member.roles.add(role, 'Arrivée serveur — rôle recrue automatique');
@@ -355,6 +380,17 @@ process.on('unhandledRejection', (error) =>
 process.on('uncaughtException', (error) =>
   console.error('💥 Exception :', error)
 );
+
+/* ============================================================
+   ✅ ARRÊT PROPRE (Railway envoie souvent SIGTERM)
+============================================================ */
+
+process.on('SIGTERM', async () => {
+  console.log('🛑 SIGTERM reçu — fermeture propre...');
+  try { if (healthServer) healthServer.close(); } catch {}
+  try { await client.destroy(); } catch {}
+  process.exit(0);
+});
 
 /* ============================================================
    LOGIN
