@@ -18,10 +18,8 @@ const { ensureSnapshotDirectory } = require('./utils/paths'); // 📁 snapshots 
 ensureSnapshotDirectory();
 
 // --- IDs fixes : uniquement les serveurs ---
-// INTER GALACTIQUE
-const IG_GUILD_ID = '1392639720491581551';
-// GalactiqueBot Support
-const SUPPORT_GUILD_ID = '1444745566004449506';
+const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
+const SUPPORT_GUILD_ID = '1444745566004449506';         // GalactiqueBot Support
 
 // --- Initialisation du client Discord ---
 const client = new Client({
@@ -52,31 +50,27 @@ function getEmbedColorForGuild(guildId) {
 }
 
 /* ============================================================
-   COMPTEURS DE MEMBRES (STYLE ANCIEN)
+   COMPTEURS DE MEMBRES
 ============================================================ */
 
-function buildSupportCounterName(count) {
-  return `GalactiqueBot — ${count} membres`;
+function buildCounterName(clubName, count, fallback = 'Serveur') {
+  const name = clubName || fallback;
+  return `${name} — ${count} membres`;
 }
 
-function buildInterCounterName(count) {
-  return `INTER GALACTIQUE — ${count} membres`;
-}
-
-async function updateSupportMemberCounter() {
+async function updateMemberCounter(guildId) {
   try {
-    const guild = client.guilds.cache.get(SUPPORT_GUILD_ID);
+    const guild = client.guilds.cache.get(guildId);
     if (!guild) return;
 
-    const cfg = getGuildConfig(SUPPORT_GUILD_ID) || {};
+    const cfg = getGuildConfig(guildId) || {};
     const counterId = cfg.memberCounterChannelId;
 
-    if (!counterId || counterId === '0') {
-      console.warn('⚠️ [COUNTER] memberCounterChannelId manquant pour le serveur Support.');
+    if (!counterId) {
+      console.warn(`⚠️ [COUNTER] memberCounterChannelId manquant pour ${guildId}`);
       return;
     }
 
-    // Comme l’ancien code : guild.memberCount (inclut bots) => cohérent avec tes logs
     await guild.members.fetch().catch(() => {});
     const count = guild.memberCount;
 
@@ -85,53 +79,19 @@ async function updateSupportMemberCounter() {
       await client.channels.fetch(counterId).catch(() => null);
 
     if (!channel) {
-      console.warn(`⚠️ [COUNTER] Salon compteur introuvable (Support) : ${counterId}`);
+      console.warn(`⚠️ [COUNTER] Salon compteur introuvable (${guildId}) : ${counterId}`);
       return;
     }
 
-    const newName = buildSupportCounterName(count);
+    const clubName = cfg.clubName || guild.name;
+    const newName = buildCounterName(clubName, count, guild.name);
+
     if (channel.name === newName) return;
 
-    await channel.setName(newName, 'Mise à jour du compteur de membres GalactiqueBot');
-    console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
+    await channel.setName(newName, 'Mise à jour du compteur de membres');
+    console.log(`🔢 [COUNTER] ${guild.name} → ${newName}`);
   } catch (err) {
-    console.error('❌ Erreur lors de la mise à jour du compteur de membres (Support) :', err);
-  }
-}
-
-async function updateInterMemberCounter() {
-  try {
-    const guild = client.guilds.cache.get(IG_GUILD_ID);
-    if (!guild) return;
-
-    const cfg = getGuildConfig(IG_GUILD_ID) || {};
-    const counterId = cfg.memberCounterChannelId;
-
-    if (!counterId || counterId === '0') {
-      console.warn('⚠️ [COUNTER] memberCounterChannelId manquant pour INTER GALACTIQUE.');
-      return;
-    }
-
-    // Comme l’ancien code : guild.memberCount (inclut bots) => cohérent avec tes logs
-    await guild.members.fetch().catch(() => {});
-    const count = guild.memberCount;
-
-    const channel =
-      guild.channels.cache.get(counterId) ||
-      await client.channels.fetch(counterId).catch(() => null);
-
-    if (!channel) {
-      console.warn(`⚠️ [COUNTER] Salon compteur introuvable (IG) : ${counterId}`);
-      return;
-    }
-
-    const newName = buildInterCounterName(count);
-    if (channel.name === newName) return;
-
-    await channel.setName(newName, 'Mise à jour du compteur de membres INTER GALACTIQUE');
-    console.log(`🔢 Compteur mis à jour sur ${guild.name} : ${newName}`);
-  } catch (err) {
-    console.error('❌ Erreur lors de la mise à jour du compteur de membres (INTER) :', err);
+    console.error('❌ [COUNTER] Erreur mise à jour compteur :', err);
   }
 }
 
@@ -143,7 +103,7 @@ client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
 
 if (fs.existsSync(commandsPath)) {
-  const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+  const commandFiles = fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'));
 
   for (const file of commandFiles) {
     const filePath = path.join(commandsPath, file);
@@ -176,17 +136,14 @@ client.once('ready', async () => {
     'GalactiqueBot en service'
   ];
 
-  let activityIndex = 0;
-
+  let i = 0;
   function updatePresence() {
-    const name = activities[activityIndex];
-
+    const name = activities[i];
     client.user.setPresence({
       activities: [{ name, type: ActivityType.Watching }],
       status: 'online'
     });
-
-    activityIndex = (activityIndex + 1) % activities.length;
+    i = (i + 1) % activities.length;
   }
 
   updatePresence();
@@ -199,10 +156,11 @@ client.once('ready', async () => {
     .setFooter({ text: `${BOT_NAME} ⚡ Système automatisé` })
     .setTimestamp();
 
-  // Envoi d'un log de démarrage sur chaque serveur configuré
+  // Envoi log démarrage sur chaque serveur configuré
   for (const guild of client.guilds.cache.values()) {
     const gConfig = getGuildConfig(guild.id) || {};
     const logChannelId = gConfig.logChannelId;
+
     if (!logChannelId || logChannelId === '0') continue;
 
     try {
@@ -211,7 +169,7 @@ client.once('ready', async () => {
 
       const embed = EmbedBuilder.from(baseStartEmbed)
         .setColor(getEmbedColorForGuild(guild.id))
-        .setDescription(`✅ Bot opérationnel sur **${guild.name}**`);
+        .setDescription(`✅ Bot opérationnel sur **${gConfig.clubName || guild.name}**`);
 
       await logChannel.send({ embeds: [embed] });
       console.log(`📨 Log de démarrage envoyé sur ${guild.name}`);
@@ -220,12 +178,11 @@ client.once('ready', async () => {
     }
   }
 
-  // Compteurs au démarrage (style ancien)
-  await updateSupportMemberCounter();
-  await updateInterMemberCounter();
+  // Compteurs
+  await updateMemberCounter(SUPPORT_GUILD_ID);
+  await updateMemberCounter(IG_GUILD_ID);
 
-  // 🕒 Lancement du scheduler automatique
-  // (doit être ici, après ready, sinon guild/cache pas OK)
+  // 🕒 Lancement du scheduler automatique (corrigé anti-bug 22h)
   initScheduler(client);
 });
 
@@ -238,7 +195,7 @@ async function sendWelcomeInterGalactique(member) {
     const cfg = getGuildConfig(member.guild.id) || {};
     const welcomeId = cfg.welcomeChannelId;
 
-    if (!welcomeId || welcomeId === '0') {
+    if (!welcomeId) {
       console.warn('⚠️ [WELCOME IG] welcomeChannelId manquant dans servers.json');
       return;
     }
@@ -249,36 +206,28 @@ async function sendWelcomeInterGalactique(member) {
     const total = member.guild.memberCount;
 
     const description =
-      `👋 Tu viens de rejoindre la **structure XIG INTER GALACTIQUE** ${member}.\n` +
+      `👋 Tu viens de rejoindre **${cfg.clubName || 'XIG INTER GALACTIQUE'}** ${member}.\n` +
       `Nous sommes désormais **${total}** membres. 🎉\n\n` +
       `### 📌 1) LIRE LE RÈGLEMENT\n` +
-      `Prends connaissance de l’ensemble des obligations du serveur :\n` +
       `👉 <#1393771863821389976>\n` +
-      `Aucune excuse ne sera acceptée en cas de non-respect.\n\n` +
+      `Aucune excuse ne sera acceptée.\n\n` +
       `### 🙋 2) FAIRE TA PRÉSENTATION\n` +
-      `Présente-toi brièvement, indique ton **poste préféré, âge et expérience** :\n` +
       `👉 <#1447255582485643547>\n\n` +
       `### 📅 3) TENIR TES DISPONIBILITÉS À JOUR\n` +
-      `Chaque jour, indique dans ce salon si tu es :\n` +
-      `**Disponible (✅) — Indisponible (❌)**\n` +
+      `Réagis chaque jour ✅ / ❌ dans :\n` +
       `👉 <#1429059902852173936>\n` +
-      `L’implication quotidienne est obligatoire pour espérer conserver une place dans l’effectif.\n\n` +
-      `🛡️ **XIG INTER GALACTIQUE — Discipline, engagement, performance**`;
+      `L’implication quotidienne est obligatoire.\n\n` +
+      `🛡️ **Discipline • Engagement • Performance**`;
 
     const embed = new EmbedBuilder()
       .setColor(getEmbedColorForGuild(member.guild.id))
-      .setAuthor({ name: 'Nouvelle arrivée — XIG INTER GALACTIQUE' })
+      .setAuthor({ name: `Nouvelle arrivée — ${cfg.clubName || 'XIG INTER GALACTIQUE'}` })
       .setDescription(description)
-      .setFooter({ text: 'INTER GALACTIQUE — GalactiqueBot' })
+      .setFooter({ text: `${cfg.clubName || 'XIG INTER GALACTIQUE'} — GalactiqueBot` })
       .setTimestamp();
 
-    await channel.send({
-      content: `${member}`,
-      embeds: [embed],
-      allowedMentions: { users: [member.id], parse: [] }
-    });
-
-    console.log(`🙌 Message de bienvenue envoyé (INTER GALACTIQUE) pour ${member.id}`);
+    await channel.send({ content: `${member}`, embeds: [embed] });
+    console.log(`🙌 [WELCOME IG] envoyé pour ${member.id}`);
   } catch (err) {
     console.error('❌ Erreur welcome INTER GALACTIQUE :', err);
   }
@@ -291,7 +240,7 @@ async function sendWelcomeSupport(member) {
     const supportChannelId = cfg.supportChannelId;
     const helpRoleId = cfg.helpRoleId;
 
-    if (!welcomeId || welcomeId === '0') {
+    if (!welcomeId) {
       console.warn('⚠️ [WELCOME SUPPORT] welcomeChannelId manquant dans servers.json');
       return;
     }
@@ -301,40 +250,24 @@ async function sendWelcomeSupport(member) {
 
     const total = member.guild.memberCount;
 
-    const supportMention = (supportChannelId && supportChannelId !== '0')
-      ? `<#${supportChannelId}>`
-      : '`#support`';
-
-    const helpRoleMention = (helpRoleId && helpRoleId !== '0')
-      ? `<@&${helpRoleId}>`
-      : '`@Aide`';
+    const supportMention = supportChannelId ? `<#${supportChannelId}>` : '`#support`';
+    const helpRoleMention = helpRoleId ? `<@&${helpRoleId}>` : '`@Aide`';
 
     const embed = new EmbedBuilder()
       .setColor(getEmbedColorForGuild(member.guild.id))
       .setAuthor({ name: 'Ho ! Un nouveau membre !' })
       .setDescription(
-        `🐙 Bienvenue sur **GalactiqueBot Support** ${member} !\n` +
+        `🐙 Bienvenue sur **${cfg.clubName || 'GalactiqueBot Support'}** ${member} !\n` +
         `Nous sommes désormais **${total}** membres. 🎉\n\n` +
-        `» Tu peux demander de l'aide à notre équipe dans le salon ${supportMention} ` +
-        `en créant un nouveau message pour ton problème.\n` +
-        `Pense aussi à mentionner le rôle ${helpRoleMention} ` +
-        `afin que ta demande soit traitée plus rapidement.\n\n` +
-        `If you speak English, you can also ask your questions in ${supportMention} — the team will help you.`
+        `» Demande de l’aide dans ${supportMention}.\n` +
+        `Pense à mentionner ${helpRoleMention} pour accélérer la prise en charge.\n\n` +
+        `If you speak English, you can also ask in ${supportMention}.`
       )
-      .setFooter({ text: 'GalactiqueBot Support' })
+      .setFooter({ text: cfg.clubName || 'GalactiqueBot Support' })
       .setTimestamp();
 
-    await channel.send({
-      content: `${member}`,
-      embeds: [embed],
-      allowedMentions: {
-        users: [member.id],
-        roles: (helpRoleId && helpRoleId !== '0') ? [helpRoleId] : [],
-        parse: []
-      }
-    });
-
-    console.log(`🙌 Message de bienvenue envoyé (Support) pour ${member.id}`);
+    await channel.send({ content: `${member}`, embeds: [embed] });
+    console.log(`🙌 [WELCOME SUPPORT] envoyé pour ${member.id}`);
   } catch (err) {
     console.error('❌ Erreur welcome SUPPORT :', err);
   }
@@ -349,43 +282,41 @@ client.on('guildMemberAdd', async member => {
   if (member.guild.id === IG_GUILD_ID) {
     await sendWelcomeInterGalactique(member);
 
-    // Ajout automatique du rôle "recrue" si configuré dans servers.json
+    // Ajout automatique du rôle "recrue" si configuré
     try {
       const cfg = getGuildConfig(member.guild.id) || {};
       const recrueId = cfg.roles?.recrue;
 
-      if (recrueId && recrueId !== '0') {
+      if (recrueId) {
         const role = member.guild.roles.cache.get(recrueId);
         if (role) {
-          await member.roles.add(role, 'Arrivée sur le serveur — rôle recrue automatique');
+          await member.roles.add(role, 'Arrivée serveur — rôle recrue automatique');
           console.log(`🎫 Rôle "recrue" ajouté à ${member.user.tag}`);
         } else {
-          console.warn(`⚠️ Rôle "recrue" introuvable pour le guild ${member.guild.id}`);
+          console.warn(`⚠️ Rôle "recrue" introuvable pour ${member.guild.id}`);
         }
       }
     } catch (err) {
       console.error('❌ Erreur ajout rôle recrue :', err);
     }
 
-    // Mise à jour compteur membres IG
-    await updateInterMemberCounter();
+    await updateMemberCounter(IG_GUILD_ID);
     return;
   }
 
-  // 🔹 Serveur SUPPORT
+  // 🔹 SUPPORT
   if (member.guild.id === SUPPORT_GUILD_ID) {
     await sendWelcomeSupport(member);
-    await updateSupportMemberCounter();
+    await updateMemberCounter(SUPPORT_GUILD_ID);
   }
 });
 
 client.on('guildMemberRemove', async member => {
   if (member.guild.id === SUPPORT_GUILD_ID) {
-    await updateSupportMemberCounter();
+    await updateMemberCounter(SUPPORT_GUILD_ID);
   }
-
   if (member.guild.id === IG_GUILD_ID) {
-    await updateInterMemberCounter();
+    await updateMemberCounter(IG_GUILD_ID);
   }
 });
 
@@ -418,10 +349,10 @@ client.on('interactionCreate', async interaction => {
    LOG ERREURS GLOBALES
 ============================================================ */
 
-process.on('unhandledRejection', error =>
+process.on('unhandledRejection', (error) =>
   console.error('🚨 Promesse rejetée :', error)
 );
-process.on('uncaughtException', error =>
+process.on('uncaughtException', (error) =>
   console.error('💥 Exception :', error)
 );
 
