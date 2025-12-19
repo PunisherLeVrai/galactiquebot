@@ -15,10 +15,23 @@ const { SNAPSHOT_DIR } = require('./paths');
 const DEFAULT_COLOR = 0xff4db8;
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
 
+/**
+ * ✅ AUTOMATION
+ * - Rappel 12h ACTIVÉ (enableNoonReminder: true)
+ * - Anti-bug 22h : tickRunning + décalage week report
+ */
 const AUTOMATION = {
   timezone: 'Europe/Paris',
+
+  // ✅ ON NE DÉSACTIVE PAS : rappel public 12h
+  enableNoonReminder: true,
+
+  // Mentions dans le rappel 12h (si true -> ping les concernés)
   mentionInReminder: true,
+
+  // Mentions dans les rapports embeds (si false -> aucun ping)
   mentionInReports: false,
+
   clearReactionsAt17: true,
   sendCloseMessageAt17: true
 };
@@ -40,6 +53,7 @@ function getEmbedColorFromConfig(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
+// Anti-mentions (sécurité)
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
@@ -89,11 +103,10 @@ function getParisParts() {
 }
 
 function idsLine(colOrArray) {
-  const arr = Array.isArray(colOrArray)
-    ? colOrArray
-    : [...colOrArray.values()];
+  const arr = Array.isArray(colOrArray) ? colOrArray : [...colOrArray.values()];
   if (!arr.length) return '_Aucun_';
 
+  // GuildMember[]
   if (arr[0] && arr[0].id && arr[0].user) {
     return arr
       .slice()
@@ -102,6 +115,7 @@ function idsLine(colOrArray) {
       .join(' - ');
   }
 
+  // string[]
   return arr.map(id => `<@${id}>`).join(' - ');
 }
 
@@ -135,7 +149,7 @@ function getAllGuildIds(client) {
   return [...client.guilds.cache.keys()];
 }
 
-function getEligibleDayKey(jour) {
+function isEligibleDay(jour) {
   return ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'].includes(jour);
 }
 
@@ -396,7 +410,10 @@ async function runNoonReminderForGuild(client, guildId, jour) {
   const ids = absentsArr.map(m => m.id);
 
   if (!ids.length) {
-    await dispoChannel.send({ content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`, allowedMentions: { parse: [] } });
+    await dispoChannel.send({
+      content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`,
+      allowedMentions: { parse: [] }
+    });
     return;
   }
 
@@ -472,6 +489,7 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
   // Snapshot
   try {
     if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+
     const snapshot = {
       type: 'dispos',
       guildId: guild.id,
@@ -485,6 +503,7 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
       absents: [...no],
       eligibles: [...eligibles.keys()]
     };
+
     const snapPath = path.join(SNAPSHOT_DIR, `dispos-${jour}-${isoDate}.json`);
     fs.writeFileSync(snapPath, JSON.stringify(snapshot, null, 2), 'utf8');
   } catch (e) {
@@ -713,7 +732,7 @@ async function autoVerifierCompoFinalForGuild(client, guildId, label = '20h') {
 }
 
 /* ============================================================
-   COMPO SEMAINE (par snapshots) — MULTI (si compo activée)
+   COMPO SEMAINE (snapshots) — MULTI (si compo activée)
 ============================================================ */
 
 async function autoCompoWeekReportForGuild(client, guildId) {
@@ -779,7 +798,9 @@ async function autoCompoWeekReportForGuild(client, guildId) {
     }
   }
 
-  const entries = [...misses.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const entries = [...misses.entries()]
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
 
   const headerLines = [
     '📅 **Vérification des compositions (auto / snapshots)**',
@@ -867,7 +888,6 @@ async function autoWeekDispoReportForGuild(client, guildId) {
   await guild.members.fetch().catch(() => {});
 
   const misses = new Map();
-  const daysCount = new Map();
   let used = 0;
   let skipped = 0;
 
@@ -879,12 +899,13 @@ async function autoWeekDispoReportForGuild(client, guildId) {
 
     used++;
     for (const id of eligibles) {
-      daysCount.set(id, (daysCount.get(id) || 0) + 1);
       if (!reacted.has(id)) misses.set(id, (misses.get(id) || 0) + 1);
     }
   }
 
-  const entries = [...misses.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const entries = [...misses.entries()]
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
 
   const headerLines = [
     '📅 **Analyse disponibilités (Snapshots auto)**',
@@ -925,7 +946,7 @@ async function autoWeekDispoReportForGuild(client, guildId) {
 }
 
 /* ============================================================
-   SYNC PSEUDOS (config nickname.*) — MULTI (si configuré)
+   SYNC PSEUDOS (nickname.*) — MULTI
 ============================================================ */
 
 const MAX_LEN = 32;
@@ -1041,6 +1062,7 @@ function initScheduler(client) {
     week: null
   };
 
+  // ✅ anti-overlap (évite que ça “casse” quand une tâche dure trop longtemps)
   let tickRunning = false;
 
   setInterval(async () => {
@@ -1049,7 +1071,7 @@ function initScheduler(client) {
 
     try {
       const { hour, minute, isoDate: dateKey, jour } = getParisParts();
-      if (!getEligibleDayKey(jour)) return;
+      if (!isEligibleDay(jour)) return;
 
       const guildIds = getAllGuildIds(client);
 
@@ -1059,9 +1081,8 @@ function initScheduler(client) {
         if (last.panel !== key) {
           last.panel = key;
           for (const gid of guildIds) {
-            try { await sendDispoPanelForGuild(client, gid); } catch (e) {
-              console.error(`❌ [AUTO] panneau (${gid})`, e);
-            }
+            try { await sendDispoPanelForGuild(client, gid); }
+            catch (e) { console.error(`❌ [AUTO] panneau (${gid})`, e); }
           }
         }
       }
@@ -1072,10 +1093,16 @@ function initScheduler(client) {
         if (last.noon !== key) {
           last.noon = key;
           for (const gid of guildIds) {
-            try { await runNoonReminderForGuild(client, gid, jour); } catch (e) {
+            try {
+              if (AUTOMATION.enableNoonReminder) {
+                await runNoonReminderForGuild(client, gid, jour);
+              }
+            } catch (e) {
               console.error(`❌ [AUTO] rappel 12h (${gid})`, e);
             }
-            try { await sendDetailedReportForGuild(client, gid, jour, '12h'); } catch (e) {
+            try {
+              await sendDetailedReportForGuild(client, gid, jour, '12h');
+            } catch (e) {
               console.error(`❌ [AUTO] rapport 12h (${gid})`, e);
             }
           }
@@ -1088,12 +1115,11 @@ function initScheduler(client) {
         if (last.close17 !== key) {
           last.close17 = key;
           for (const gid of guildIds) {
-            try { await sendDetailedReportForGuild(client, gid, jour, '17h'); } catch (e) {
-              console.error(`❌ [AUTO] rapport 17h (${gid})`, e);
-            }
-            try { await closeDisposAt17ForGuild(client, gid, jour, dateKey); } catch (e) {
-              console.error(`❌ [AUTO] close 17h (${gid})`, e);
-            }
+            try { await sendDetailedReportForGuild(client, gid, jour, '17h'); }
+            catch (e) { console.error(`❌ [AUTO] rapport 17h (${gid})`, e); }
+
+            try { await closeDisposAt17ForGuild(client, gid, jour, dateKey); }
+            catch (e) { console.error(`❌ [AUTO] close 17h (${gid})`, e); }
           }
         }
       }
@@ -1104,9 +1130,8 @@ function initScheduler(client) {
         if (last.compo18 !== key) {
           last.compo18 = key;
           for (const gid of guildIds) {
-            try { await autoVerifierCompoReminderForGuild(client, gid, '18h'); } catch (e) {
-              console.error(`❌ [AUTO] compo 18h (${gid})`, e);
-            }
+            try { await autoVerifierCompoReminderForGuild(client, gid, '18h'); }
+            catch (e) { console.error(`❌ [AUTO] compo 18h (${gid})`, e); }
           }
         }
       }
@@ -1116,9 +1141,8 @@ function initScheduler(client) {
         if (last.compo19 !== key) {
           last.compo19 = key;
           for (const gid of guildIds) {
-            try { await autoVerifierCompoReminderForGuild(client, gid, '19h'); } catch (e) {
-              console.error(`❌ [AUTO] compo 19h (${gid})`, e);
-            }
+            try { await autoVerifierCompoReminderForGuild(client, gid, '19h'); }
+            catch (e) { console.error(`❌ [AUTO] compo 19h (${gid})`, e); }
           }
         }
       }
@@ -1128,9 +1152,8 @@ function initScheduler(client) {
         if (last.compo1930 !== key) {
           last.compo1930 = key;
           for (const gid of guildIds) {
-            try { await autoVerifierCompoReminderForGuild(client, gid, '19h30'); } catch (e) {
-              console.error(`❌ [AUTO] compo 19h30 (${gid})`, e);
-            }
+            try { await autoVerifierCompoReminderForGuild(client, gid, '19h30'); }
+            catch (e) { console.error(`❌ [AUTO] compo 19h30 (${gid})`, e); }
           }
         }
       }
@@ -1140,41 +1163,38 @@ function initScheduler(client) {
         if (last.compo20 !== key) {
           last.compo20 = key;
           for (const gid of guildIds) {
-            try { await autoVerifierCompoFinalForGuild(client, gid, '20h'); } catch (e) {
-              console.error(`❌ [AUTO] compo 20h (${gid})`, e);
-            }
+            try { await autoVerifierCompoFinalForGuild(client, gid, '20h'); }
+            catch (e) { console.error(`❌ [AUTO] compo 20h (${gid})`, e); }
           }
         }
       }
 
-      // 22h → semaine (MER/DIM) décalé (22:04-22:06)
+      // 22h → semaine (MER/DIM) DÉCALÉ pour éviter conflit avec panneau 22h
+      // ✅ fenêtre 22:04 - 22:06
       if (hour === 22 && inWindow(minute, 4, 6)) {
         const key = `${dateKey}-22-week`;
         if (last.week !== key) {
           last.week = key;
-
           if (jour === 'mercredi' || jour === 'dimanche') {
             for (const gid of guildIds) {
-              try { await autoCompoWeekReportForGuild(client, gid); } catch (e) {
-                console.error(`❌ [AUTO] compo week (${gid})`, e);
-              }
-              try { await autoWeekDispoReportForGuild(client, gid); } catch (e) {
-                console.error(`❌ [AUTO] dispo week (${gid})`, e);
-              }
+              try { await autoCompoWeekReportForGuild(client, gid); }
+              catch (e) { console.error(`❌ [AUTO] compo week (${gid})`, e); }
+
+              try { await autoWeekDispoReportForGuild(client, gid); }
+              catch (e) { console.error(`❌ [AUTO] dispo week (${gid})`, e); }
             }
           }
         }
       }
 
-      // Sync pseudos (multi) — toutes les heures à H:10
+      // Sync pseudos — toutes les heures à H:10
       if (minute === 10) {
         const key = `${dateKey}-${hour}`;
         if (last.nick !== key) {
           last.nick = key;
           for (const gid of guildIds) {
-            try { await autoSyncNicknamesForGuild(client, gid); } catch (e) {
-              console.error(`❌ [AUTO] sync pseudos (${gid})`, e);
-            }
+            try { await autoSyncNicknamesForGuild(client, gid); }
+            catch (e) { console.error(`❌ [AUTO] sync pseudos (${gid})`, e); }
           }
         }
       }
