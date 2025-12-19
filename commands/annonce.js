@@ -11,7 +11,7 @@ const {
 
 const { getConfigFromInteraction, getGlobalConfig } = require('../utils/config');
 
-const DEFAULT_COLOR = 0xff4db8; // rose par défaut
+const DEFAULT_COLOR = 0xff4db8;
 
 /* ---------- Couleur par serveur ---------- */
 function getEmbedColorFromCfg(guildCfg) {
@@ -24,21 +24,34 @@ function getEmbedColorFromCfg(guildCfg) {
 }
 
 /* ---------- Helpers sécurité / format ---------- */
-
-// Nettoie le texte (pas de massive mentions dans le contenu libre)
 function sanitize(text) {
   return String(text || '')
-    .replace(/^["“”]|["“”]$/g, '') // enlève guillemets d'encadrement
+    .replace(/^["“”]|["“”]$/g, '')
     .replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]')
     .trim();
 }
 
-// Construit la mention d’en-tête (facultative)
 function buildMention(mention, role) {
   if (mention === 'everyone') return '@everyone';
   if (mention === 'here') return '@here';
   if (mention === 'role' && role) return `<@&${role.id}>`;
   return '';
+}
+
+function getAllowedMentionsForHeader(mentionType, role) {
+  if (mentionType === 'everyone') return { parse: ['everyone'] };
+  if (mentionType === 'here') return { parse: ['here'] }; // ✅ correct pour @here
+  if (mentionType === 'role' && role) return { roles: [role.id] };
+  return { parse: [] };
+}
+
+function isValidHttpUrl(u) {
+  try {
+    const url = new URL(u);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
@@ -47,7 +60,6 @@ module.exports = {
     .setDescription('Annonce interne, communiqué, loge ou signature officielle.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
-    // 🔎 Type d’annonce
     .addStringOption(o =>
       o.setName('type')
         .setDescription('Type d’annonce à envoyer')
@@ -60,14 +72,12 @@ module.exports = {
         )
     )
 
-    // 👤 Joueur (utilisé pour "loge" et "signature")
     .addUserOption(o =>
       o.setName('joueur')
         .setDescription('Joueur concerné (loge ou signature)')
         .setRequired(false)
     )
 
-    // 📝 Contenu principal (interne + communiqué)
     .addStringOption(o =>
       o.setName('contenu')
         .setDescription('Texte principal de l’annonce (interne / communiqué)')
@@ -75,7 +85,6 @@ module.exports = {
         .setMaxLength(1800)
     )
 
-    // 🎯 Cible
     .addChannelOption(o =>
       o.setName('salon')
         .setDescription('Salon où publier le message')
@@ -83,7 +92,6 @@ module.exports = {
         .setRequired(false)
     )
 
-    // 🏷️ Présentation commune (interne + communiqué)
     .addStringOption(o =>
       o.setName('titre')
         .setDescription('Titre personnalisé de l’annonce')
@@ -106,7 +114,6 @@ module.exports = {
         .setRequired(false)
     )
 
-    // 🖼️ Options visuelles (uniquement pour "communique")
     .addAttachmentOption(o =>
       o.setName('image_fichier')
         .setDescription('Image ou bannière à joindre (communiqué)')
@@ -118,7 +125,6 @@ module.exports = {
         .setRequired(false)
     )
 
-    // 🔗 Bouton (uniquement pour "communique")
     .addStringOption(o =>
       o.setName('bouton_libelle')
         .setDescription('Texte du bouton (communiqué)')
@@ -130,14 +136,12 @@ module.exports = {
         .setRequired(false)
     )
 
-    // ✅❌ Réactions (uniquement pour "communique")
     .addBooleanOption(o =>
       o.setName('reactions')
         .setDescription('Ajouter ✅❌ sous le communiqué')
         .setRequired(false)
     )
 
-    // 💬 Options spécifiques pour "signature"
     .addStringOption(o =>
       o.setName('message')
         .setDescription('Texte additionnel ou mot du staff (signature)')
@@ -148,7 +152,7 @@ module.exports = {
         .setDescription('Retirer Essai → ajouter Joueur automatiquement (signature). Défaut : oui')
         .setRequired(false)
     )
-    // 🎭 Rôles gérés pour la signature (choisis à la main à chaque commande)
+    // (optionnel) si tu veux forcer à la main, sinon on prendra servers.json
     .addRoleOption(o =>
       o.setName('role_joueur')
         .setDescription('Rôle Joueur à ajouter (signature)')
@@ -163,7 +167,6 @@ module.exports = {
   async execute(interaction) {
     const type = interaction.options.getString('type', true);
 
-    // Récup config pour couleur + nom de club
     const globalCfg = getGlobalConfig() || {};
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
 
@@ -175,13 +178,10 @@ module.exports = {
 
     const color = getEmbedColorFromCfg(guildCfg);
 
-    // Salon cible : option "salon" OU salon actuel
     const salon = interaction.options.getChannel('salon') || interaction.channel;
-
     if (!salon || !salon.isTextBased()) {
       return interaction.reply({
-        content:
-          '❌ Salon cible introuvable ou non textuel. Utilise cette commande dans un salon texte valide ou précise un salon.',
+        content: '❌ Salon cible introuvable ou non textuel.',
         ephemeral: true
       });
     }
@@ -191,27 +191,22 @@ module.exports = {
 
     if (mentionType === 'role' && !role) {
       return interaction.reply({
-        content:
-          '❌ Tu as choisi **Un rôle** à mentionner, mais aucun `role` n’a été fourni.',
+        content: '❌ Tu as choisi **Un rôle** à mentionner, mais aucun `role` n’a été fourni.',
         ephemeral: true
       });
     }
 
-    await interaction.reply({
-      content: '🛰️ Préparation de l’annonce…',
-      ephemeral: true
-    });
+    await interaction.reply({ content: '🛰️ Préparation de l’annonce…', ephemeral: true });
+
+    const mentionLine = buildMention(mentionType, role);
+    const allowedMentionHeader = getAllowedMentionsForHeader(mentionType, role);
 
     /* =========================
        MODE LOGE OFFICIELLE
        ========================= */
     if (type === 'loge') {
       const user = interaction.options.getUser('joueur');
-      if (!user) {
-        return interaction.editReply(
-          '❌ Tu dois préciser un `joueur` pour le mode **loge**.'
-        );
-      }
+      if (!user) return interaction.editReply('❌ Tu dois préciser un `joueur` pour le mode **loge**.');
 
       const msg = [
         '## 🏟️・**BIENVENUE DANS L’EFFECTIF OFFICIEL**',
@@ -227,7 +222,7 @@ module.exports = {
         '⚠️ **Aucun message privé adressé au staff ne sera pris en compte.**',
         'Toutes les discussions passent **obligatoirement** par ta **loge**.',
         '',
-        '📸 Tu peux également y **envoyer une capture d’écran de ton pro** ou une **photo** si tu souhaites qu’on te crée une **photo de profil personnalisée**.',
+        '📸 Tu peux également y envoyer une capture (pro) / photo pour une **photo de profil personnalisée**.',
         '',
         '---',
         '',
@@ -237,18 +232,11 @@ module.exports = {
       ].join('\n');
 
       try {
-        await salon.send({
-          content: msg,
-          allowedMentions: { users: [user.id], parse: [] }
-        });
-        return interaction.editReply(
-          `✅ Annonce de loge envoyée dans <#${salon.id}>.`
-        );
+        await salon.send({ content: msg, allowedMentions: { users: [user.id], parse: [] } });
+        return interaction.editReply(`✅ Annonce de loge envoyée dans <#${salon.id}>.`);
       } catch (e) {
         console.error('Erreur envoi annonce loge :', e);
-        return interaction.editReply(
-          '❌ Impossible d’envoyer le message (vérifie mes permissions).'
-        );
+        return interaction.editReply('❌ Impossible d’envoyer le message (permissions ?).');
       }
     }
 
@@ -257,17 +245,17 @@ module.exports = {
        ========================= */
     if (type === 'signature') {
       const user = interaction.options.getUser('joueur');
-      if (!user) {
-        return interaction.editReply(
-          '❌ Tu dois préciser un `joueur` pour le mode **signature**.'
-        );
-      }
+      if (!user) return interaction.editReply('❌ Tu dois préciser un `joueur` pour le mode **signature**.');
 
-      const messagePerso = interaction.options.getString('message') || '';
-      const changerRoles =
-        interaction.options.getBoolean('changer_roles') ?? true;
-      const roleJoueur = interaction.options.getRole('role_joueur') || null;
-      const roleEssai = interaction.options.getRole('role_essai') || null;
+      const messagePerso = sanitize(interaction.options.getString('message') || '');
+      const changerRoles = interaction.options.getBoolean('changer_roles') ?? true;
+
+      // ✅ si non fournis dans la commande -> on prend servers.json
+      const roleJoueurFromCmd = interaction.options.getRole('role_joueur') || null;
+      const roleEssaiFromCmd = interaction.options.getRole('role_essai') || null;
+
+      const roleJoueurId = roleJoueurFromCmd?.id || guildCfg?.roles?.joueur || null;
+      const roleEssaiId = roleEssaiFromCmd?.id || guildCfg?.roles?.essai || null;
 
       const embed = new EmbedBuilder()
         .setColor(color)
@@ -283,95 +271,67 @@ module.exports = {
         .setFooter({ text: `${clubName} ⚫ Signature officielle` })
         .setTimestamp();
 
-      // Annonce publique
       try {
-        await salon.send({
-          embeds: [embed],
-          allowedMentions: { users: [user.id] }
-        });
+        await salon.send({ embeds: [embed], allowedMentions: { users: [user.id] } });
       } catch (err) {
         console.error('Erreur envoi annonce signature :', err);
-        return interaction.editReply({
-          content:
-            '❌ Impossible d’envoyer l’annonce (permissions manquantes ?).'
-        });
+        return interaction.editReply('❌ Impossible d’envoyer l’annonce (permissions ?).');
       }
 
-      // Gestion des rôles
       let rolesLog = '—';
-      if (changerRoles) {
-        if (!roleJoueur && !roleEssai) {
-          rolesLog =
-            '⚠️ Aucun rôle fourni (`role_joueur` / `role_essai`), aucun changement effectué.';
+      if (!changerRoles) {
+        rolesLog = '⏭️ Changement de rôles désactivé.';
+        return interaction.editReply(`✅ Signature annoncée dans <#${salon.id}>.\n🧩 Rôles : ${rolesLog}`);
+      }
+
+      if (!roleJoueurId && !roleEssaiId) {
+        rolesLog = '⚠️ Aucun rôle Joueur/Essai défini (ni commande, ni servers.json).';
+        return interaction.editReply(`✅ Signature annoncée dans <#${salon.id}>.\n🧩 Rôles : ${rolesLog}`);
+      }
+
+      try {
+        const membre = await interaction.guild.members.fetch(user.id);
+        const me = interaction.guild.members.me;
+        if (!me?.permissions.has(PermissionFlagsBits.ManageRoles)) {
+          rolesLog = '⚠️ Permission **Gérer les rôles** manquante.';
         } else {
-          try {
-            const membre = await interaction.guild.members.fetch(user.id);
-            const me = interaction.guild.members.me;
+          const roleJoueurObj = roleJoueurId ? interaction.guild.roles.cache.get(roleJoueurId) : null;
+          const roleEssaiObj = roleEssaiId ? interaction.guild.roles.cache.get(roleEssaiId) : null;
 
-            const canManage =
-              me.permissions.has(PermissionFlagsBits.ManageRoles) &&
-              (!roleJoueur || me.roles.highest.position > roleJoueur.position) &&
-              (!roleEssai || me.roles.highest.position > roleEssai.position);
+          const canTouch =
+            (!roleJoueurObj || me.roles.highest.position > roleJoueurObj.position) &&
+            (!roleEssaiObj || me.roles.highest.position > roleEssaiObj.position);
 
-            if (!canManage) {
-              rolesLog =
-                '⚠️ Je ne peux pas modifier ces rôles (hiérarchie ou permission manquante).';
-            } else {
-              if (roleEssai && membre.roles.cache.has(roleEssai.id)) {
-                await membre.roles.remove(
-                  roleEssai,
-                  'Fin de période d’essai — signature officielle'
-                );
-              }
-              if (roleJoueur && !membre.roles.cache.has(roleJoueur.id)) {
-                await membre.roles.add(
-                  roleJoueur,
-                  'Signature officielle — ajout du rôle Joueur'
-                );
-              }
-              rolesLog = '✅ Rôles mis à jour selon les options fournies.';
+          if (!canTouch) {
+            rolesLog = '⚠️ Hiérarchie: mon rôle doit être au-dessus des rôles à gérer.';
+          } else {
+            if (roleEssaiObj && membre.roles.cache.has(roleEssaiObj.id)) {
+              await membre.roles.remove(roleEssaiObj, 'Signature officielle — retrait Essai');
             }
-          } catch (e) {
-            console.error('Erreur mise à jour rôles :', e);
-            rolesLog = '❌ Échec de mise à jour des rôles.';
+            if (roleJoueurObj && !membre.roles.cache.has(roleJoueurObj.id)) {
+              await membre.roles.add(roleJoueurObj, 'Signature officielle — ajout Joueur');
+            }
+            rolesLog = '✅ Rôles mis à jour (Essai → Joueur).';
           }
         }
-      } else {
-        rolesLog = '⏭️ Changement de rôles désactivé pour cette signature.';
+      } catch (e) {
+        console.error('Erreur mise à jour rôles :', e);
+        rolesLog = '❌ Échec de mise à jour des rôles.';
       }
 
-      return interaction.editReply({
-        content: [
-          `✅ Signature annoncée dans <#${salon.id}> pour <@${user.id}>.`,
-          `🧩 Rôles : ${rolesLog}`
-        ].join('\n')
-      });
-    }
-
-    // À partir d’ici : uniquement pour "interne" et "communique"
-    const rawContenu = interaction.options.getString('contenu');
-    if (!rawContenu) {
       return interaction.editReply(
-        '❌ Tu dois renseigner `contenu` pour ce type d’annonce.'
+        `✅ Signature annoncée dans <#${salon.id}> pour <@${user.id}>.\n🧩 Rôles : ${rolesLog}`
       );
     }
+
+    // À partir d’ici : uniquement "interne" et "communique"
+    const rawContenu = interaction.options.getString('contenu');
+    if (!rawContenu) return interaction.editReply('❌ Tu dois renseigner `contenu` pour ce type d’annonce.');
 
     const contenu = sanitize(rawContenu);
     const titre =
       sanitize(interaction.options.getString('titre')) ||
-      (type === 'communique'
-        ? '✦ COMMUNIQUÉ OFFICIEL ✦'
-        : '🗞️ ANNONCE INTERNE');
-
-    const mentionLine = buildMention(mentionType, role);
-    const allowedMentionHeader =
-      mentionType === 'everyone'
-        ? { parse: ['everyone'] }
-        : mentionType === 'here'
-        ? { parse: ['everyone'] } // @here fonctionne aussi avec parse: ['everyone']
-        : mentionType === 'role'
-        ? { roles: [role.id] }
-        : { parse: [] };
+      (type === 'communique' ? '✦ COMMUNIQUÉ OFFICIEL ✦' : '🗞️ ANNONCE INTERNE');
 
     /* ======================
        MODE ANNONCE INTERNE
@@ -385,24 +345,12 @@ module.exports = {
         .setTimestamp();
 
       try {
-        if (mentionLine) {
-          await salon.send({
-            content: mentionLine,
-            allowedMentions: allowedMentionHeader
-          });
-        }
-        await salon.send({
-          embeds: [embed],
-          allowedMentions: { parse: [] }
-        });
-        return interaction.editReply(
-          `✅ Annonce interne publiée dans <#${salon.id}>.`
-        );
+        if (mentionLine) await salon.send({ content: mentionLine, allowedMentions: allowedMentionHeader });
+        await salon.send({ embeds: [embed], allowedMentions: { parse: [] } });
+        return interaction.editReply(`✅ Annonce interne publiée dans <#${salon.id}>.`);
       } catch (e) {
         console.error('Erreur envoi annonce interne :', e);
-        return interaction.editReply(
-          '❌ Impossible de publier l’annonce (vérifie mes permissions).'
-        );
+        return interaction.editReply('❌ Impossible de publier l’annonce (permissions ?).');
       }
     }
 
@@ -412,14 +360,18 @@ module.exports = {
     if (type === 'communique') {
       const imageFile = interaction.options.getAttachment('image_fichier') || null;
       const imageUrl = interaction.options.getString('image_url') || null;
-      const boutonLibelle = interaction.options.getString('bouton_libelle') || null;
+      const boutonLibelle = sanitize(interaction.options.getString('bouton_libelle') || '');
       const boutonURL = interaction.options.getString('bouton_url') || null;
       const addReactions = interaction.options.getBoolean('reactions') ?? false;
 
       if ((boutonLibelle && !boutonURL) || (!boutonLibelle && boutonURL)) {
-        return interaction.editReply(
-          '❌ Pour ajouter un bouton, renseigne **libellé + URL**.'
-        );
+        return interaction.editReply('❌ Pour ajouter un bouton, renseigne **libellé + URL**.');
+      }
+      if (boutonURL && !isValidHttpUrl(boutonURL)) {
+        return interaction.editReply('❌ `bouton_url` doit être une URL http/https valide.');
+      }
+      if (imageUrl && !isValidHttpUrl(imageUrl)) {
+        return interaction.editReply('❌ `image_url` doit être une URL http/https valide.');
       }
 
       const subtitle = `🛰️ Équipe **${clubName}** — *Annonce importante*`;
@@ -436,20 +388,12 @@ module.exports = {
 
       const components = [];
       if (boutonLibelle && boutonURL) {
-        const btn = new ButtonBuilder()
-          .setStyle(ButtonStyle.Link)
-          .setLabel(boutonLibelle)
-          .setURL(boutonURL);
+        const btn = new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(boutonLibelle).setURL(boutonURL);
         components.push(new ActionRowBuilder().addComponents(btn));
       }
 
       try {
-        if (mentionLine) {
-          await salon.send({
-            content: mentionLine,
-            allowedMentions: allowedMentionHeader
-          });
-        }
+        if (mentionLine) await salon.send({ content: mentionLine, allowedMentions: allowedMentionHeader });
 
         const sent = await salon.send({
           embeds: [embed],
@@ -458,26 +402,17 @@ module.exports = {
         });
 
         if (addReactions) {
-          try {
-            await sent.react('✅');
-            await sent.react('❌');
-          } catch {
-            // non bloquant
-          }
+          await sent.react('✅').catch(() => {});
+          await sent.react('❌').catch(() => {});
         }
 
-        return interaction.editReply(
-          `✅ Communiqué publié dans <#${salon.id}>.`
-        );
+        return interaction.editReply(`✅ Communiqué publié dans <#${salon.id}>.`);
       } catch (e) {
         console.error('Erreur envoi communiqué :', e);
-        return interaction.editReply(
-          '❌ Impossible de publier le communiqué (vérifie mes permissions).'
-        );
+        return interaction.editReply('❌ Impossible de publier le communiqué (permissions ?).');
       }
     }
 
-    // Sécurité (ne devrait jamais arriver)
     return interaction.editReply('❌ Type d’annonce inconnu.');
   }
 };
