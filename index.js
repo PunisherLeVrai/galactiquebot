@@ -1,8 +1,7 @@
-// index.js
+// index.js (WORKER Railway — sans HTTP)
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const http = require('http'); // ✅ Healthcheck Railway
 
 const {
   Client,
@@ -13,15 +12,15 @@ const {
 } = require('discord.js');
 
 const { getGlobalConfig, getGuildConfig } = require('./utils/config');
-const { initScheduler } = require('./utils/scheduler'); // 🕒 scheduler
-const { ensureSnapshotDirectory } = require('./utils/paths'); // 📁 snapshots persistants
+const { initScheduler } = require('./utils/scheduler');
+const { ensureSnapshotDirectory } = require('./utils/paths');
 
 // 🔧 S'assurer que le dossier des snapshots (et base data) existe
 ensureSnapshotDirectory();
 
 // --- IDs fixes : uniquement les serveurs ---
-const IG_GUILD_ID = '1392639720491581551';              // INTER GALACTIQUE
-const SUPPORT_GUILD_ID = '1444745566004449506';         // GalactiqueBot Support
+const IG_GUILD_ID = '1392639720491581551';      // INTER GALACTIQUE
+const SUPPORT_GUILD_ID = '1444745566004449506'; // GalactiqueBot Support
 
 // --- Initialisation du client Discord ---
 const client = new Client({
@@ -49,33 +48,6 @@ function getEmbedColorForGuild(guildId) {
   const clean = String(hex).replace(/^0x/i, '').replace('#', '');
   const num = parseInt(clean, 16);
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
-}
-
-/* ============================================================
-   ✅ RAILWAY HEALTHCHECK (évite SIGTERM / restart)
-   Railway “web service” attend souvent un PORT ouvert.
-============================================================ */
-let healthServer = null;
-
-function startHealthcheckServer() {
-  if (healthServer) return;
-
-  // ✅ Toujours un port (Railway met souvent PORT, sinon fallback)
-  const port = Number(process.env.PORT) || 3000;
-
-  healthServer = http.createServer((req, res) => {
-    // petit endpoint simple
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('OK');
-  });
-
-  healthServer.on('error', (err) => {
-    console.error('❌ [HEALTH] Erreur serveur HTTP :', err);
-  });
-
-  healthServer.listen(port, '0.0.0.0', () => {
-    console.log(`🌐 [HEALTH] Serveur healthcheck en écoute sur le port ${port}`);
-  });
 }
 
 /* ============================================================
@@ -155,9 +127,6 @@ if (fs.existsSync(commandsPath)) {
 
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
-
-  // ✅ Healthcheck une fois le bot prêt (Railway)
-  startHealthcheckServer();
 
   // Rotation automatique du "Regarde ..."
   const activities = [
@@ -389,27 +358,14 @@ process.on('uncaughtException', (error) =>
 );
 
 /* ============================================================
-   ✅ ARRÊT PROPRE (Railway envoie souvent SIGTERM)
+   ARRÊT PROPRE (Railway envoie SIGTERM)
 ============================================================ */
 
-async function gracefulShutdown(signal) {
-  console.log(`🛑 ${signal} reçu — fermeture propre...`);
-
-  // Timeout sécurité (Railway tue parfois vite)
-  const forceExit = setTimeout(() => {
-    console.error('⏱️ Fermeture trop longue → exit forcé.');
-    process.exit(1);
-  }, 8000);
-
-  try { if (healthServer) healthServer.close(); } catch {}
+process.on('SIGTERM', async () => {
+  console.log('🛑 SIGTERM reçu — fermeture propre...');
   try { await client.destroy(); } catch {}
-
-  clearTimeout(forceExit);
   process.exit(0);
-}
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+});
 
 /* ============================================================
    LOGIN
