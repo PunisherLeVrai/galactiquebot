@@ -8,6 +8,7 @@ const {
   ButtonStyle,
   PermissionFlagsBits
 } = require('discord.js');
+
 const { getGuildConfig } = require('./config');
 const { SNAPSHOT_DIR } = require('./paths'); // 📁 snapshots persistants
 
@@ -20,7 +21,7 @@ const IG_GUILD_ID = '1392639720491581551';
 const RAPPORTS_DIR = path.join(__dirname, '../rapports');
 
 // 🔧 Channels fixes pour IG
-const COMPO_CHANNEL_ID = '1393774911557861407';     // Salon compositions
+const COMPO_CHANNEL_ID = '1393774911557861407';      // Salon compositions
 const RAPPORT_CHANNEL_ID_IG = '1446471718943326259'; // Salon rapports détaillés
 
 // ⚙️ Options d’automatisation pour IG
@@ -59,7 +60,8 @@ function getParisParts() {
     hour: '2-digit',
     minute: '2-digit',
     weekday: 'long',
-    hour12: false
+    hour12: false,
+    hourCycle: 'h23' // évite le "24" possible dans certains contextes
   });
 
   const parts = fmt.formatToParts(new Date());
@@ -68,14 +70,17 @@ function getParisParts() {
   const year = Number(get('year'));
   const month = Number(get('month'));
   const day = Number(get('day'));
-  const hour = Number(get('hour'));
+
+  // 👇 sécurité si Intl renvoie "24"
+  let hour = Number(get('hour'));
+  if (hour === 24) hour = 0;
+
   const minute = Number(get('minute'));
   const weekday = (get('weekday') || '').toLowerCase();
 
   const isoDate =
     `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
-  // On normalise le nom du jour pour coller aux clés de config
   const mapJour = {
     'dimanche': 'dimanche',
     'lundi': 'lundi',
@@ -213,9 +218,7 @@ async function fetchDispoDataForDay(guild, jour) {
   const roleEssaiId = rolesCfg.essai || null;
 
   if (!roleJoueurId && !roleEssaiId) {
-    console.warn(
-      `⚠️ [AUTO] Aucun rôle joueur/essai configuré pour ${guild.id}`
-    );
+    console.warn(`⚠️ [AUTO] Aucun rôle joueur/essai configuré pour ${guild.id}`);
     return null;
   }
 
@@ -355,71 +358,22 @@ async function sendDispoPanelIG(client) {
   const rows = [];
 
   const row1 = new ActionRowBuilder();
-  if (urls.lundi) {
-    row1.addComponents(
-      new ButtonBuilder()
-        .setLabel('LUNDI')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.lundi)
-    );
-  }
-  if (urls.mardi) {
-    row1.addComponents(
-      new ButtonBuilder()
-        .setLabel('MARDI')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.mardi)
-    );
-  }
+  if (urls.lundi) row1.addComponents(new ButtonBuilder().setLabel('LUNDI').setStyle(ButtonStyle.Link).setURL(urls.lundi));
+  if (urls.mardi) row1.addComponents(new ButtonBuilder().setLabel('MARDI').setStyle(ButtonStyle.Link).setURL(urls.mardi));
   if (row1.components.length) rows.push(row1);
 
   const row2 = new ActionRowBuilder();
-  if (urls.mercredi) {
-    row2.addComponents(
-      new ButtonBuilder()
-        .setLabel('MERCREDI')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.mercredi) // 🔧 fix .setURL
-    );
-  }
-  if (urls.jeudi) {
-    row2.addComponents(
-      new ButtonBuilder()
-        .setLabel('JEUDI')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.jeudi)
-    );
-  }
+  if (urls.mercredi) row2.addComponents(new ButtonBuilder().setLabel('MERCREDI').setStyle(ButtonStyle.Link).setURL(urls.mercredi));
+  if (urls.jeudi) row2.addComponents(new ButtonBuilder().setLabel('JEUDI').setStyle(ButtonStyle.Link).setURL(urls.jeudi));
   if (row2.components.length) rows.push(row2);
 
   const row3 = new ActionRowBuilder();
-  if (urls.vendredi) {
-    row3.addComponents(
-      new ButtonBuilder()
-        .setLabel('VENDREDI')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.vendredi)
-    );
-  }
-  if (urls.samedi) {
-    row3.addComponents(
-      new ButtonBuilder()
-        .setLabel('SAMEDI')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.samedi)
-    );
-  }
+  if (urls.vendredi) row3.addComponents(new ButtonBuilder().setLabel('VENDREDI').setStyle(ButtonStyle.Link).setURL(urls.vendredi));
+  if (urls.samedi) row3.addComponents(new ButtonBuilder().setLabel('SAMEDI').setStyle(ButtonStyle.Link).setURL(urls.samedi));
   if (row3.components.length) rows.push(row3);
 
   const row4 = new ActionRowBuilder();
-  if (urls.dimanche) {
-    row4.addComponents(
-      new ButtonBuilder()
-        .setLabel('DIMANCHE')
-        .setStyle(ButtonStyle.Link)
-        .setURL(urls.dimanche)
-    );
-  }
+  if (urls.dimanche) row4.addComponents(new ButtonBuilder().setLabel('DIMANCHE').setStyle(ButtonStyle.Link).setURL(urls.dimanche));
   if (row4.components.length) rows.push(row4);
 
   const content = [
@@ -474,14 +428,7 @@ async function runNoonReminderIG(client) {
   const data = await fetchDispoDataForDay(guild, jour);
   if (!data) return;
 
-  const {
-    cfg,
-    nonRepondus,
-    messageURL,
-    dispoChannel
-  } = data;
-
-  const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
+  const { cfg, nonRepondus, messageURL, dispoChannel } = data;
 
   // Rappel envoyé dans le salon des disponibilités (mainDispoChannelId)
   const channel = dispoChannel;
@@ -537,7 +484,7 @@ async function runNoonReminderIG(client) {
 }
 
 /* ============================================================
-   RAPPORTS 12h & 17h — mêmes infos que /disponibilites mode "embed_detaille"
+   RAPPORTS 12h & 17h
 ============================================================ */
 
 async function sendDetailedReportIG(client, hourLabel) {
@@ -550,13 +497,7 @@ async function sendDetailedReportIG(client, hourLabel) {
   const data = await fetchDispoDataForDay(guild, jour);
   if (!data) return;
 
-  const {
-    cfg,
-    presentsAll,
-    absentsAll,
-    nonRepondus,
-    rowBtn
-  } = data;
+  const { cfg, presentsAll, absentsAll, nonRepondus, rowBtn } = data;
 
   const color = getEmbedColorFromConfig(guild.id);
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
@@ -567,9 +508,7 @@ async function sendDetailedReportIG(client, hourLabel) {
     return;
   }
 
-  const reportChannel = await guild.channels
-    .fetch(reportChannelId)
-    .catch(() => null);
+  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
   if (!reportChannel) {
     console.warn('⚠️ [AUTO] Salon de rapport introuvable');
     return;
@@ -579,18 +518,9 @@ async function sendDetailedReportIG(client, hourLabel) {
     .setColor(color)
     .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
     .addFields(
-      {
-        name: `✅ Présents (${presentsAll.size})`,
-        value: idsLine(presentsAll)
-      },
-      {
-        name: `❌ Ont dit absent (${absentsAll.size})`,
-        value: idsLine(absentsAll)
-      },
-      {
-        name: `⏳ N’ont pas réagi (${nonRepondus.size})`,
-        value: idsLine(nonRepondus)
-      }
+      { name: `✅ Présents (${presentsAll.size})`, value: idsLine(presentsAll) },
+      { name: `❌ Ont dit absent (${absentsAll.size})`, value: idsLine(absentsAll) },
+      { name: `⏳ N’ont pas réagi (${nonRepondus.size})`, value: idsLine(nonRepondus) }
     )
     .setFooter({ text: `${clubName} ⚫ Rapport automatisé` })
     .setTimestamp();
@@ -598,16 +528,14 @@ async function sendDetailedReportIG(client, hourLabel) {
   await reportChannel.send({
     embeds: [embed],
     components: [rowBtn],
-    allowedMentions: IG_AUTOMATION.mentionInReports
-      ? { parse: ['users'] }
-      : { parse: [] }
+    allowedMentions: IG_AUTOMATION.mentionInReports ? { parse: ['users'] } : { parse: [] }
   });
 
   console.log(`📊 [AUTO] Rapport ${hourLabel} envoyé pour ${jour} (IG).`);
 }
 
 /* ============================================================
-   FERMETURE 17h (snapshot + verrouillage) — DISPONIBILITÉS
+   FERMETURE 17h (snapshot + verrouillage)
 ============================================================ */
 
 async function closeDisposAt17IG(client) {
@@ -620,25 +548,14 @@ async function closeDisposAt17IG(client) {
   const data = await fetchDispoDataForDay(guild, jour);
   if (!data) return;
 
-  const {
-    cfg,
-    dispoChannel,
-    message,
-    reacted,
-    yes,
-    no,
-    eligibles,
-    messageURL
-  } = data;
+  const { cfg, dispoChannel, message, reacted, yes, no, eligibles, messageURL } = data;
 
   const clubName = cfg.clubName || guild.name || 'INTER GALACTIQUE';
   const color = getEmbedColorFromConfig(guild.id);
 
   // 1) Snapshot JSON (dans SNAPSHOT_DIR persistant)
   try {
-    if (!fs.existsSync(SNAPSHOT_DIR)) {
-      fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    }
+    if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
 
     const snapshot = {
       jour,
@@ -651,12 +568,8 @@ async function closeDisposAt17IG(client) {
       eligibles: [...eligibles.keys()]
     };
 
-    const snapPath = path.join(
-      SNAPSHOT_DIR,
-      `dispos-${jour}-${isoDate}.json`
-    );
+    const snapPath = path.join(SNAPSHOT_DIR, `dispos-${jour}-${isoDate}.json`);
     fs.writeFileSync(snapPath, JSON.stringify(snapshot, null, 2), 'utf8');
-
     console.log(`💾 [AUTO] Snapshot sauvegardé ${snapPath}`);
   } catch (e) {
     console.error('❌ [AUTO] Erreur écriture snapshot 17h :', e);
@@ -726,9 +639,7 @@ function cleanPseudo(username, room = MAX_LEN) {
   let clean = username.replace(/[^A-Za-z]/g, '');
   if (!clean.length) return 'Joueur';
   clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
-  if (clean.length > room) {
-    clean = clean.slice(0, room - 1) + '…';
-  }
+  if (clean.length > room) clean = clean.slice(0, room - 1) + '…';
   return clean;
 }
 
@@ -763,9 +674,7 @@ function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRo
   if (team) suffixParts.push(team);
 
   let full = base;
-  if (suffixParts.length) {
-    full += ' | ' + suffixParts.join(' | ');
-  }
+  if (suffixParts.length) full += ' | ' + suffixParts.join(' | ');
 
   if (full.length > MAX_LEN) {
     const fixedPrefix = `${tag}${hierarchy ? ' ' + hierarchy : ''}`.trim();
@@ -811,40 +720,29 @@ async function autoSyncNicknamesIG(client) {
   await guild.members.fetch().catch(() => {});
   const members = guild.members.cache.filter(m => !m.user.bot);
 
-  const changes = [];
-  const unchanged = [];
-  const blocked = [];
-  const errors = [];
+  let changed = 0, blocked = 0, errors = 0;
 
   for (const member of members.values()) {
     const newNick = buildNickname(member, tag, hierarchyRoles, teamRoles, posteRoles);
     const current = member.nickname || member.user.username;
 
-    if (current === newNick) {
-      unchanged.push(member);
-      continue;
-    }
+    if (current === newNick) continue;
 
     if (!member.manageable) {
-      blocked.push(member);
+      blocked++;
       continue;
     }
 
     try {
       await member.setNickname(newNick, 'Synchronisation pseudos XIG (auto)');
       await sleep(SLEEP_MS);
-    } catch (e) {
-      errors.push({ member, err: String(e?.message || e) });
-      continue;
+      changed++;
+    } catch {
+      errors++;
     }
-
-    changes.push({ member, from: current, to: newNick });
   }
 
-  console.log(
-    `🧾 [AUTO] Sync pseudos : modifiés=${changes.length}, ok=${unchanged.length}, ` +
-    `bloqués=${blocked.length}, erreurs=${errors.length}`
-  );
+  console.log(`🧾 [AUTO] Sync pseudos : modifiés=${changed}, bloqués=${blocked}, erreurs=${errors}`);
 }
 
 /* ============================================================
@@ -926,35 +824,18 @@ async function getCompoContextIG(client) {
     else nonValides.push(m);
   }
 
-  return {
-    guild,
-    cfg,
-    compoChannel,
-    compoMessage,
-    convoques,
-    valides,
-    nonValides
-  };
+  return { guild, cfg, compoChannel, compoMessage, convoques, valides, nonValides };
 }
 
 /* ============================================================
    AUTO VERIFIER_COMPO — RAPPEL (18h / 19h / 19h30)
-   → RAPPEL AVEC MENTIONS, PAS DE SNAPSHOT, PAS DE SUPPRESSION
 ============================================================ */
 
 async function autoVerifierCompoReminderIG(client, label = '') {
   const ctx = await getCompoContextIG(client);
   if (!ctx) return;
 
-  const {
-    guild,
-    cfg,
-    compoChannel,
-    compoMessage,
-    convoques,
-    valides,
-    nonValides
-  } = ctx;
+  const { guild, cfg, compoChannel, compoMessage, convoques, valides, nonValides } = ctx;
 
   const color = getEmbedColorFromConfig(guild.id);
   const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
@@ -976,14 +857,8 @@ async function autoVerifierCompoReminderIG(client, label = '') {
     .setTitle('📋 Vérification de la composition (rappel)')
     .setDescription(baseDescription)
     .addFields(
-      {
-        name: '✅ Validé',
-        value: formatMentions(valides).slice(0, 1024)
-      },
-      {
-        name: '⏳ Non validé',
-        value: formatMentions(nonValides).slice(0, 1024)
-      }
+      { name: '✅ Validé', value: formatMentions(valides).slice(0, 1024) },
+      { name: '⏳ Non validé', value: formatMentions(nonValides).slice(0, 1024) }
     )
     .setFooter({ text: `${clubLabel} • Vérification compo (rappel ${label || ''})` })
     .setTimestamp();
@@ -1004,15 +879,11 @@ async function autoVerifierCompoReminderIG(client, label = '') {
     console.error('❌ [AUTO COMPO] Erreur envoi rappel compo :', e);
   }
 
-  console.log(
-    `📋 [AUTO COMPO] Rappel compo ${label || 'auto'} envoyé. Non validés: ${nonValidesIds.length}`
-  );
+  console.log(`📋 [AUTO COMPO] Rappel compo ${label || 'auto'} envoyé. Non validés: ${nonValidesIds.length}`);
 }
 
 /* ============================================================
    AUTO VERIFIER_COMPO — FINAL 20h
-   → RAPPORT FINAL SANS MENTIONS DANS RAPPORTS AUTO UNIQUEMENT
-   + SNAPSHOT /rapports + CLEAR REACTIONS
 ============================================================ */
 
 async function autoVerifierCompoIG(client, label = '20h') {
@@ -1020,15 +891,7 @@ async function autoVerifierCompoIG(client, label = '20h') {
   const ctx = await getCompoContextIG(client);
   if (!ctx) return;
 
-  const {
-    guild,
-    cfg,
-    compoChannel,
-    compoMessage,
-    convoques,
-    valides,
-    nonValides
-  } = ctx;
+  const { guild, cfg, compoChannel, compoMessage, convoques, valides, nonValides } = ctx;
 
   const color = getEmbedColorFromConfig(guild.id);
   const clubLabel = cfg.clubName || guild.name || 'INTER GALACTIQUE';
@@ -1039,9 +902,7 @@ async function autoVerifierCompoIG(client, label = '20h') {
 
   // 1️⃣ Snapshot final UNIQUE dans /rapports
   try {
-    if (!fs.existsSync(RAPPORTS_DIR)) {
-      fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
-    }
+    if (!fs.existsSync(RAPPORTS_DIR)) fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
 
     const snap = {
       type: 'compo',
@@ -1053,10 +914,7 @@ async function autoVerifierCompoIG(client, label = '20h') {
       non_valides: nonValides.map(m => m.id)
     };
 
-    const filePath = path.join(
-      RAPPORTS_DIR,
-      `compo-${isoDate}-${compoMessage.id}.json`
-    );
+    const filePath = path.join(RAPPORTS_DIR, `compo-${isoDate}-${compoMessage.id}.json`);
     fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
 
     console.log(`💾 [AUTO COMPO] Snapshot final compo : ${filePath}`);
@@ -1087,42 +945,28 @@ async function autoVerifierCompoIG(client, label = '20h') {
     .setTitle('📋 Vérification finale de la composition')
     .setDescription(baseDescription)
     .addFields(
-      {
-        name: '✅ Validé',
-        value: formatMentions(valides).slice(0, 1024)
-      },
-      {
-        name: '⏳ Non validé',
-        value: formatMentions(nonValides).slice(0, 1024)
-      }
+      { name: '✅ Validé', value: formatMentions(valides).slice(0, 1024) },
+      { name: '⏳ Non validé', value: formatMentions(nonValides).slice(0, 1024) }
     )
     .setFooter({ text: `${clubLabel} • Vérification compo (finale ${label})` })
     .setTimestamp();
 
   const rapportChannelId = cfg.rapportChannelId || RAPPORT_CHANNEL_ID_IG;
-  let rapportChannel = null;
-  if (rapportChannelId && rapportChannelId !== '0') {
-    rapportChannel = await guild.channels.fetch(rapportChannelId).catch(() => null);
-    if (!rapportChannel) {
-      console.warn('⚠️ [AUTO COMPO] Salon rapports introuvable pour IG.');
-    }
-  }
+  const rapportChannel = (rapportChannelId && rapportChannelId !== '0')
+    ? await guild.channels.fetch(rapportChannelId).catch(() => null)
+    : null;
 
-  // 👉 UNIQUEMENT dans le salon de rapports auto, SANS mentions
   if (rapportChannel) {
     try {
-      await rapportChannel.send({
-        embeds: [embedFinal],
-        allowedMentions: { parse: [] }
-      });
+      await rapportChannel.send({ embeds: [embedFinal], allowedMentions: { parse: [] } });
     } catch (e) {
       console.error('❌ [AUTO COMPO] Erreur envoi rapport final dans le salon rapports :', e);
     }
+  } else {
+    console.warn('⚠️ [AUTO COMPO] Salon rapports introuvable pour IG (final).');
   }
 
-  console.log(
-    `📋 [AUTO COMPO] Rapport final compo ${label} envoyé (rapports auto uniquement). Non validés: ${nonValides.length}`
-  );
+  console.log(`📋 [AUTO COMPO] Rapport final compo ${label} envoyé. Non validés: ${nonValides.length}`);
 }
 
 /* ============================================================
@@ -1159,9 +1003,7 @@ async function autoCompoWeekReportIG(client) {
     const embedEmpty = new EmbedBuilder()
       .setColor(color)
       .setTitle('📅 Vérification compos (auto semaine)')
-      .setDescription(
-        `⚠️ Aucun snapshot de compo trouvé dans \`/rapports\` sur la période **${debutStr} → ${finStr}**.`
-      )
+      .setDescription(`⚠️ Aucun snapshot de compo trouvé dans \`/rapports\` sur la période **${debutStr} → ${finStr}**.`)
       .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots auto)` })
       .setTimestamp();
 
@@ -1171,7 +1013,6 @@ async function autoCompoWeekReportIG(client) {
   }
 
   await guild.members.fetch().catch(() => {});
-  const currentIds = new Set(guild.members.cache.filter(m => !m.user.bot).map(m => m.id));
 
   const misses = new Map();      // id -> nb de compo non validées
   const convocCount = new Map(); // id -> nb de compo où il était convoqué
@@ -1187,7 +1028,6 @@ async function autoCompoWeekReportIG(client) {
     const nonSet = new Set(nonValid);
 
     for (const id of convoques) {
-      // On garde aussi ceux hors serveur, comme la commande avec include_hors_serveur = true
       if (!convocCount.has(id)) convocCount.set(id, 0);
       convocCount.set(id, convocCount.get(id) + 1);
 
@@ -1199,7 +1039,7 @@ async function autoCompoWeekReportIG(client) {
   }
 
   const entries = [...misses.entries()]
-    .filter(([_, n]) => n > 0)
+    .filter(([, n]) => n > 0)
     .sort((a, b) => b[1] - a[1]);
 
   const headerLines = [
@@ -1232,9 +1072,7 @@ async function autoCompoWeekReportIG(client) {
 
   const pageSize = 20;
   const pages = [];
-  for (let i = 0; i < entries.length; i += pageSize) {
-    pages.push(entries.slice(i, i + pageSize));
-  }
+  for (let i = 0; i < entries.length; i += pageSize) pages.push(entries.slice(i, i + pageSize));
 
   const first = pages.shift();
   const firstEmbed = new EmbedBuilder()
@@ -1248,15 +1086,13 @@ async function autoCompoWeekReportIG(client) {
     .setFooter({ text: `${clubLabel} ⚫ Rapport compo (snapshots auto)` })
     .setTimestamp();
 
-  await rapportChannel.send({
-    embeds: [firstEmbed],
-    allowedMentions: { parse: [] }
-  });
+  await rapportChannel.send({ embeds: [firstEmbed], allowedMentions: { parse: [] } });
 
   for (const page of pages) {
     const chunks = [];
     let cur = [];
     let curLen = 0;
+
     for (const [id, n] of page) {
       const line = `• ${asLine(id, n)}\n`;
       if (curLen + line.length > 1024) {
@@ -1280,10 +1116,7 @@ async function autoCompoWeekReportIG(client) {
       embed.addFields({ name: idx === 0 ? 'Liste (suite)' : '…', value: block });
     });
 
-    await rapportChannel.send({
-      embeds: [embed],
-      allowedMentions: { parse: [] }
-    });
+    await rapportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } });
   }
 
   console.log(`📊 [AUTO COMPO SEMAINE] Rapport auto envoyé (${debutStr} → ${finStr}).`);
@@ -1323,9 +1156,7 @@ async function autoWeekDispoReportIG(client) {
     const embedEmpty = new EmbedBuilder()
       .setColor(color)
       .setTitle('📅 Analyse disponibilités (auto semaine)')
-      .setDescription(
-        `⚠️ Aucun snapshot de disponibilités trouvé dans \`${SNAPSHOT_DIR}\` pour **${debutStr} → ${finStr}**.`
-      )
+      .setDescription(`⚠️ Aucun snapshot de disponibilités trouvé dans \`${SNAPSHOT_DIR}\` pour **${debutStr} → ${finStr}**.`)
       .setFooter({ text: `${clubLabel} • Rapport snapshots auto` })
       .setTimestamp();
 
@@ -1335,10 +1166,9 @@ async function autoWeekDispoReportIG(client) {
   }
 
   await guild.members.fetch().catch(() => {});
-  const currentIds = new Set(guild.members.cache.filter(m => !m.user.bot).map(m => m.id));
 
-  const misses = new Map();      // id -> nb de jours sans réaction
-  const daysCount = new Map();   // id -> nb de jours éligibles
+  const misses = new Map();    // id -> nb de jours sans réaction
+  const daysCount = new Map(); // id -> nb de jours éligibles
   let snapshotsUsed = 0;
   let snapshotsSkipped = 0;
 
@@ -1355,7 +1185,6 @@ async function autoWeekDispoReportIG(client) {
     snapshotsUsed++;
 
     for (const id of eligibles) {
-      // On garde aussi hors serveur comme la commande avec include_hors_serveur = true
       if (!misses.has(id)) misses.set(id, 0);
       if (!daysCount.has(id)) daysCount.set(id, 0);
 
@@ -1398,9 +1227,7 @@ async function autoWeekDispoReportIG(client) {
 
   const pageSize = 20;
   const pages = [];
-  for (let i = 0; i < entries.length; i += pageSize) {
-    pages.push(entries.slice(i, i + pageSize));
-  }
+  for (let i = 0; i < entries.length; i += pageSize) pages.push(entries.slice(i, i + pageSize));
 
   const first = pages.shift();
   const firstEmbed = new EmbedBuilder()
@@ -1414,10 +1241,7 @@ async function autoWeekDispoReportIG(client) {
     .setFooter({ text: `${clubLabel} • Rapport snapshots auto` })
     .setTimestamp();
 
-  await rapportChannel.send({
-    embeds: [firstEmbed],
-    allowedMentions: { parse: [] }
-  });
+  await rapportChannel.send({ embeds: [firstEmbed], allowedMentions: { parse: [] } });
 
   for (const page of pages) {
     const chunks = [];
@@ -1447,180 +1271,227 @@ async function autoWeekDispoReportIG(client) {
       embed.addFields({ name: i === 0 ? 'Liste (suite)' : '…', value: c });
     });
 
-    await rapportChannel.send({
-      embeds: [embed],
-      allowedMentions: { parse: [] }
-    });
+    await rapportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } });
   }
 
   console.log(`📊 [AUTO SEMAINE DISPO] Rapport auto envoyé (${debutStr} → ${finStr}).`);
 }
 
 /* ============================================================
+   SCHEDULER STATE (persistant) + HELPERS
+============================================================ */
+
+function ensureDir(dir) {
+  if (!dir) return;
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+const STATE_PATH = path.join(SNAPSHOT_DIR || __dirname, 'scheduler-state.json');
+
+function loadState() {
+  try {
+    ensureDir(path.dirname(STATE_PATH));
+    if (!fs.existsSync(STATE_PATH)) return { runs: {} };
+    return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')) || { runs: {} };
+  } catch {
+    return { runs: {} };
+  }
+}
+
+function saveState(state) {
+  try {
+    ensureDir(path.dirname(STATE_PATH));
+    fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+  } catch {
+    // ignore
+  }
+}
+
+function alreadyRanToday(state, jobKey) {
+  return Boolean(state?.runs?.[jobKey]);
+}
+
+function markRanToday(state, jobKey, info = {}) {
+  if (!state.runs) state.runs = {};
+  state.runs[jobKey] = {
+    at: new Date().toISOString(),
+    ...info
+  };
+  saveState(state);
+}
+
+function dailyJobKey(dateKey, name) {
+  return `${dateKey}:${name}`;
+}
+
+/* ============================================================
    INIT SCHEDULER
 ============================================================ */
 
+let _schedulerInterval = null;
+let _schedulerStarted = false;
+
 function initScheduler(client) {
+  if (_schedulerStarted) {
+    console.warn('⚠️ [SCHEDULER] initScheduler() appelé plusieurs fois → ignoré.');
+    return;
+  }
+  _schedulerStarted = true;
+
   console.log('⏰ Initialisation du scheduler automatique (10h / 12h / 17h / 18h / 19h / 19h30 / 20h / 22h + sync pseudos)…');
 
-  let lastPanelKey = null;     // 10h & 22h panneau
-  let lastNoonKey = null;      // 12h
-  let last17Key = null;        // 17h (dispos)
-  let lastNickKey = null;      // sync pseudos
-  let lastCompo18Key = null;   // 18h vérif compo (rappel)
-  let lastCompo19Key = null;   // 19h vérif compo (rappel)
-  let lastCompo1930Key = null; // 19h30 vérif compo (rappel)
-  let lastCompo20Key = null;   // 20h vérif compo finale
-  let lastWeekKey = null;      // 22h rapports semaine (mercredi / dimanche)
+  const state = loadState();
 
-  setInterval(async () => {
+  // fenêtre large pour éviter de louper après reboot / lag (en minutes)
+  const W = 10; // exécute si minute ∈ [target, target+W]
+
+  // heartbeat pour vérifier que le tick tourne
+  let lastHeartbeat = 0;
+
+  const tick = async () => {
     const { hour, minute, isoDate: dateKey, jour } = getParisParts();
 
-    // 10h00 & 22h00 → panneau de disponibilités (fenêtre 0-2 minutes)
-    if ((hour === 10 || hour === 22) && minute >= 0 && minute <= 2) {
-      const panelKey = `${dateKey}-${hour}`;
-      if (lastPanelKey !== panelKey) {
-        lastPanelKey = panelKey;
-        console.log(`⏰ [AUTO] Tick panneau ${hour}h pour ${dateKey}`);
-        try {
-          await sendDispoPanelIG(client);
-        } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche panneau dispos :', e);
-        }
+    // Heartbeat toutes les 10 minutes
+    const now = Date.now();
+    if (now - lastHeartbeat > 10 * 60 * 1000) {
+      lastHeartbeat = now;
+      console.log(`💓 [SCHEDULER] Tick OK — Paris ${dateKey} ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`);
+    }
+
+    const inWindow = (targetMin) => minute >= targetMin && minute <= (targetMin + W);
+
+    // 10h00 → panneau
+    if (hour === 10 && inWindow(0)) {
+      const key = dailyJobKey(dateKey, 'panel-10');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] Panel 10h (window) pour ${dateKey}`);
+        try { await sendDispoPanelIG(client); } catch (e) { console.error('❌ [AUTO] Erreur panneau 10h :', e); }
+        markRanToday(state, key);
       }
     }
 
-    // 12h → rappel + rapport intermédiaire (fenêtre 0-2 minutes)
-    if (hour === 12 && minute >= 0 && minute <= 2) {
-      const noonKey = `${dateKey}-12`;
-      if (lastNoonKey !== noonKey) {
-        lastNoonKey = noonKey;
-        console.log(`⏰ [AUTO] Tick 12h pour ${dateKey}`);
+    // 12h00 → rappel + rapport
+    if (hour === 12 && inWindow(0)) {
+      const key = dailyJobKey(dateKey, 'noon-12');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] 12h (window) pour ${dateKey}`);
         try {
           await runNoonReminderIG(client);
           await sendDetailedReportIG(client, '12h');
         } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche 12h :', e);
+          console.error('❌ [AUTO] Erreur 12h :', e);
         }
+        markRanToday(state, key);
       }
     }
 
-    // 17h → rapport final + fermeture dispos (fenêtre 0-2 minutes)
-    if (hour === 17 && minute >= 0 && minute <= 2) {
-      const key17 = `${dateKey}-17`;
-      if (last17Key !== key17) {
-        last17Key = key17;
-        console.log(`⏰ [AUTO] Tick 17h pour ${dateKey}`);
+    // 17h00 → rapport + fermeture
+    if (hour === 17 && inWindow(0)) {
+      const key = dailyJobKey(dateKey, 'close-17');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] 17h (window) pour ${dateKey}`);
         try {
           await sendDetailedReportIG(client, '17h');
           await closeDisposAt17IG(client);
         } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche 17h :', e);
+          console.error('❌ [AUTO] Erreur 17h :', e);
         }
+        markRanToday(state, key);
       }
     }
 
-    // 18h → vérification compo auto (rappel)
-    if (hour === 18 && minute >= 0 && minute <= 2) {
-      const key = `${dateKey}-18-compo`;
-      if (lastCompo18Key !== key) {
-        lastCompo18Key = key;
-        console.log(`⏰ [AUTO] Tick vérification compo 18h pour ${dateKey}`);
-        try {
-          await autoVerifierCompoReminderIG(client, '18h');
-        } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche vérification compo 18h :', e);
-        }
+    // 18h00 → rappel compo
+    if (hour === 18 && inWindow(0)) {
+      const key = dailyJobKey(dateKey, 'compo-18');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] Compo 18h (window) pour ${dateKey}`);
+        try { await autoVerifierCompoReminderIG(client, '18h'); } catch (e) { console.error('❌ [AUTO] Erreur compo 18h :', e); }
+        markRanToday(state, key);
       }
     }
 
-    // 19h → vérification compo auto (rappel)
-    if (hour === 19 && minute >= 0 && minute <= 2) {
-      const key = `${dateKey}-19-compo`;
-      if (lastCompo19Key !== key) {
-        lastCompo19Key = key;
-        console.log(`⏰ [AUTO] Tick vérification compo 19h pour ${dateKey}`);
-        try {
-          await autoVerifierCompoReminderIG(client, '19h');
-        } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche vérification compo 19h :', e);
-        }
+    // 19h00 → rappel compo
+    if (hour === 19 && inWindow(0)) {
+      const key = dailyJobKey(dateKey, 'compo-19');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] Compo 19h (window) pour ${dateKey}`);
+        try { await autoVerifierCompoReminderIG(client, '19h'); } catch (e) { console.error('❌ [AUTO] Erreur compo 19h :', e); }
+        markRanToday(state, key);
       }
     }
 
-    // 19h30 → vérification compo auto (rappel) (fenêtre 30-32)
-    if (hour === 19 && minute >= 30 && minute <= 32) {
-      const key = `${dateKey}-1930-compo`;
-      if (lastCompo1930Key !== key) {
-        lastCompo1930Key = key;
-        console.log(`⏰ [AUTO] Tick vérification compo 19h30 pour ${dateKey}`);
-        try {
-          await autoVerifierCompoReminderIG(client, '19h30');
-        } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche vérification compo 19h30 :', e);
-        }
+    // 19h30 → rappel compo (fenêtre 30→30+W)
+    if (hour === 19 && inWindow(30)) {
+      const key = dailyJobKey(dateKey, 'compo-1930');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] Compo 19h30 (window) pour ${dateKey}`);
+        try { await autoVerifierCompoReminderIG(client, '19h30'); } catch (e) { console.error('❌ [AUTO] Erreur compo 19h30 :', e); }
+        markRanToday(state, key);
       }
     }
 
-    // 20h → vérification compo finale (snapshot + clear réactions, SANS mentions, rapports auto uniquement)
-    if (hour === 20 && minute >= 0 && minute <= 2) {
-      const key = `${dateKey}-20-compo-final`;
-      if (lastCompo20Key !== key) {
-        lastCompo20Key = key;
-        console.log(`⏰ [AUTO] Tick vérification compo finale 20h pour ${dateKey}`);
-        try {
-          await autoVerifierCompoIG(client, '20h');
-        } catch (e) {
-          console.error('❌ [AUTO] Erreur tâche vérification compo finale 20h :', e);
-        }
+    // 20h00 → final compo
+    if (hour === 20 && inWindow(0)) {
+      const key = dailyJobKey(dateKey, 'compo-20-final');
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] Compo finale 20h (window) pour ${dateKey}`);
+        try { await autoVerifierCompoIG(client, '20h'); } catch (e) { console.error('❌ [AUTO] Erreur compo 20h :', e); }
+        markRanToday(state, key);
       }
     }
 
-    // 22h → rapports semaine (compo + dispo) les MERCREDI & DIMANCHE (fenêtre 0-2 minutes)
-    if (hour === 22 && minute >= 0 && minute <= 2) {
-      const weekKey = `${dateKey}-22-week`;
-      if (lastWeekKey !== weekKey) {
-        lastWeekKey = weekKey;
+    // 22h00 → panneau + rapports semaine (mercredi/dimanche)
+    if (hour === 22 && inWindow(0)) {
+      // panneau 22h
+      const keyPanel = dailyJobKey(dateKey, 'panel-22');
+      if (!alreadyRanToday(state, keyPanel)) {
+        console.log(`⏰ [AUTO] Panel 22h (window) pour ${dateKey}`);
+        try { await sendDispoPanelIG(client); } catch (e) { console.error('❌ [AUTO] Erreur panneau 22h :', e); }
+        markRanToday(state, keyPanel);
+      }
 
-        if (jour === 'mercredi' || jour === 'dimanche') {
-          console.log(`⏰ [AUTO] Tick rapports semaine (${jour}) pour ${dateKey}`);
+      // semaine mercredi/dimanche
+      if (jour === 'mercredi' || jour === 'dimanche') {
+        const keyWeek = dailyJobKey(dateKey, `week-${jour}`);
+        if (!alreadyRanToday(state, keyWeek)) {
+          console.log(`⏰ [AUTO] Rapports semaine (${jour}) 22h (window) pour ${dateKey}`);
           try {
-            await autoCompoWeekReportIG(client);   // Vérifier Compo semaine
-            await autoWeekDispoReportIG(client);   // Vérifier semaine (dispos)
+            await autoCompoWeekReportIG(client);
+            await autoWeekDispoReportIG(client);
           } catch (e) {
-            console.error('❌ [AUTO] Erreur rapports semaine (22h) :', e);
+            console.error('❌ [AUTO] Erreur rapports semaine 22h :', e);
           }
+          markRanToday(state, keyWeek, { jour });
         }
       }
     }
 
-    // 🔁 Sync pseudos automatique — toutes les heures à H:10
-    if (minute === 10) {
-      const nickKey = `${dateKey}-${hour}`;
-      if (lastNickKey !== nickKey) {
-        lastNickKey = nickKey;
-        console.log(`⏰ [AUTO] Tick sync pseudos ${hour}h10 pour ${dateKey}`);
-        try {
-          await autoSyncNicknamesIG(client);
-        } catch (e) {
-          console.error('❌ [AUTO] Erreur sync pseudos auto :', e);
-        }
+    // 🔁 Sync pseudos : toutes les heures à H:10 (fenêtre 10→10+W)
+    if (inWindow(10)) {
+      const key = dailyJobKey(dateKey, `nick-${hour}`);
+      if (!alreadyRanToday(state, key)) {
+        console.log(`⏰ [AUTO] Sync pseudos ${hour}h10 (window) pour ${dateKey}`);
+        try { await autoSyncNicknamesIG(client); } catch (e) { console.error('❌ [AUTO] Erreur sync pseudos :', e); }
+        markRanToday(state, key, { hour });
       }
     }
-  }, 60 * 1000); // vérification toutes les minutes
+  };
+
+  // tick immédiat + interval
+  tick().catch(() => {});
+  _schedulerInterval = setInterval(() => tick().catch(() => {}), 60 * 1000);
 }
 
 module.exports = {
   initScheduler,
-  // exports pour la commande de test
+  // exports pour tests / commandes
   sendDispoPanelIG,
   runNoonReminderIG,
   sendDetailedReportIG,
   closeDisposAt17IG,
   autoSyncNicknamesIG,
-  // exports compos
-  autoVerifierCompoIG,           // final 20h
-  autoVerifierCompoReminderIG,   // rappels
+  autoVerifierCompoIG,
+  autoVerifierCompoReminderIG,
   autoCompoWeekReportIG,
   autoWeekDispoReportIG
 };
