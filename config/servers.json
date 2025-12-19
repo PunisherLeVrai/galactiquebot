@@ -30,6 +30,13 @@
       "recrue": "1393785087132172429"
     },
 
+    "compo": {
+      "channelId": "1393774911557861407",
+      "detectMode": "footer_or_reaction",
+      "footerContains": "Compo officielle",
+      "reactionEmoji": "✅"
+    },
+
     "nickname": {
       "hierarchy": [
         { "id": "1393784275853246666", "label": "PRÉSIDENT" },
