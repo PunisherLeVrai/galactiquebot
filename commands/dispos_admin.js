@@ -1,3 +1,4 @@
+// commands/dispos_admin.js
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -25,11 +26,16 @@ const TITRES = {
 
 const DESC_PAR_DEFAUT = 'Réagissez ci-dessous :\n\n✅ **Présent**  |  ❌ **Absent**';
 const DESCRIPTION_DEFAUT_ROUVRIR = '🕓 Session à 20h45 — merci de réagir ci-dessous ✅ / ❌';
+
 const DEFAULT_COLOR = 0xff4db8;
 
 // 🔒 Anti-mentions
 const sanitize = (t) =>
-  String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
+  String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]').trim();
+
+function isValidId(id) {
+  return !!id && id !== '0' && /^\d{10,30}$/.test(String(id));
+}
 
 function getEmbedColor(cfg) {
   const hex = cfg?.embedColor;
@@ -48,40 +54,71 @@ function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
 
   // 🔹 Override manuel
   if (idsInput) {
-    const parts = idsInput.split(/[\s,;]+/).filter(Boolean);
+    const parts = String(idsInput).split(/[\s,;]+/).filter(Boolean);
 
     if (jourChoisi === 'all') {
       if (parts.length !== 7) {
-        return { error: '❌ Pour **tous les jours**, tu dois fournir 7 IDs.' };
+        return { error: '❌ Pour **tous les jours**, tu dois fournir **7 IDs**.' };
       }
       const mapping = {};
-      JOURS.forEach((j, i) => mapping[j] = parts[i]);
-      return { mapping, joursCibles: [...JOURS] };
+      for (let i = 0; i < 7; i++) {
+        const id = parts[i];
+        if (!isValidId(id)) return { error: `❌ ID invalide à la position ${i + 1}.` };
+        mapping[JOURS[i]] = id;
+      }
+      return { mapping, joursCibles: [...JOURS], from: 'override' };
     }
 
+    const id = parts[0];
+    if (!isValidId(id)) return { error: '❌ ID invalide.' };
+
     return {
-      mapping: { [jourChoisi]: parts[0] },
-      joursCibles: [jourChoisi]
+      mapping: { [jourChoisi]: id },
+      joursCibles: [jourChoisi],
+      from: 'override'
     };
   }
 
   // 🔹 Fallback servers.json
   if (jourChoisi === 'all') {
-    const missing = JOURS.filter(j => !dispo[j]);
+    const missing = JOURS.filter(j => !isValidId(dispo[j]));
     if (missing.length) {
-      return { error: `❌ IDs manquants dans servers.json → ${missing.join(', ')}` };
+      return { error: `❌ IDs manquants/invalides dans servers.json → ${missing.join(', ')}` };
     }
-    return { mapping: { ...dispo }, joursCibles: [...JOURS] };
+    return { mapping: { ...dispo }, joursCibles: [...JOURS], from: 'config' };
   }
 
-  if (!dispo[jourChoisi]) {
-    return { error: `❌ ID manquant dans servers.json → dispoMessages.${jourChoisi}` };
+  if (!isValidId(dispo[jourChoisi])) {
+    return { error: `❌ ID manquant/invalide dans servers.json → dispoMessages.${jourChoisi}` };
   }
 
   return {
     mapping: { [jourChoisi]: dispo[jourChoisi] },
-    joursCibles: [jourChoisi]
+    joursCibles: [jourChoisi],
+    from: 'config'
   };
+}
+
+/* ============================================================
+   🧩 Helpers embed (safe)
+============================================================ */
+
+function buildBaseEmbed({ color, clubName, jour, description }) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(TITRES[jour] || `📅 ${jour.toUpperCase()}`)
+    .setDescription(description)
+    .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+}
+
+function safeFromExistingEmbed(msg, fallbackEmbed) {
+  const exist = msg?.embeds?.[0];
+  if (!exist) return fallbackEmbed;
+  try {
+    return EmbedBuilder.from(exist);
+  } catch {
+    return fallbackEmbed;
+  }
 }
 
 /* ============================================================
@@ -107,10 +144,12 @@ module.exports = {
         .addStringOption(o =>
           o.setName('texte')
             .setDescription('Texte personnalisé (facultatif)')
+            .setRequired(false)
         )
         .addBooleanOption(o =>
           o.setName('reactions')
             .setDescription('Ajouter ✅ ❌ (défaut : oui)')
+            .setRequired(false)
         )
     )
 
@@ -141,6 +180,7 @@ module.exports = {
         .addStringOption(o =>
           o.setName('ids')
             .setDescription('Override ID(s) (optionnel)')
+            .setRequired(false)
         )
     )
 
@@ -166,6 +206,7 @@ module.exports = {
         .addStringOption(o =>
           o.setName('ids')
             .setDescription('Override ID(s) (optionnel)')
+            .setRequired(false)
         )
     )
 
@@ -191,93 +232,170 @@ module.exports = {
         .addStringOption(o =>
           o.setName('ids')
             .setDescription('Override ID(s) (optionnel)')
+            .setRequired(false)
         )
     ),
-
-  /* ============================================================
-     ⚙️ EXECUTE
-  ============================================================ */
 
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
     const channel = interaction.options.getChannel('salon');
     const guild = interaction.guild;
+    if (!guild) return;
+
     const me = guild.members.me;
 
-    const { guild: guildCfg } = getConfigFromInteraction(interaction);
+    const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const color = getEmbedColor(guildCfg);
-    const clubName = guildCfg?.clubName || guild.name;
+    const clubName = guildCfg?.clubName || guild.name || 'Club';
 
-    /* -------------------- PUBLIER -------------------- */
-    if (sub === 'publier') {
-      const texte = sanitize(interaction.options.getString('texte') || DESC_PAR_DEFAUT);
-      const reactions = interaction.options.getBoolean('reactions') ?? true;
+    // ✅ Permissions de base (écriture + embeds)
+    const basePerms = new PermissionsBitField([
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.EmbedLinks
+    ]);
 
-      const idsByJour = {};
+    if (!channel?.isTextBased?.() || channel.type !== ChannelType.GuildText) {
+      return interaction.reply({ content: '❌ Salon invalide (texte uniquement).', ephemeral: true });
+    }
 
-      for (const jour of JOURS) {
-        const embed = new EmbedBuilder()
-          .setColor(color)
-          .setTitle(TITRES[jour])
-          .setDescription(texte)
-          .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-        const msg = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
-        if (reactions) {
-          await msg.react('✅');
-          await msg.react('❌');
-        }
-        idsByJour[jour] = msg.id;
-      }
-
-      // 💾 Sauvegarde automatique
-      await updateGuildConfig(guild.id, { dispoMessages: idsByJour });
-
+    if (!channel.permissionsFor?.(me)?.has(basePerms)) {
       return interaction.reply({
-        content: '✅ Messages publiés **et IDs sauvegardés automatiquement dans servers.json**.',
+        content: `❌ Je n’ai pas les permissions nécessaires dans ${channel} (voir/écrire/embed).`,
         ephemeral: true
       });
     }
 
-    /* -------------------- MODIFIER / RESET / ROUVRIR -------------------- */
-    const jour = interaction.options.getString('jour');
-    const idsInput = interaction.options.getString('ids');
-    const { error, mapping, joursCibles } =
-      resolveIdsMapping(guildCfg, jour, idsInput);
+    // 🔥 PUBLIER
+    if (sub === 'publier') {
+      const texte = sanitize(interaction.options.getString('texte') || DESC_PAR_DEFAUT);
+      const reactions = interaction.options.getBoolean('reactions') ?? true;
 
-    if (error) {
-      return interaction.reply({ content: error, ephemeral: true });
+      if (reactions) {
+        const reactPerms = new PermissionsBitField([
+          PermissionsBitField.Flags.AddReactions,
+          PermissionsBitField.Flags.ReadMessageHistory
+        ]);
+        if (!channel.permissionsFor?.(me)?.has(reactPerms)) {
+          return interaction.reply({
+            content: `❌ Je ne peux pas ajouter de réactions dans ${channel} (AddReactions + ReadMessageHistory).`,
+            ephemeral: true
+          });
+        }
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const idsByJour = {};
+
+      for (const jour of JOURS) {
+        const embed = buildBaseEmbed({
+          color,
+          clubName,
+          jour,
+          description: texte
+        });
+
+        const msg = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+
+        if (reactions) {
+          try { await msg.react('✅'); } catch {}
+          try { await msg.react('❌'); } catch {}
+        }
+
+        idsByJour[jour] = msg.id;
+      }
+
+      // 💾 Sauvegarde automatique
+      updateGuildConfig(guild.id, { dispoMessages: idsByJour });
+
+      return interaction.editReply({
+        content: '✅ Messages publiés **et IDs sauvegardés automatiquement** (dispoMessages) ✅'
+      });
     }
 
+    // MODIFIER / RESET / ROUVRIR
+    const jour = interaction.options.getString('jour', true);
+    const idsInput = interaction.options.getString('ids') || null;
+
+    const resolved = resolveIdsMapping(guildCfg, jour, idsInput);
+    if (resolved?.error) {
+      return interaction.reply({ content: resolved.error, ephemeral: true });
+    }
+
+    const { mapping, joursCibles } = resolved;
+
+    // ✅ Permissions supplémentaires selon action
+    if (sub === 'reinitialiser') {
+      const perms = new PermissionsBitField([
+        PermissionsBitField.Flags.ManageMessages,
+        PermissionsBitField.Flags.AddReactions,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]);
+      if (!channel.permissionsFor?.(me)?.has(perms)) {
+        return interaction.reply({
+          content: `❌ Je ne peux pas reset les réactions dans ${channel} (ManageMessages + AddReactions + ReadMessageHistory).`,
+          ephemeral: true
+        });
+      }
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    let done = 0;
+    let missing = 0;
+
     for (const j of joursCibles) {
-      const msg = await channel.messages.fetch(mapping[j]).catch(() => null);
-      if (!msg) continue;
+      const id = mapping[j];
+      const msg = await channel.messages.fetch(id).catch(() => null);
+      if (!msg) { missing++; continue; }
+
+      // embed fallback si pas d’embed
+      const fallback = buildBaseEmbed({
+        color,
+        clubName,
+        jour: j,
+        description: DESC_PAR_DEFAUT
+      });
 
       if (sub === 'modifier') {
-        const texte = sanitize(interaction.options.getString('texte'));
-        const embed = EmbedBuilder.from(msg.embeds[0])
+        const texte = sanitize(interaction.options.getString('texte', true));
+        const newDesc = `${texte}\n\n✅ **Présent** | ❌ **Absent**`;
+
+        const embed = safeFromExistingEmbed(msg, fallback)
           .setColor(color)
-          .setDescription(`${texte}\n\n✅ **Présent** | ❌ **Absent**`);
-        await msg.edit({ embeds: [embed] });
+          .setTitle(TITRES[j] || `📅 ${j.toUpperCase()}`)
+          .setDescription(newDesc)
+          .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+        await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
+        done++;
       }
 
       if (sub === 'reinitialiser') {
-        await msg.reactions.removeAll();
-        await msg.react('✅');
-        await msg.react('❌');
+        try { await msg.reactions.removeAll(); } catch {}
+        try { await msg.react('✅'); } catch {}
+        try { await msg.react('❌'); } catch {}
+        done++;
       }
 
       if (sub === 'rouvrir') {
-        const embed = EmbedBuilder.from(msg.embeds[0])
+        const embed = safeFromExistingEmbed(msg, fallback)
           .setColor(color)
-          .setDescription(DESCRIPTION_DEFAUT_ROUVRIR);
-        await msg.edit({ embeds: [embed] });
+          .setTitle(TITRES[j] || `📅 ${j.toUpperCase()}`)
+          .setDescription(DESCRIPTION_DEFAUT_ROUVRIR)
+          .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+        await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
+        done++;
       }
     }
 
-    return interaction.reply({
-      content: `✅ **${sub} effectué** via servers.json.`,
-      ephemeral: true
+    // (Optionnel) si tu veux que l’override "ids" mette aussi à jour la config automatiquement :
+    // if (idsInput) updateGuildConfig(guild.id, { dispoMessages: { ...(guildCfg?.dispoMessages || {}), ...mapping } });
+
+    return interaction.editReply({
+      content: `✅ **${sub} effectué** (${done} message(s))${missing ? ` — ⚠️ introuvable: ${missing}` : ''}.`
     });
   }
 };
