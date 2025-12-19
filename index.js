@@ -58,15 +58,22 @@ function getEmbedColorForGuild(guildId) {
 let healthServer = null;
 
 function startHealthcheckServer() {
-  const port = process.env.PORT;
-  if (!port) return;
+  if (healthServer) return;
+
+  // ✅ Toujours un port (Railway met souvent PORT, sinon fallback)
+  const port = Number(process.env.PORT) || 3000;
 
   healthServer = http.createServer((req, res) => {
+    // petit endpoint simple
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
   });
 
-  healthServer.listen(port, () => {
+  healthServer.on('error', (err) => {
+    console.error('❌ [HEALTH] Erreur serveur HTTP :', err);
+  });
+
+  healthServer.listen(port, '0.0.0.0', () => {
     console.log(`🌐 [HEALTH] Serveur healthcheck en écoute sur le port ${port}`);
   });
 }
@@ -385,12 +392,24 @@ process.on('uncaughtException', (error) =>
    ✅ ARRÊT PROPRE (Railway envoie souvent SIGTERM)
 ============================================================ */
 
-process.on('SIGTERM', async () => {
-  console.log('🛑 SIGTERM reçu — fermeture propre...');
+async function gracefulShutdown(signal) {
+  console.log(`🛑 ${signal} reçu — fermeture propre...`);
+
+  // Timeout sécurité (Railway tue parfois vite)
+  const forceExit = setTimeout(() => {
+    console.error('⏱️ Fermeture trop longue → exit forcé.');
+    process.exit(1);
+  }, 8000);
+
   try { if (healthServer) healthServer.close(); } catch {}
   try { await client.destroy(); } catch {}
+
+  clearTimeout(forceExit);
   process.exit(0);
-});
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 /* ============================================================
    LOGIN
