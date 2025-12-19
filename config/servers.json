@@ -8,11 +8,6 @@
     "rapportChannelId": "1446471718943326259",
     "mainDispoChannelId": "1429059902852173936",
 
-    "memberCounterChannelId": "1393770717656514600",
-    "panelChannelId": "1393774851218735216",
-
-    "welcomeChannelId": "1393775051433840680",
-
     "dispoMessages": {
       "lundi": "1429061125307105290",
       "mardi": "1429061128742502450",
@@ -25,16 +20,7 @@
 
     "roles": {
       "joueur": "1393784530124668988",
-      "essai": "1393784904809975850",
-      "convoque": "1439759021371428955",
-      "recrue": "1393785087132172429"
-    },
-
-    "compo": {
-      "channelId": "1393774911557861407",
-      "detectMode": "footer_or_reaction",
-      "footerContains": "Compo officielle",
-      "reactionEmoji": "✅"
+      "essai": "1393784904809975850"
     },
 
     "nickname": {
@@ -73,39 +59,14 @@
     }
   },
 
-  "1444745566004449506": {
-    "clubName": "GalactiqueBot Support",
-    "tag": "GBS",
-    "embedColor": "5865F2",
-
-    "logChannelId": "0",
-    "rapportChannelId": "0",
-    "mainDispoChannelId": "0",
-
-    "welcomeChannelId": "1445186724576628899",
-    "supportChannelId": "1445186873063505960",
-    "helpRoleId": "1445374262029451334",
-
-    "roles": {},
-    "nickname": {
-      "hierarchy": [],
-      "teams": [],
-      "postes": []
-    }
-  },
-
   "1410246320324870217": {
     "clubName": "XIG DOR",
     "tag": "XIG",
     "embedColor": "f1c40f",
 
     "logChannelId": "1448726984795488286",
-    "mainDispoChannelId": "1441625985559691304",
     "rapportChannelId": "1448731756478857337",
-
-    "panelChannelId": "0",
-    "welcomeChannelId": "0",
-    "memberCounterChannelId": "0",
+    "mainDispoChannelId": "1441625985559691304",
 
     "dispoMessages": {
       "lundi": "1449021079505862798",
@@ -113,15 +74,12 @@
       "mercredi": "1449021167477456957",
       "jeudi": "1449021204458639371",
       "vendredi": "1449021260653924473",
-      "samedi": "0",
       "dimanche": "1449021028129832971"
     },
 
     "roles": {
       "joueur": "0",
-      "essai": "0",
-      "convoque": "0",
-      "recrue": "0"
+      "essai": "0"
     },
 
     "nickname": {
