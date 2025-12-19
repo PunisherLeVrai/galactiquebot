@@ -6,18 +6,21 @@ const { DATA_BASE } = require('./paths'); // même base que pour les snapshots
 /**
  * Dossiers de config
  * - repoConfigDir       : dans le projet (fichiers versionnés)
- * - persistentConfigDir : dans /data/config (ou $DATA_DIR/config) → persistant
+ * - persistentConfigDir : dans DATA_BASE/config → persistant
  */
 const repoConfigDir = path.join(__dirname, '../config');
 const persistentConfigDir = path.join(DATA_BASE, 'config');
 
 // --- Sécurisation des dossiers ---
-if (!fs.existsSync(repoConfigDir)) {
-  fs.mkdirSync(repoConfigDir, { recursive: true });
+function ensureDir(dir) {
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    console.error(`❌ [config] Impossible de créer le dossier: ${dir}`, e);
+  }
 }
-if (!fs.existsSync(persistentConfigDir)) {
-  fs.mkdirSync(persistentConfigDir, { recursive: true });
-}
+ensureDir(repoConfigDir);
+ensureDir(persistentConfigDir);
 
 // Fichiers dans le repo (valeurs par défaut versionnées)
 const repoGlobalPath = path.join(repoConfigDir, 'global.json');
@@ -37,8 +40,26 @@ function loadJsonSafe(filePath, fallback, label) {
     if (!raw.trim()) return fallback;
     return JSON.parse(raw);
   } catch (err) {
-    console.error(`⚠️ Impossible de charger ${label || filePath} :`, err);
+    console.error(`⚠️ [config] Impossible de charger ${label || filePath} :`, err);
     return fallback;
+  }
+}
+
+/**
+ * Écriture atomique JSON (évite fichiers tronqués/corrompus)
+ */
+function writeJsonAtomic(filePath, obj, label) {
+  try {
+    const dir = path.dirname(filePath);
+    ensureDir(dir);
+
+    const tmp = `${filePath}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+    fs.renameSync(tmp, filePath);
+    return true;
+  } catch (err) {
+    console.error(`❌ [config] Impossible d’écrire ${label || filePath} :`, err);
+    return false;
   }
 }
 
@@ -49,24 +70,14 @@ function loadJsonSafe(filePath, fallback, label) {
  */
 function loadWithPersistentFallback(persistentPath, repoPath, defaultValue, label) {
   // 1) Essayer la version persistante
-  const persisted = loadJsonSafe(persistentPath, null, label + ' (persistant)');
-  if (persisted && typeof persisted === 'object') {
-    return persisted;
-  }
+  const persisted = loadJsonSafe(persistentPath, null, `${label} (persistant)`);
+  if (persisted && typeof persisted === 'object') return persisted;
 
   // 2) Essayer le fichier du repo (valeurs par défaut versionnées)
-  const fromRepo = loadJsonSafe(repoPath, defaultValue, label + ' (repo)');
+  const fromRepo = loadJsonSafe(repoPath, defaultValue, `${label} (repo)`);
   if (fromRepo && typeof fromRepo === 'object') {
     // 3) Le recopier en persistant pour la prochaine fois
-    try {
-      fs.writeFileSync(
-        persistentPath,
-        JSON.stringify(fromRepo, null, 2),
-        'utf8'
-      );
-    } catch (err) {
-      console.error(`❌ Impossible d’écrire ${label} persistant :`, err);
-    }
+    writeJsonAtomic(persistentPath, fromRepo, `${label} persistant`);
     return fromRepo;
   }
 
@@ -75,9 +86,6 @@ function loadWithPersistentFallback(persistentPath, repoPath, defaultValue, labe
 }
 
 // --- Chargement des configs ---
-// Tout vit maintenant en PERSISTANT (/data/config),
-// avec fallback sur les fichiers du repo à la première exécution.
-
 let globalConfig = loadWithPersistentFallback(
   globalPath,
   repoGlobalPath,
@@ -93,52 +101,32 @@ let serversConfig = loadWithPersistentFallback(
 );
 
 // Valeurs par défaut soft pour la globale
-if (!globalConfig || typeof globalConfig !== 'object') {
-  globalConfig = {};
-}
-if (!globalConfig.botName) {
-  globalConfig.botName = 'GalactiqueBot';
-}
+if (!globalConfig || typeof globalConfig !== 'object') globalConfig = {};
+if (!globalConfig.botName) globalConfig.botName = 'GalactiqueBot';
 
 /**
  * Sauvegarde la config de tous les serveurs dans le fichier PERSISTANT
  */
 function saveServersConfig() {
-  try {
-    fs.writeFileSync(
-      serversPath,
-      JSON.stringify(serversConfig, null, 2),
-      'utf8'
-    );
-  } catch (err) {
-    console.error('❌ Impossible d’écrire config/servers.json (persistant) :', err);
-  }
+  return writeJsonAtomic(serversPath, serversConfig, 'config/servers.json (persistant)');
 }
 
 /**
  * Sauvegarde la config globale dans le fichier PERSISTANT
  */
 function saveGlobalConfig() {
-  try {
-    fs.writeFileSync(
-      globalPath,
-      JSON.stringify(globalConfig, null, 2),
-      'utf8'
-    );
-  } catch (err) {
-    console.error('❌ Impossible d’écrire config/global.json (persistant) :', err);
-  }
+  return writeJsonAtomic(globalPath, globalConfig, 'config/global.json (persistant)');
 }
 
 /**
- * Retourne la config globale (nom du bot, options communes, etc.)
+ * Retourne la config globale
  */
 function getGlobalConfig() {
   return globalConfig;
 }
 
 /**
- * Retourne la config d’une guilde (serveur) précise.
+ * Retourne la config d’une guilde précise.
  */
 function getGuildConfig(guildId) {
   if (!guildId) return null;
@@ -161,33 +149,46 @@ function getConfigFromInteraction(interaction) {
  */
 function setGuildConfig(guildId, newConfig) {
   if (!guildId) return;
-  serversConfig[guildId] = newConfig || {};
+  serversConfig[guildId] = (newConfig && typeof newConfig === 'object') ? newConfig : {};
   saveServersConfig();
 }
 
 /**
- * Met à jour partiellement la config d’une guilde (merge superficiel).
- *
- * Exemple :
- *   updateGuildConfig(guildId, {
- *     logChannelId: '123',
- *     roles: { joueur: '456' }
- *   })
+ * Merge “safe” pour objets (superficiel)
+ */
+function mergeObj(base, patch) {
+  const b = (base && typeof base === 'object') ? base : {};
+  const p = (patch && typeof patch === 'object') ? patch : {};
+  return { ...b, ...p };
+}
+
+/**
+ * Met à jour partiellement la config d’une guilde.
+ * ✅ Merge aussi : roles / dispoMessages / nickname / compo
  */
 function updateGuildConfig(guildId, patch) {
   if (!guildId || !patch || typeof patch !== 'object') return;
 
   const existing = serversConfig[guildId] || {};
 
-  serversConfig[guildId] = {
+  const next = {
     ...existing,
-    ...patch,
-    // merge superficiel pour roles si fourni
-    ...(patch.roles
-      ? { roles: { ...(existing.roles || {}), ...(patch.roles || {}) } }
-      : {})
+    ...patch
   };
 
+  if (patch.roles) next.roles = mergeObj(existing.roles, patch.roles);
+  if (patch.dispoMessages) next.dispoMessages = mergeObj(existing.dispoMessages, patch.dispoMessages);
+
+  // nickname est un objet avec arrays (hierarchy/teams/postes). Ici on remplace ce qui est fourni.
+  if (patch.nickname) next.nickname = {
+    ...(existing.nickname || {}),
+    ...(patch.nickname || {})
+  };
+
+  // compo (channelId/detectMode/etc.)
+  if (patch.compo) next.compo = mergeObj(existing.compo, patch.compo);
+
+  serversConfig[guildId] = next;
   saveServersConfig();
 }
 
@@ -197,6 +198,7 @@ module.exports = {
   getConfigFromInteraction,
   setGuildConfig,
   updateGuildConfig,
+
   // utilitaires
   saveServersConfig,
   saveGlobalConfig
