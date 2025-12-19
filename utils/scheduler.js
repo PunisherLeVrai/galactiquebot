@@ -14,16 +14,12 @@ const { SNAPSHOT_DIR } = require('./paths');
 
 const DEFAULT_COLOR = 0xff4db8;
 
-/**
- * ✅ SERVEURS CIBLÉS (IGA + DOR uniquement)
- */
-const ALLOWED_GUILDS = [
-  '1392639720491581551' // INTER GALACTIQUE
+// ✅ Fallback si tu n’envoies pas targetGuildIds depuis index.js
+const DEFAULT_ALLOWED_GUILDS = [
+  '1392639720491581551', // IGA
+  '1410246320324870217'  // DOR
 ];
 
-/**
- * ✅ AUTOMATIONS CONSERVÉES (Railway gratuit)
- */
 const AUTOMATION = {
   timezone: 'Europe/Paris',
 
@@ -54,13 +50,9 @@ function getEmbedColorFromConfig(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
-// Anti-mentions (sécurité)
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
-/**
- * Date/heure Paris fiable (corrige le cas "24")
- */
 function getParisParts() {
   const fmt = new Intl.DateTimeFormat('fr-FR', {
     timeZone: AUTOMATION.timezone || 'Europe/Paris',
@@ -88,13 +80,8 @@ function getParisParts() {
   const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
   const mapJour = {
-    'dimanche': 'dimanche',
-    'lundi': 'lundi',
-    'mardi': 'mardi',
-    'mercredi': 'mercredi',
-    'jeudi': 'jeudi',
-    'vendredi': 'vendredi',
-    'samedi': 'samedi'
+    dimanche: 'dimanche', lundi: 'lundi', mardi: 'mardi', mercredi: 'mercredi',
+    jeudi: 'jeudi', vendredi: 'vendredi', samedi: 'samedi'
   };
   const jour = mapJour[weekday] || 'lundi';
 
@@ -104,8 +91,6 @@ function getParisParts() {
 function idsLine(colOrArray) {
   const arr = Array.isArray(colOrArray) ? colOrArray : [...colOrArray.values()];
   if (!arr.length) return '_Aucun_';
-
-  // GuildMember[]
   if (arr[0] && arr[0].id && arr[0].user) {
     return arr
       .slice()
@@ -113,8 +98,6 @@ function idsLine(colOrArray) {
       .map(m => `<@${m.id}>`)
       .join(' - ');
   }
-
-  // string[]
   return arr.map(id => `<@${id}>`).join(' - ');
 }
 
@@ -140,13 +123,8 @@ function addDays(d, delta) {
   return x;
 }
 
-/* ============================================================
-   CIBLAGE SERVEURS
-============================================================ */
-
-function getTargetGuildIds(client) {
-  const present = new Set([...client.guilds.cache.keys()]);
-  return ALLOWED_GUILDS.filter(id => present.has(id));
+function inWindow(minute, start, end) {
+  return minute >= start && minute <= end;
 }
 
 function isEligibleDay(jour) {
@@ -154,20 +132,32 @@ function isEligibleDay(jour) {
 }
 
 /* ============================================================
-   DISPOS : RÉCUP DATA (réactions ✅/❌)
+   CIBLAGE SERVEURS (IGA + DOR)
+============================================================ */
+
+function computeTargetGuildIds(client, opts = {}) {
+  const present = new Set([...client.guilds.cache.keys()]);
+  const source =
+    (opts.targetGuildIds instanceof Set) ? [...opts.targetGuildIds] :
+    (Array.isArray(opts.targetGuildIds)) ? opts.targetGuildIds :
+    DEFAULT_ALLOWED_GUILDS;
+
+  return source.filter(id => present.has(id));
+}
+
+/* ============================================================
+   DISPOS : RÉCUP DATA
 ============================================================ */
 
 async function fetchDispoDataForDay(guild, jour) {
   const cfg = getGuildConfig(guild.id) || {};
-  const dispoMessages = cfg.dispoMessages || {};
-  const dispoMessageId = dispoMessages[jour];
+  const dispoMessageId = cfg.dispoMessages?.[jour];
   const dispoChannelId = cfg.mainDispoChannelId;
-  const rolesCfg = cfg.roles || {};
 
   if (!isValidId(dispoChannelId) || !isValidId(dispoMessageId)) return null;
 
-  const roleJoueurId = isValidId(rolesCfg.joueur) ? rolesCfg.joueur : null;
-  const roleEssaiId = isValidId(rolesCfg.essai) ? rolesCfg.essai : null;
+  const roleJoueurId = isValidId(cfg.roles?.joueur) ? cfg.roles.joueur : null;
+  const roleEssaiId  = isValidId(cfg.roles?.essai)  ? cfg.roles.essai  : null;
   if (!roleJoueurId && !roleEssaiId) return null;
 
   const dispoChannel = await guild.channels.fetch(dispoChannelId).catch(() => null);
@@ -183,7 +173,7 @@ async function fetchDispoDataForDay(guild, jour) {
   await guild.members.fetch().catch(() => {});
 
   const roleJoueur = roleJoueurId ? guild.roles.cache.get(roleJoueurId) : null;
-  const roleEssai = roleEssaiId ? guild.roles.cache.get(roleEssaiId) : null;
+  const roleEssai  = roleEssaiId  ? guild.roles.cache.get(roleEssaiId)  : null;
 
   const reacted = new Set();
   const yes = new Set();
@@ -207,13 +197,13 @@ async function fetchDispoDataForDay(guild, jour) {
   const eligibles = guild.members.cache.filter(m => {
     if (m.user.bot) return false;
     const hasJoueur = roleJoueur ? m.roles.cache.has(roleJoueur.id) : false;
-    const hasEssai = roleEssai ? m.roles.cache.has(roleEssai.id) : false;
+    const hasEssai  = roleEssai  ? m.roles.cache.has(roleEssai.id)  : false;
     return hasJoueur || hasEssai;
   });
 
   const nonRepondus = eligibles.filter(m => !reacted.has(m.id));
   const presentsAll = guild.members.cache.filter(m => !m.user.bot && yes.has(m.id));
-  const absentsAll = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
+  const absentsAll  = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
 
   const messageURL = `https://discord.com/channels/${guild.id}/${dispoChannelId}/${dispoMessageId}`;
   const rowBtn = new ActionRowBuilder().addComponents(
@@ -223,20 +213,7 @@ async function fetchDispoDataForDay(guild, jour) {
       .setURL(messageURL)
   );
 
-  return {
-    cfg,
-    dispoChannel,
-    message,
-    messageURL,
-    rowBtn,
-    reacted,
-    yes,
-    no,
-    eligibles,
-    nonRepondus,
-    presentsAll,
-    absentsAll
-  };
+  return { cfg, dispoChannel, message, messageURL, rowBtn, reacted, yes, no, eligibles, nonRepondus, presentsAll, absentsAll };
 }
 
 /* ============================================================
@@ -271,36 +248,31 @@ async function runNoonReminderForGuild(client, guildId, jour) {
   const data = await fetchDispoDataForDay(guild, jour);
   if (!data) return;
 
-  const { nonRepondus, messageURL, dispoChannel } = data;
-
-  const ids = [...nonRepondus.values()].map(m => m.id);
+  const ids = [...data.nonRepondus.values()].map(m => m.id);
 
   if (!ids.length) {
-    await dispoChannel.send({
-      content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`,
-      allowedMentions: { parse: [] }
-    });
+    await data.dispoChannel.send({ content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`, allowedMentions: { parse: [] } });
     return;
   }
 
   const header = [
     `📣 **Rappel aux absents (${jour.toUpperCase()})**`,
     'Merci de réagir aux disponibilités du jour ✅❌',
-    `➡️ [Accéder au message du jour](${messageURL})`
+    `➡️ [Accéder au message du jour](${data.messageURL})`
   ].join('\n');
 
   const batches = splitByMessageLimit(ids, header + '\n\n');
-
   const first = batches.shift();
+
   if (first?.length) {
-    await dispoChannel.send({
+    await data.dispoChannel.send({
       content: `${header}\n\n${first.map(id => `<@${id}>`).join(' - ')}`,
       allowedMentions: AUTOMATION.mentionInReminder ? { users: first, parse: [] } : { parse: [] }
     });
   }
 
   for (const batch of batches) {
-    await dispoChannel.send({
+    await data.dispoChannel.send({
       content: batch.map(id => `<@${id}>`).join(' - '),
       allowedMentions: AUTOMATION.mentionInReminder ? { users: batch, parse: [] } : { parse: [] }
     });
@@ -314,9 +286,7 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
   const data = await fetchDispoDataForDay(guild, jour);
   if (!data) return;
 
-  const { cfg, presentsAll, absentsAll, nonRepondus, rowBtn } = data;
-
-  const reportChannelId = cfg.rapportChannelId;
+  const reportChannelId = data.cfg.rapportChannelId;
   if (!isValidId(reportChannelId)) return;
 
   const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
@@ -326,16 +296,16 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
     .setColor(getEmbedColorFromConfig(guild.id))
     .setTitle(`📅 RAPPORT - ${jour.toUpperCase()} (${hourLabel})`)
     .addFields(
-      { name: `✅ Présents (${presentsAll.size})`, value: idsLine(presentsAll) },
-      { name: `❌ Ont dit absent (${absentsAll.size})`, value: idsLine(absentsAll) },
-      { name: `⏳ N’ont pas réagi (${nonRepondus.size})`, value: idsLine(nonRepondus) }
+      { name: `✅ Présents (${data.presentsAll.size})`, value: idsLine(data.presentsAll) },
+      { name: `❌ Ont dit absent (${data.absentsAll.size})`, value: idsLine(data.absentsAll) },
+      { name: `⏳ N’ont pas réagi (${data.nonRepondus.size})`, value: idsLine(data.nonRepondus) }
     )
-    .setFooter({ text: `${getClubName(cfg, guild)} ⚫ Rapport automatisé` })
+    .setFooter({ text: `${getClubName(data.cfg, guild)} ⚫ Rapport automatisé` })
     .setTimestamp();
 
   await reportChannel.send({
     embeds: [embed],
-    components: [rowBtn],
+    components: [data.rowBtn],
     allowedMentions: AUTOMATION.mentionInReports ? { parse: ['users'] } : { parse: [] }
   });
 }
@@ -351,9 +321,7 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
   const data = await fetchDispoDataForDay(guild, jour);
   if (!data) return;
 
-  const { cfg, dispoChannel, message, reacted, yes, no, eligibles, messageURL } = data;
-
-  const clubName = getClubName(cfg, guild);
+  const clubName = getClubName(data.cfg, guild);
   const color = getEmbedColorFromConfig(guild.id);
 
   // Snapshot
@@ -366,12 +334,12 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
       clubName,
       jour,
       date: isoDate,
-      messageId: message.id,
-      channelId: dispoChannel.id,
-      reacted: [...reacted],
-      presents: [...yes],
-      absents: [...no],
-      eligibles: [...eligibles.keys()]
+      messageId: data.message.id,
+      channelId: data.dispoChannel.id,
+      reacted: [...data.reacted],
+      presents: [...data.yes],
+      absents: [...data.no],
+      eligibles: [...data.eligibles.keys()]
     };
 
     const snapPath = path.join(SNAPSHOT_DIR, `dispos-${jour}-${isoDate}.json`);
@@ -382,7 +350,7 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
 
   // Lock embed
   try {
-    const exist = message.embeds?.[0];
+    const exist = data.message.embeds?.[0];
     if (exist) {
       const e = EmbedBuilder.from(exist);
       const desc = sanitize(exist.description || '');
@@ -391,24 +359,24 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
         e.setDescription([desc, '', lockLine].filter(Boolean).join('\n'));
         e.setFooter({ text: `${clubName} ⚫ Disponibilités (fermées)` });
         e.setColor(color);
-        await message.edit({ content: '', embeds: [e] });
+        await data.message.edit({ content: '', embeds: [e] });
       }
     }
   } catch {}
 
   if (AUTOMATION.clearReactionsAt17) {
-    try { await message.reactions.removeAll(); } catch {}
+    try { await data.message.reactions.removeAll(); } catch {}
   }
 
   if (AUTOMATION.sendCloseMessageAt17) {
     try {
-      await dispoChannel.send({
+      await data.dispoChannel.send({
         content: sanitize(
           [
             `🔒 **Les disponibilités pour ${jour.toUpperCase()} sont désormais fermées.**`,
             'Merci de votre compréhension.',
             '',
-            `➡️ [Voir le message du jour](${messageURL})`
+            `➡️ [Voir le message du jour](${data.messageURL})`
           ].join('\n')
         ),
         allowedMentions: { parse: [] }
@@ -418,7 +386,7 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
 }
 
 /* ============================================================
-   SEMAINE : DIMANCHE UNIQUEMENT (snapshots 17h) — IGA + DOR
+   SEMAINE : DIMANCHE UNIQUEMENT (snapshots)
 ============================================================ */
 
 const DISPO_SNAP_REGEX = /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
@@ -428,7 +396,6 @@ function readDispoSnapshotsInRange(fromDate, toDate) {
   if (!fs.existsSync(SNAPSHOT_DIR)) return snaps;
 
   const files = fs.readdirSync(SNAPSHOT_DIR).filter(f => DISPO_SNAP_REGEX.test(f));
-
   for (const f of files) {
     const m = DISPO_SNAP_REGEX.exec(f);
     if (!m) continue;
@@ -504,9 +471,7 @@ async function autoWeekDispoReportForGuild(client, guildId) {
     }
   }
 
-  const entries = [...misses.entries()]
-    .filter(([, n]) => n > 0)
-    .sort((a, b) => b[1] - a[1]);
+  const entries = [...misses.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
 
   const headerLines = [
     '📅 **Analyse disponibilités (Snapshots auto)**',
@@ -547,7 +512,7 @@ async function autoWeekDispoReportForGuild(client, guildId) {
 }
 
 /* ============================================================
-   SYNC PSEUDOS (nickname.*) — CONSERVÉ
+   SYNC PSEUDOS (nickname.*)
 ============================================================ */
 
 const MAX_LEN = 32;
@@ -563,28 +528,12 @@ function cleanPseudo(username, room = MAX_LEN) {
   return clean;
 }
 
-function getHierarchy(member, hierarchyRoles = []) {
-  const found = hierarchyRoles.find(r => member.roles.cache.has(r.id));
-  return found ? found.label : null;
-}
-
-function getTeam(member, teamRoles = []) {
-  const found = teamRoles.find(r => member.roles.cache.has(r.id));
-  return found ? found.label : null;
-}
-
-function getPostes(member, posteRoles = []) {
-  return posteRoles
-    .filter(p => member.roles.cache.has(p.id))
-    .map(p => p.label)
-    .slice(0, 3);
-}
-
 function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRoles) {
   const tag = tagFromConfig || 'XIG';
-  const hierarchy = getHierarchy(member, hierarchyRoles);
-  const team = getTeam(member, teamRoles);
-  const postes = getPostes(member, posteRoles);
+
+  const hierarchy = hierarchyRoles.find(r => member.roles.cache.has(r.id))?.label || null;
+  const team = teamRoles.find(r => member.roles.cache.has(r.id))?.label || null;
+  const postes = posteRoles.filter(p => member.roles.cache.has(p.id)).map(p => p.label).slice(0, 3);
 
   const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
   let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
@@ -641,23 +590,13 @@ async function autoSyncNicknamesForGuild(client, guildId) {
 }
 
 /* ============================================================
-   INIT SCHEDULER — ANTI BUG 22H (anti-overlap)
+   INIT SCHEDULER
 ============================================================ */
 
-function inWindow(minute, start, end) {
-  return minute >= start && minute <= end;
-}
-
-function initScheduler(client) {
+function initScheduler(client, opts = {}) {
   console.log('⏰ Scheduler: 12h (rappel+rapport) / 17h (rapport+close+snapshot) / dimanche 22h (semaine) / sync pseudos H:10');
 
-  const last = {
-    noon: null,
-    close17: null,
-    week: null,
-    nick: null
-  };
-
+  const last = { noon: null, close17: null, week: null, nick: null };
   let tickRunning = false;
 
   setInterval(async () => {
@@ -668,7 +607,7 @@ function initScheduler(client) {
       const { hour, minute, isoDate: dateKey, jour } = getParisParts();
       if (!isEligibleDay(jour)) return;
 
-      const guildIds = getTargetGuildIds(client);
+      const guildIds = computeTargetGuildIds(client, opts);
 
       // 12h → rappel + rapport (0-2)
       if (hour === 12 && inWindow(minute, 0, 2)) {
@@ -678,9 +617,7 @@ function initScheduler(client) {
 
           for (const gid of guildIds) {
             try {
-              if (AUTOMATION.enableNoonReminder) {
-                await runNoonReminderForGuild(client, gid, jour);
-              }
+              if (AUTOMATION.enableNoonReminder) await runNoonReminderForGuild(client, gid, jour);
             } catch (e) {
               console.error(`❌ [AUTO] rappel 12h (${gid})`, e);
             }
@@ -715,6 +652,7 @@ function initScheduler(client) {
         const key = `${dateKey}-22-week`;
         if (last.week !== key) {
           last.week = key;
+
           for (const gid of guildIds) {
             try { await autoWeekDispoReportForGuild(client, gid); }
             catch (e) { console.error(`❌ [AUTO] dispo week (${gid})`, e); }
@@ -727,6 +665,7 @@ function initScheduler(client) {
         const key = `${dateKey}-${hour}`;
         if (last.nick !== key) {
           last.nick = key;
+
           for (const gid of guildIds) {
             try { await autoSyncNicknamesForGuild(client, gid); }
             catch (e) { console.error(`❌ [AUTO] sync pseudos (${gid})`, e); }
@@ -742,7 +681,7 @@ function initScheduler(client) {
 module.exports = {
   initScheduler,
 
-  // exports utiles (debug/commandes)
+  // exports utiles
   runNoonReminderForGuild,
   sendDetailedReportForGuild,
   closeDisposAt17ForGuild,
