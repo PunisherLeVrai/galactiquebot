@@ -24,9 +24,7 @@ function cleanPseudo(username, room = MAX_LEN) {
 
   clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
 
-  if (clean.length > room) {
-    clean = clean.slice(0, room - 1) + '…';
-  }
+  if (clean.length > room) clean = clean.slice(0, room - 1) + '…';
   return clean;
 }
 
@@ -57,7 +55,6 @@ function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRo
   const team = getTeam(member, teamRoles);
   const postes = getPostes(member, posteRoles);
 
-  // On prépare d'abord sans se soucier de la taille
   const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
   let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
 
@@ -66,9 +63,7 @@ function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRo
   if (team) suffixParts.push(team);
 
   let full = base;
-  if (suffixParts.length) {
-    full += ' | ' + suffixParts.join(' | ');
-  }
+  if (suffixParts.length) full += ' | ' + suffixParts.join(' | ');
 
   // Si on dépasse 32, on réduit le pseudo en priorité
   if (full.length > MAX_LEN) {
@@ -80,10 +75,10 @@ function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRo
       MAX_LEN - (fixedPrefix.length ? fixedPrefix.length + 1 : 0) - suffix.length
     );
 
-      const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
-      full = fixedPrefix.length
-        ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
-        : `${trimmedPseudo}${suffix}`;
+    const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
+    full = fixedPrefix.length
+      ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
+      : `${trimmedPseudo}${suffix}`;
   }
 
   return full.slice(0, MAX_LEN);
@@ -105,10 +100,18 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    const guild = interaction.guild;
+    if (!guild) {
+      return interaction.reply({
+        content: '❌ Cette commande doit être utilisée dans un serveur.',
+        ephemeral: true
+      });
+    }
+
     const simulation = interaction.options.getBoolean('simulation') ?? true;
 
-    const me = interaction.guild.members.me;
-    if (!me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
+    const me = guild.members.me;
+    if (!me?.permissions?.has?.(PermissionFlagsBits.ManageNicknames)) {
       return interaction.reply({
         content: '❌ Je n’ai pas la permission **Gérer les pseudos** sur ce serveur.',
         ephemeral: true
@@ -139,8 +142,8 @@ module.exports = {
       ephemeral: true
     });
 
-    await interaction.guild.members.fetch().catch(() => {});
-    const members = interaction.guild.members.cache.filter(m => !m.user.bot);
+    await guild.members.fetch().catch(() => {});
+    const members = guild.members.cache.filter(m => !m.user.bot);
 
     const changes = [];
     const unchanged = [];
@@ -174,10 +177,16 @@ module.exports = {
       changes.push({ member, from: current, to: newNick });
     }
 
-    const preview = changes
-      .slice(0, 25)
-      .map(c => `• ${c.member.user.tag} : "${c.from}" → "${c.to}"`)
-      .join('\n') || 'Aucun pseudo modifié.';
+    // ⚠️ Protection longueur message (Discord)
+    const makePreview = () => {
+      const lines = changes
+        .slice(0, 25)
+        .map(c => `• ${c.member.user.tag} : "${c.from}" → "${c.to}"`);
+
+      let preview = lines.join('\n') || 'Aucun pseudo modifié.';
+      if (changes.length > 25) preview += `\n... (+${changes.length - 25} autres)`;
+      return preview.slice(0, 1500); // garde une marge
+    };
 
     await interaction.followUp({
       content: [
@@ -188,12 +197,9 @@ module.exports = {
         errors.length ? `❌ Erreurs : ${errors.length}` : '',
         '',
         '```',
-        preview,
-        changes.length > 25 ? `\n... (+${changes.length - 25} autres)` : '',
+        makePreview(),
         '```'
-      ]
-        .filter(Boolean)
-        .join('\n'),
+      ].filter(Boolean).join('\n'),
       ephemeral: true
     });
   }
