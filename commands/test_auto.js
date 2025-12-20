@@ -1,112 +1,123 @@
 // commands/test_auto.js
 const {
   SlashCommandBuilder,
-  PermissionFlagsBits,
-  MessageFlags
+  PermissionFlagsBits
 } = require('discord.js');
 
 const {
-  sendDispoPanelIG,
-  runNoonReminderIG,
-  sendDetailedReportIG,
-  closeDisposAt17IG,
-  autoSyncNicknamesIG,
-  autoVerifierCompoIG,
-  autoVerifierCompoReminderIG,
-  autoCompoWeekReportIG,
-  autoWeekDispoReportIG
+  runNoonReminderForGuild,
+  sendDetailedReportForGuild,
+  closeDisposAt17ForGuild,
+  autoSyncNicknamesForGuild,
+  autoWeekDispoReportForGuild
 } = require('../utils/scheduler');
 
 // Même ID que dans scheduler.js
 const IG_GUILD_ID = '1392639720491581551';
 
+/**
+ * Jour/date Paris (cohérent avec ton scheduler)
+ */
+function getParisDayAndISO() {
+  const fmt = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+
+  const parts = fmt.formatToParts(new Date());
+  const get = (type) => parts.find(p => p.type === type)?.value;
+
+  const year = Number(get('year'));
+  const month = Number(get('month'));
+  const day = Number(get('day'));
+  const weekday = (get('weekday') || '').toLowerCase();
+
+  const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+  const mapJour = {
+    'dimanche': 'dimanche',
+    'lundi': 'lundi',
+    'mardi': 'mardi',
+    'mercredi': 'mercredi',
+    'jeudi': 'jeudi',
+    'vendredi': 'vendredi',
+    'samedi': 'samedi'
+  };
+
+  return { jour: mapJour[weekday] || 'lundi', isoDate };
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('test_auto')
-    .setDescription('Tester manuellement les automatisations (IG uniquement).')
+    .setDescription('Tester manuellement les automatisations (IGA uniquement).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(o =>
       o.setName('action')
         .setDescription('Automatisation à tester')
         .setRequired(true)
         .addChoices(
-          { name: 'Panneau de disponibilités (10h/22h)', value: 'panneau' },
-          { name: 'Rappel 12h (texte brut)', value: 'rappel_12h' },
+          { name: 'Rappel 12h (non-répondants)', value: 'rappel_12h' },
           { name: 'Rapport 12h (embed détaillé)', value: 'rapport_12h' },
           { name: 'Rapport 17h (embed détaillé)', value: 'rapport_17h' },
-          { name: 'Fermeture 17h (snapshot + 🔒)', value: 'fermeture_17h' },
+          { name: 'Fermeture 17h (snapshot + 🔒 + clear réactions)', value: 'fermeture_17h' },
           { name: 'Sync pseudos automatique', value: 'sync_pseudos' },
-          { name: 'Rappel compo (comme 18h/19h/19h30)', value: 'verif_compo_rappel' },
-          { name: 'Vérifier compo finale (comme 20h)', value: 'verif_compo_final' },
-          { name: 'Vérifier compo semaine (auto)', value: 'verif_compo_semaine_now' },
-          { name: 'Vérifier semaine dispos (auto)', value: 'verif_semaine_now' }
+          { name: 'Rapport semaine dispos (snapshots)', value: 'dispo_semaine' }
         )
     ),
 
   async execute(interaction) {
     const action = interaction.options.getString('action', true);
 
-    // Sécurité : commande utilisable uniquement sur le serveur IG
-    if (interaction.guild.id !== IG_GUILD_ID) {
+    // ✅ Sécurité : uniquement IGA
+    if (interaction.guild?.id !== IG_GUILD_ID) {
       return interaction.reply({
-        content: '❌ Cette commande de test ne fonctionne que sur le serveur INTER GALACTIQUE.',
-        flags: MessageFlags.Ephemeral
+        content: '❌ Cette commande de test ne fonctionne que sur le serveur **INTER GALACTIQUE**.',
+        ephemeral: true
       });
     }
 
+    const { jour, isoDate } = getParisDayAndISO();
+
     await interaction.reply({
-      content: `⏳ Lancement du test **${action}**…`,
-      flags: MessageFlags.Ephemeral
+      content: `⏳ Lancement du test **${action}**… (jour Paris: **${jour}**, date: **${isoDate}**)`,
+      ephemeral: true
     });
 
     try {
       switch (action) {
-        case 'panneau':
-          await sendDispoPanelIG(interaction.client);
-          break;
-
         case 'rappel_12h':
-          await runNoonReminderIG(interaction.client);
+          await runNoonReminderForGuild(interaction.client, IG_GUILD_ID, jour);
           break;
 
         case 'rapport_12h':
-          await sendDetailedReportIG(interaction.client, '12h');
+          await sendDetailedReportForGuild(interaction.client, IG_GUILD_ID, jour, '12h');
           break;
 
         case 'rapport_17h':
-          await sendDetailedReportIG(interaction.client, '17h');
+          await sendDetailedReportForGuild(interaction.client, IG_GUILD_ID, jour, '17h');
           break;
 
         case 'fermeture_17h':
-          await closeDisposAt17IG(interaction.client);
+          await closeDisposAt17ForGuild(interaction.client, IG_GUILD_ID, jour, isoDate);
           break;
 
         case 'sync_pseudos':
-          await autoSyncNicknamesIG(interaction.client);
+          await autoSyncNicknamesForGuild(interaction.client, IG_GUILD_ID);
           break;
 
-        // 🔔 Rappel compo (simule 18h/19h/19h30, avec mentions des non-validés)
-        case 'verif_compo_rappel':
-          await autoVerifierCompoReminderIG(interaction.client, 'TEST-RAPPEL');
-          break;
-
-        // ✅ Rapport final compo (simule 20h : snapshot + clear réactions + embed dans rapports auto uniquement)
-        case 'verif_compo_final':
-          await autoVerifierCompoIG(interaction.client, 'TEST-FINAL');
-          break;
-
-        case 'verif_compo_semaine_now':
-          await autoCompoWeekReportIG(interaction.client);
-          break;
-
-        case 'verif_semaine_now':
-          await autoWeekDispoReportIG(interaction.client);
+        case 'dispo_semaine':
+          await autoWeekDispoReportForGuild(interaction.client, IG_GUILD_ID);
           break;
 
         default:
-          return interaction.editReply({
-            content: '❌ Action inconnue.'
-          });
+          return interaction.editReply({ content: '❌ Action inconnue.' });
       }
 
       await interaction.editReply({
