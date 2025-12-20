@@ -3,14 +3,19 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
-  ChannelType
+  ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require('discord.js');
+
 const fs = require('fs');
 const path = require('path');
-const { getConfigFromInteraction } = require('../utils/config');
 
-const RAPPORTS_DIR = path.join(__dirname, '../rapports');
-const DEFAULT_COLOR = 0xff4db8; // couleur par défaut si aucune couleur définie
+const { getConfigFromInteraction } = require('../utils/config');
+const { SNAPSHOT_DIR } = require('../utils/paths');
+
+const DEFAULT_COLOR = 0xff4db8;
 
 function getEmbedColor(cfg) {
   const hex = cfg?.embedColor;
@@ -20,11 +25,40 @@ function getEmbedColor(cfg) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
+function isValidId(id) {
+  return !!id && id !== '0';
+}
+
+function ensureDir(dir) {
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch {}
+}
+
+/**
+ * Date ISO en timezone Paris
+ */
+function getParisISODate() {
+  const fmt = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = (t) => parts.find(p => p.type === t)?.value;
+  const y = get('year');
+  const m = get('month');
+  const d = get('day');
+  return `${y}-${m}-${d}`;
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('verifier_compo')
-    .setDescription('Vérifie quels convoqués ont validé une compo.')
+    .setDescription('Vérifie quels convoqués ont validé une compo (✅).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+
     .addStringOption(o =>
       o.setName('message')
         .setDescription('ID ou lien du message de composition (laisser vide pour auto-détection).')
@@ -32,13 +66,13 @@ module.exports = {
     )
     .addChannelOption(o =>
       o.setName('salon')
-        .setDescription('Salon où se trouve la compo (défaut : salon courant).')
+        .setDescription('Salon où se trouve la compo (défaut : salon compo config ou salon courant).')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
     .addChannelOption(o =>
       o.setName('salon_rapport')
-        .setDescription('Salon où envoyer la vérification (défaut : salon des rapports ou salon courant).')
+        .setDescription('Salon où envoyer la vérification (défaut : salon rapports ou salon courant).')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
@@ -49,29 +83,35 @@ module.exports = {
     )
     .addBooleanOption(o =>
       o.setName('enregistrer_snapshot')
-        .setDescription('Enregistrer un snapshot du résultat (défaut : non).')
+        .setDescription('Enregistrer un snapshot (persistant) du résultat (défaut : non).')
         .setRequired(false)
     ),
 
   async execute(interaction) {
     const guild = interaction.guild;
+    if (!guild) return;
+
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
-    const convoqueRoleId = guildConfig?.roles?.convoque || null;
-    const embedColor = getEmbedColor(guildConfig);
-    const clubLabel = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
+    const cfg = guildConfig || {};
+
+    const convoqueRoleId = cfg?.roles?.convoque || null;
+    const embedColor = getEmbedColor(cfg);
+    const clubLabel = cfg?.clubName || guild.name || 'INTER GALACTIQUE';
 
     const rappel = interaction.options.getBoolean('rappel') ?? false;
     const enregistrer = interaction.options.getBoolean('enregistrer_snapshot') ?? false;
 
-    if (!convoqueRoleId) {
+    if (!isValidId(convoqueRoleId)) {
       return interaction.reply({
-        content: '❌ Rôle **convoqué** non configuré pour ce serveur (`roles.convoque` dans servers.json).',
+        content: '❌ Rôle **convoqué** non configuré (`roles.convoque` dans servers.json).',
         ephemeral: true
       });
     }
 
+    // Salon compo : option > cfg.compo.channelId > salon courant
     const compoChannel =
       interaction.options.getChannel('salon') ||
+      (isValidId(cfg?.compo?.channelId) ? await guild.channels.fetch(cfg.compo.channelId).catch(() => null) : null) ||
       interaction.channel;
 
     if (!compoChannel || compoChannel.type !== ChannelType.GuildText) {
@@ -81,12 +121,10 @@ module.exports = {
       });
     }
 
-    const rapportChannelId =
-      guildConfig?.rapportChannelId || null;
-
+    const rapportChannelId = cfg?.rapportChannelId || null;
     const rapportChannel =
       interaction.options.getChannel('salon_rapport') ||
-      (rapportChannelId ? guild.channels.cache.get(rapportChannelId) : null) ||
+      (isValidId(rapportChannelId) ? guild.channels.cache.get(rapportChannelId) : null) ||
       interaction.channel;
 
     const me = guild.members.me;
@@ -104,12 +142,15 @@ module.exports = {
 
     // --- Récupération du message de compo ---
     let messageIdInput = interaction.options.getString('message');
-    let compoMessage;
+    let compoMessage = null;
+
+    // config compo detection
+    const detectMode = (cfg?.compo?.detectMode || 'footer_or_reaction').toLowerCase();
+    const footerContains = String(cfg?.compo?.footerContains || 'Compo officielle');
+    const reactionEmoji = String(cfg?.compo?.reactionEmoji || '✅');
 
     if (messageIdInput) {
       messageIdInput = messageIdInput.trim();
-
-      // Si l’utilisateur a mis un lien de message, on récupère l’ID à la fin
       const linkMatch = messageIdInput.match(/\/(\d{17,20})$/);
       if (linkMatch) messageIdInput = linkMatch[1];
 
@@ -125,31 +166,34 @@ module.exports = {
       try {
         const fetched = await compoChannel.messages.fetch({ limit: 50 });
 
-        // 1️⃣ Priorité : message du bot avec footer "Compo officielle"
-        compoMessage = fetched.find(msg =>
+        // 1) Footer (si mode le permet)
+        const byFooter = fetched.find(msg =>
           msg.author.id === me.id &&
-          msg.embeds?.[0]?.footer?.text?.includes('Compo officielle')
+          msg.embeds?.[0]?.footer?.text &&
+          String(msg.embeds[0].footer.text).includes(footerContains)
         );
 
-        // 2️⃣ Sinon : dernier message du bot avec réaction ✅
-        if (!compoMessage) {
-          compoMessage = fetched.find(msg =>
-            msg.author.id === me.id &&
-            msg.reactions?.cache?.some(r => r.emoji?.name === '✅')
-          );
-        }
+        // 2) Réaction (si mode le permet)
+        const byReaction = fetched.find(msg =>
+          msg.author.id === me.id &&
+          msg.reactions?.cache?.some(r => r.emoji?.name === reactionEmoji)
+        );
+
+        if (detectMode === 'footer') compoMessage = byFooter || null;
+        else if (detectMode === 'reaction') compoMessage = byReaction || null;
+        else compoMessage = byFooter || byReaction || null;
 
         if (!compoMessage) {
           return interaction.editReply(
             '❌ Impossible de trouver automatiquement un message de composition dans ce salon.\n' +
-            '➡️ Merci de relancer la commande en précisant l’option `message` (ID ou lien de la compo).'
+            '➡️ Relance avec l’option `message` (ID ou lien du message de compo).'
           );
         }
       } catch (err) {
         console.error('Erreur recherche compo auto :', err);
         return interaction.editReply(
           '❌ Erreur lors de la recherche automatique de la composition.\n' +
-          '➡️ Merci de relancer la commande avec l’ID ou le lien du message via l’option `message`.'
+          '➡️ Relance avec l’option `message` (ID ou lien du message via Discord).'
         );
       }
     }
@@ -167,15 +211,12 @@ module.exports = {
 
     // --- Qui a réagi ✅ ? ---
     const validesSet = new Set();
+
     for (const [, reaction] of compoMessage.reactions.cache) {
       if (reaction.emoji?.name !== '✅') continue;
-
       const users = await reaction.users.fetch().catch(() => null);
       if (!users) continue;
-
-      users.forEach(u => {
-        if (!u.bot) validesSet.add(u.id);
-      });
+      users.forEach(u => { if (!u.bot) validesSet.add(u.id); });
     }
 
     const valides = [];
@@ -186,15 +227,16 @@ module.exports = {
       else nonValides.push(m);
     }
 
-    // --- Snapshot JSON (optionnel) ---
+    // --- Snapshot (optionnel) ---
     if (enregistrer) {
       try {
-        if (!fs.existsSync(RAPPORTS_DIR)) {
-          fs.mkdirSync(RAPPORTS_DIR, { recursive: true });
-        }
-        const dateStr = new Date().toISOString().split('T')[0];
+        ensureDir(SNAPSHOT_DIR);
+        const dateStr = getParisISODate();
+
         const snap = {
           type: 'compo',
+          guildId: guild.id,
+          clubName: clubLabel,
           date: dateStr,
           channelId: compoChannel.id,
           messageId: compoMessage.id,
@@ -202,10 +244,8 @@ module.exports = {
           valides: valides.map(m => m.id),
           non_valides: nonValides.map(m => m.id)
         };
-        const filePath = path.join(
-          RAPPORTS_DIR,
-          `compo-${dateStr}-${compoMessage.id}.json`
-        );
+
+        const filePath = path.join(SNAPSHOT_DIR, `compo-${dateStr}-${compoMessage.id}.json`);
         fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
       } catch (e) {
         console.error('Erreur snapshot compo :', e);
@@ -217,6 +257,13 @@ module.exports = {
     const formatMentions = (arr) =>
       arr.length ? arr.map(m => `<@${m.id}>`).join(' - ') : '_Aucun_';
 
+    const rowBtn = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('Voir la compo')
+        .setStyle(ButtonStyle.Link)
+        .setURL(url)
+    );
+
     const embed = new EmbedBuilder()
       .setColor(embedColor)
       .setTitle('📋 Vérification de la composition')
@@ -225,17 +272,11 @@ module.exports = {
         `👥 Convoqués : **${convoques.size}**`,
         `✅ Validé : **${valides.length}**`,
         `⏳ Non validé : **${nonValides.length}**`,
-        enregistrer ? '💾 Snapshot enregistré dans `/rapports`.' : ''
+        enregistrer ? '💾 Snapshot enregistré (persistant).' : ''
       ].filter(Boolean).join('\n'))
       .addFields(
-        {
-          name: '✅ Validé',
-          value: formatMentions(valides).slice(0, 1024)
-        },
-        {
-          name: '⏳ Non validé',
-          value: formatMentions(nonValides).slice(0, 1024)
-        }
+        { name: '✅ Validé', value: formatMentions(valides).slice(0, 1024) },
+        { name: '⏳ Non validé', value: formatMentions(nonValides).slice(0, 1024) }
       )
       .setFooter({ text: `${clubLabel} • Vérification compo` })
       .setTimestamp();
@@ -247,6 +288,7 @@ module.exports = {
         ? nonValidesIds.map(id => `<@${id}>`).join(' - ')
         : undefined,
       embeds: [embed],
+      components: [rowBtn],
       allowedMentions: rappel && nonValidesIds.length
         ? { users: nonValidesIds, parse: [] }
         : { parse: [] }
