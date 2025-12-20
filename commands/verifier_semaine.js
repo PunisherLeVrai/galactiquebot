@@ -8,11 +8,15 @@ const {
 
 const fs = require('fs');
 const path = require('path');
-const { getConfigFromInteraction } = require('../utils/config');
 
-const RAPPORTS_DIR = path.join(__dirname, '../rapports');
+const { getConfigFromInteraction } = require('../utils/config');
+const { SNAPSHOT_DIR } = require('../utils/paths');
+
 const DEFAULT_COLOR = 0xff4db8;
-const SNAP_REGEX = /^snapshot-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
+
+// ✅ format scheduler : dispos-jour-YYYY-MM-DD.json
+const DISPO_SNAP_REGEX =
+  /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
 
 /* ------------------------- Couleur depuis config ------------------------- */
 function getEmbedColor(cfg) {
@@ -21,6 +25,10 @@ function getEmbedColor(cfg) {
   const clean = String(hex).replace(/^0x/i, '').replace('#', '');
   const num = parseInt(clean, 16);
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
+}
+
+function isValidId(id) {
+  return !!id && id !== '0';
 }
 
 /* ------------------------- Utils dates ------------------------- */
@@ -44,16 +52,34 @@ function addDays(d, delta) {
   return x;
 }
 
-/* --------------------- Lecture snapshots ----------------------- */
-function readSnapshotsInRange(fromDate, toDate) {
-  const snaps = [];
-  if (!fs.existsSync(RAPPORTS_DIR)) return snaps;
+/**
+ * Aujourd’hui à 00:00 en Europe/Paris (fiable, pas de toLocaleString hack)
+ */
+function getParisTodayDate() {
+  const fmt = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = (t) => parts.find(p => p.type === t)?.value;
 
-  const files = fs.readdirSync(RAPPORTS_DIR)
-    .filter(f => f.startsWith('snapshot-') && f.endsWith('.json'));
+  const y = Number(get('year'));
+  const m = Number(get('month'));
+  const d = Number(get('day'));
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+
+/* --------------------- Lecture snapshots (persistants) ----------------------- */
+function readDispoSnapshotsInRange(fromDate, toDate, guildId) {
+  const snaps = [];
+  if (!fs.existsSync(SNAPSHOT_DIR)) return snaps;
+
+  const files = fs.readdirSync(SNAPSHOT_DIR).filter(f => DISPO_SNAP_REGEX.test(f));
 
   for (const f of files) {
-    const m = SNAP_REGEX.exec(f);
+    const m = DISPO_SNAP_REGEX.exec(f);
     if (!m) continue;
 
     const fileDate = parseISODate(m[2]);
@@ -61,7 +87,10 @@ function readSnapshotsInRange(fromDate, toDate) {
 
     if (fileDate >= fromDate && fileDate <= toDate) {
       try {
-        const js = JSON.parse(fs.readFileSync(path.join(RAPPORTS_DIR, f), 'utf8'));
+        const js = JSON.parse(fs.readFileSync(path.join(SNAPSHOT_DIR, f), 'utf8'));
+        // ✅ filtre guildId
+        if (guildId && String(js?.guildId || '') !== String(guildId)) continue;
+
         snaps.push({ file: f, date: fileDate, data: js });
       } catch {
         // ignore fichiers corrompus
@@ -76,7 +105,7 @@ function readSnapshotsInRange(fromDate, toDate) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('verifier_semaine')
-    .setDescription('Outils basés sur les snapshots des disponibilités.')
+    .setDescription('Outils basés sur les snapshots des disponibilités (persistants).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     /* --------------- Sous-commande : analyse ---------------- */
@@ -84,35 +113,29 @@ module.exports = {
       sc
         .setName('analyse')
         .setDescription('Analyse les snapshots : jours sans réaction par membre.')
-
-        // STRING d'abord (ordre Discord correct)
         .addStringOption(o =>
           o.setName('debut')
-            .setDescription('Date début YYYY-MM-DD (défaut : aujourd’hui - 6 jours).')
+            .setDescription('Date début YYYY-MM-DD (défaut : aujourd’hui - 6 jours, Europe/Paris).')
             .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('fin')
-            .setDescription('Date fin YYYY-MM-DD (défaut : aujourd’hui).')
+            .setDescription('Date fin YYYY-MM-DD (défaut : aujourd’hui, Europe/Paris).')
             .setRequired(false)
         )
-
-        // Puis BOOLEAN
         .addBooleanOption(o =>
           o.setName('mention')
-            .setDescription('Mentionner les membres trouvés.')
+            .setDescription('Mentionner les membres trouvés (si encore sur le serveur). Défaut : non')
             .setRequired(false)
         )
         .addBooleanOption(o =>
           o.setName('inclure_hors_serveur')
-            .setDescription('Inclure les membres hors serveur.')
+            .setDescription('Inclure les membres hors serveur. Défaut : oui')
             .setRequired(false)
         )
-
-        // CHANNEL toujours en dernier
         .addChannelOption(o =>
           o.setName('salon')
-            .setDescription('Salon où envoyer le rapport.')
+            .setDescription('Salon où envoyer le rapport (défaut : salon des rapports ou salon courant).')
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
@@ -122,9 +145,7 @@ module.exports = {
     .addSubcommand(sc =>
       sc
         .setName('reset')
-        .setDescription('Supprime les snapshots /rapports.')
-
-        // STRING AVANT BOOLEAN (ordre Discord obligatoire)
+        .setDescription('Supprime les snapshots dispos (persistants).')
         .addStringOption(o =>
           o.setName('avant')
             .setDescription('Supprimer les snapshots antérieurs ou égaux à cette date (YYYY-MM-DD).')
@@ -137,9 +158,6 @@ module.exports = {
         )
     ),
 
-  /* --------------------------------------------------------------- */
-  /*                          EXECUTION                              */
-  /* --------------------------------------------------------------- */
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
 
@@ -148,42 +166,37 @@ module.exports = {
     =============================================================== */
     if (sub === 'analyse') {
       const guild = interaction.guild;
+      if (!guild) return;
 
       const mention = interaction.options.getBoolean('mention') ?? false;
       const includeExternal = interaction.options.getBoolean('inclure_hors_serveur') ?? true;
 
-      // Charge config dynamique
       const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
-      const embedColor = getEmbedColor(guildConfig);
-      const clubLabel = guildConfig?.clubName || guild.name || 'INTER GALACTIQUE';
+      const cfg = guildConfig || {};
+      const embedColor = getEmbedColor(cfg);
+      const clubLabel = cfg?.clubName || guild.name || 'INTER GALACTIQUE';
 
-      const rapportChannelId =
-        guildConfig?.channels?.rapport ||
-        guildConfig?.rapportChannelId ||
-        null;
+      const rapportChannelId = cfg?.rapportChannelId || null;
 
-      // Canal cible
       const targetChannel =
         interaction.options.getChannel('salon') ||
-        (rapportChannelId ? guild.channels.cache.get(rapportChannelId) : null) ||
+        (isValidId(rapportChannelId) ? guild.channels.cache.get(rapportChannelId) : null) ||
         interaction.channel;
 
-      // Permissions
       const me = guild.members.me;
-      if (!targetChannel || !targetChannel.permissionsFor?.(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
+      if (!targetChannel?.permissionsFor?.(me)?.has(['ViewChannel', 'SendMessages'])) {
         return interaction.reply({
           content: `❌ Je n’ai pas la permission d’écrire dans <#${targetChannel?.id || 'inconnu'}>.`,
           ephemeral: true
         });
       }
 
-      /* -- Période -- */
-      const nowParis = new Date(new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris' }));
-      const defaultEnd = new Date(nowParis.getFullYear(), nowParis.getMonth(), nowParis.getDate());
+      // Période défaut : 7 jours Paris
+      const defaultEnd = getParisTodayDate();
       const defaultStart = addDays(defaultEnd, -6);
 
       const debutStr = interaction.options.getString('debut') || toISO(defaultStart);
-      const finStr   = interaction.options.getString('fin') || toISO(defaultEnd);
+      const finStr   = interaction.options.getString('fin')   || toISO(defaultEnd);
 
       const fromDate = parseISODate(debutStr);
       const toDate   = parseISODate(finStr);
@@ -196,14 +209,14 @@ module.exports = {
       }
 
       await interaction.reply({
-        content: `🔍 Analyse des snapshots du **${debutStr}** au **${finStr}**…`,
+        content: `🔍 Analyse des snapshots dispos du **${debutStr}** au **${finStr}**…`,
         ephemeral: true
       });
 
-      const snaps = readSnapshotsInRange(fromDate, toDate);
-      if (snaps.length === 0) {
+      const snaps = readDispoSnapshotsInRange(fromDate, toDate, guild.id);
+      if (!snaps.length) {
         return interaction.followUp({
-          content: '⚠️ Aucun snapshot trouvé dans `/rapports` pour cette période.',
+          content: `⚠️ Aucun snapshot trouvé dans \`${SNAPSHOT_DIR}\` pour cette période.`,
           ephemeral: true
         });
       }
@@ -211,17 +224,17 @@ module.exports = {
       await guild.members.fetch().catch(() => {});
       const currentIds = new Set(guild.members.cache.filter(m => !m.user.bot).map(m => m.id));
 
-      /* -- Analyse réactions -- */
-      const misses = new Map();
-      const daysCount = new Map();
+      const misses = new Map();     // id -> nb jours sans réaction
+      const daysCount = new Map();  // id -> nb jours où il était éligible
       let snapshotsUsed = 0;
       let snapshotsSkipped = 0;
 
       for (const s of snaps) {
-        const reacted = new Set(Array.isArray(s.data?.reacted) ? s.data.reacted : []);
-        const eligibles = Array.isArray(s.data?.eligibles) ? s.data.eligibles : null;
+        const data = s.data || {};
+        const reacted = new Set(Array.isArray(data.reacted) ? data.reacted : []);
+        const eligibles = Array.isArray(data.eligibles) ? data.eligibles : null;
 
-        if (!eligibles || eligibles.length === 0) {
+        if (!eligibles?.length) {
           snapshotsSkipped++;
           continue;
         }
@@ -232,11 +245,8 @@ module.exports = {
           const isInServer = currentIds.has(id);
           if (!isInServer && !includeExternal) continue;
 
-          if (!misses.has(id)) misses.set(id, 0);
-          if (!daysCount.has(id)) daysCount.set(id, 0);
-
-          daysCount.set(id, daysCount.get(id) + 1);
-          if (!reacted.has(id)) misses.set(id, misses.get(id) + 1);
+          daysCount.set(id, (daysCount.get(id) || 0) + 1);
+          if (!reacted.has(id)) misses.set(id, (misses.get(id) || 0) + 1);
         }
       }
 
@@ -256,34 +266,32 @@ module.exports = {
 
       const asLine = (id, n) => {
         const m = guild.members.cache.get(id);
-        return m
-          ? `<@${id}> — **${n}** jour(s) sans réaction`
-          : `\`${id}\` *(hors serveur)* — **${n}** jour(s)`;
+        const total = daysCount.get(id) || n;
+
+        if (m) return `<@${id}> — **${n}** jour(s) sans réaction sur **${total}** jour(s)`;
+        return `\`${id}\` *(hors serveur)* — **${n}** jour(s) sans réaction sur **${total}** jour(s)`;
       };
 
-      if (entries.length === 0) {
+      if (!entries.length) {
         const embedOK = new EmbedBuilder()
           .setColor(embedColor)
           .setTitle('✅ Tous ont réagi au moins une fois')
           .setDescription(headerLines.join('\n'))
-          .setFooter({ text: `${clubLabel} • Rapport snapshots` })
+          .setFooter({ text: `${clubLabel} • Rapport snapshots dispos` })
           .setTimestamp();
 
         await targetChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
-        return interaction.followUp({
-          content: '📨 Rapport envoyé.',
-          ephemeral: true
-        });
+        return interaction.followUp({ content: '📨 Rapport envoyé.', ephemeral: true });
       }
 
-      /* -- Pagination -- */
+      // Pagination
       const pageSize = 20;
       const pages = [];
       for (let i = 0; i < entries.length; i += pageSize) {
         pages.push(entries.slice(i, i + pageSize));
       }
 
-      /* Première page */
+      // Première page
       const first = pages.shift();
       const firstEmbed = new EmbedBuilder()
         .setColor(embedColor)
@@ -293,7 +301,7 @@ module.exports = {
           name: 'Liste',
           value: first.map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
         })
-        .setFooter({ text: `${clubLabel} • Rapport snapshots` })
+        .setFooter({ text: `${clubLabel} • Rapport snapshots dispos` })
         .setTimestamp();
 
       const firstMentions =
@@ -301,48 +309,27 @@ module.exports = {
 
       await targetChannel.send({
         embeds: [firstEmbed],
-        allowedMentions: mention
-          ? { users: firstMentions, parse: [] }
-          : { parse: [] }
+        allowedMentions: mention ? { users: firstMentions, parse: [] } : { parse: [] }
       });
 
-      /* Pages suivantes */
+      // Pages suivantes
       for (const page of pages) {
-        const chunks = [];
-        let cur = [];
-        let len = 0;
-
-        for (const [id, n] of page) {
-          const line = `• ${asLine(id, n)}\n`;
-          if (len + line.length > 1024) {
-            chunks.push(cur.join(''));
-            cur = [line];
-            len = line.length;
-          } else {
-            cur.push(line);
-            len += line.length;
-          }
-        }
-        if (cur.length) chunks.push(cur.join(''));
-
         const embed = new EmbedBuilder()
           .setColor(embedColor)
           .setTitle('Suite')
-          .setFooter({ text: `${clubLabel} • Rapport snapshots` })
+          .addFields({
+            name: 'Liste (suite)',
+            value: page.map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
+          })
+          .setFooter({ text: `${clubLabel} • Rapport snapshots dispos` })
           .setTimestamp();
-
-        chunks.forEach((c, i) => {
-          embed.addFields({ name: i === 0 ? 'Liste (suite)' : '…', value: c });
-        });
 
         const mentions =
           mention ? page.map(([id]) => id).filter(id => guild.members.cache.has(id)) : [];
 
         await targetChannel.send({
           embeds: [embed],
-          allowedMentions: mention
-            ? { users: mentions, parse: [] }
-            : { parse: [] }
+          allowedMentions: mention ? { users: mentions, parse: [] } : { parse: [] }
         });
       }
 
@@ -368,40 +355,39 @@ module.exports = {
       }
 
       await interaction.reply({
-        content: '🧹 Analyse des snapshots en cours…',
+        content: '🧹 Analyse des snapshots dispos en cours…',
         ephemeral: true
       });
 
-      if (!fs.existsSync(RAPPORTS_DIR)) {
+      if (!fs.existsSync(SNAPSHOT_DIR)) {
         return interaction.editReply({
-          content: 'ℹ️ Le dossier `/rapports` est vide — rien à supprimer.'
+          content: `ℹ️ Le dossier \`${SNAPSHOT_DIR}\` est vide — rien à supprimer.`
         });
       }
 
-      const files = fs.readdirSync(RAPPORTS_DIR)
-        .filter(f => SNAP_REGEX.test(f));
+      const files = fs.readdirSync(SNAPSHOT_DIR).filter(f => DISPO_SNAP_REGEX.test(f));
 
       const toDelete = files.filter(f => {
         if (!avantDate) return true;
-        const m = SNAP_REGEX.exec(f);
+        const m = DISPO_SNAP_REGEX.exec(f);
         const fileDate = parseISODate(m?.[2]);
         return fileDate && fileDate <= avantDate;
       });
 
-      if (toDelete.length === 0) {
+      if (!toDelete.length) {
         return interaction.editReply({
           content: `✅ Aucun fichier à supprimer${avantDate ? ` (≤ ${avantStr})` : ''}.`
         });
       }
 
       if (simulation) {
-        const preview = toDelete.slice(0, 20).join('\n');
+        const preview = toDelete.slice(0, 25).join('\n');
         return interaction.editReply({
           content: [
             `🧪 **Simulation** — ${toDelete.length} fichier(s) seraient supprimés.`,
             '```',
             preview,
-            toDelete.length > 20 ? `\n... (+${toDelete.length - 20} autres)` : '',
+            toDelete.length > 25 ? `\n... (+${toDelete.length - 25} autres)` : '',
             '```',
             'ℹ️ Relance avec `simulation:false` pour confirmer.'
           ].join('\n')
@@ -414,21 +400,19 @@ module.exports = {
 
       for (const f of toDelete) {
         try {
-          fs.unlinkSync(path.join(RAPPORTS_DIR, f));
+          fs.unlinkSync(path.join(SNAPSHOT_DIR, f));
           ok++;
         } catch (e) {
           fail++;
-          errors.push(`${f}: ${e?.message}`);
+          errors.push(`${f}: ${e?.message || e}`);
         }
       }
 
       return interaction.editReply({
         content: [
           `🗑️ Suppression terminée : **${ok}** fichier(s) supprimés.`,
-          fail
-            ? `❌ Erreurs (${fail}) :\n\`\`\`\n${errors.join('\n')}\n\`\`\``
-            : ''
-        ].join('\n')
+          fail ? `❌ Erreurs (${fail}) :\n\`\`\`\n${errors.join('\n')}\n\`\`\`` : ''
+        ].filter(Boolean).join('\n')
       });
     }
   }
