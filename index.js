@@ -19,23 +19,19 @@ const { ensureSnapshotDirectory } = require('./utils/paths');
 ensureSnapshotDirectory();
 
 /* ============================================================
-   GUILDS CIBLÉS (UNIQUEMENT IGA + DOR)
+   🔒 SERVEUR AUTORISÉ POUR AUTOMATISATIONS
 ============================================================ */
-const IG_GUILD_ID  = '1392639720491581551';
-const DOR_GUILD_ID = '1410246320324870217';
-const TARGET_GUILD_IDS = new Set([IG_GUILD_ID, DOR_GUILD_ID]);
+const IGA_GUILD_ID = '1392639720491581551';
 
 /* ============================================================
    HEALTHCHECK (Railway Web Service)
-   - Si PORT existe, on ouvre un mini serveur HTTP "OK"
-   - Si PORT n'existe pas, on ne fait rien (worker / autre)
 ============================================================ */
 let healthServer = null;
 
 function startHealthcheck() {
   const port = process.env.PORT;
   if (!port) {
-    console.log('ℹ️ [HEALTH] PORT absent → pas de serveur HTTP (OK si non requis).');
+    console.log('ℹ️ [HEALTH] PORT absent → pas de serveur HTTP.');
     return;
   }
   if (healthServer) return;
@@ -92,15 +88,17 @@ client.once('ready', async () => {
   const BOT_NAME = globalConfig.botName || 'GalactiqueBot';
 
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
-  console.log(`🟢 ${BOT_NAME} prêt (IGA + DOR).`);
+  console.log(`🟢 ${BOT_NAME} prêt`);
+  console.log(`🔒 Automatisations actives UNIQUEMENT sur IGA`);
 
   // Presence (léger)
   const activities = [
-    'Dispos 12h/17h',
-    'Snapshots 17h',
-    'Rapport semaine (dimanche)',
+    'Dispos 12h / 17h',
+    'Snapshots automatiques',
+    'Rapport semaine',
     'Sync pseudos'
   ];
+
   let i = 0;
   const updatePresence = () => {
     client.user.setPresence({
@@ -112,24 +110,20 @@ client.once('ready', async () => {
   updatePresence();
   setInterval(updatePresence, 300000);
 
-  // ✅ Scheduler
-  initScheduler(client, { targetGuildIds: TARGET_GUILD_IDS });
+  // ✅ Scheduler — IGA ONLY
+  initScheduler(client, {
+    targetGuildIds: new Set([IGA_GUILD_ID])
+  });
 });
 
 /* ============================================================
-   INTERACTIONS (SLASH)
+   INTERACTIONS (SLASH COMMANDS)
 ============================================================ */
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  // ✅ Ignore tout ce qui n'est pas IGA/DOR
-  const gid = interaction.guild?.id;
-  if (!gid || !TARGET_GUILD_IDS.has(gid)) {
-    return interaction.reply({
-      content: '❌ Ce bot est configuré uniquement pour **IGA** et **DOR**.',
-      ephemeral: true
-    }).catch(() => {});
-  }
+  const guildId = interaction.guild?.id;
+  if (!guildId) return;
 
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
@@ -138,7 +132,11 @@ client.on('interactionCreate', async (interaction) => {
     await command.execute(interaction);
   } catch (err) {
     console.error('❌ Erreur commande :', err);
-    const msg = { content: '❌ Une erreur est survenue.', ephemeral: true };
+
+    const msg = {
+      content: '❌ Une erreur est survenue lors de l’exécution de la commande.',
+      ephemeral: true
+    };
 
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp(msg).catch(() => {});
@@ -151,14 +149,18 @@ client.on('interactionCreate', async (interaction) => {
 /* ============================================================
    LOG ERREURS + ARRÊT PROPRE
 ============================================================ */
-process.on('unhandledRejection', (e) => console.error('🚨 unhandledRejection:', e));
-process.on('uncaughtException', (e) => console.error('💥 uncaughtException:', e));
+process.on('unhandledRejection', (e) =>
+  console.error('🚨 unhandledRejection:', e)
+);
+
+process.on('uncaughtException', (e) =>
+  console.error('💥 uncaughtException:', e)
+);
 
 process.on('SIGTERM', async () => {
   console.log('🛑 SIGTERM reçu — fermeture propre...');
   try { if (healthServer) healthServer.close(); } catch {}
   try { await client.destroy(); } catch {}
-  // pas de process.exit() forcé
 });
 
 /* ============================================================
