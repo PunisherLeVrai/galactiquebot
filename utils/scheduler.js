@@ -14,10 +14,8 @@ const { SNAPSHOT_DIR } = require('./paths');
 
 const DEFAULT_COLOR = 0xff4db8;
 
-// ✅ Fallback si tu n’envoies pas targetGuildIds depuis index.js
-const DEFAULT_ALLOWED_GUILDS = [
-  '1392639720491581551' // IGA
-];
+// ✅ IGA ONLY (verrouillage total)
+const IG_ONLY_GUILD_ID = '1392639720491581551';
 
 const AUTOMATION = {
   timezone: 'Europe/Paris',
@@ -90,6 +88,8 @@ function getParisParts() {
 function idsLine(colOrArray) {
   const arr = Array.isArray(colOrArray) ? colOrArray : [...colOrArray.values()];
   if (!arr.length) return '_Aucun_';
+
+  // Collection de members
   if (arr[0] && arr[0].id && arr[0].user) {
     return arr
       .slice()
@@ -97,11 +97,12 @@ function idsLine(colOrArray) {
       .map(m => `<@${m.id}>`)
       .join(' - ');
   }
+
+  // Array d'IDs
   return arr.map(id => `<@${id}>`).join(' - ');
 }
 
 /* ------------------------- Utils dates ------------------------- */
-
 function parseISODate(d) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
   if (!m) return null;
@@ -131,23 +132,16 @@ function isEligibleDay(jour) {
 }
 
 /* ============================================================
-   CIBLAGE SERVEURS (IGA + DOR)
+   CIBLAGE SERVEURS — IGA UNIQUEMENT
+   (ignore toute liste targetGuildIds venant de index.js)
 ============================================================ */
-
-function computeTargetGuildIds(client, opts = {}) {
-  const present = new Set([...client.guilds.cache.keys()]);
-  const source =
-    (opts.targetGuildIds instanceof Set) ? [...opts.targetGuildIds] :
-    (Array.isArray(opts.targetGuildIds)) ? opts.targetGuildIds :
-    DEFAULT_ALLOWED_GUILDS;
-
-  return source.filter(id => present.has(id));
+function computeTargetGuildIds(client) {
+  return client.guilds.cache.has(IG_ONLY_GUILD_ID) ? [IG_ONLY_GUILD_ID] : [];
 }
 
 /* ============================================================
    DISPOS : RÉCUP DATA
 ============================================================ */
-
 async function fetchDispoDataForDay(guild, jour) {
   const cfg = getGuildConfig(guild.id) || {};
   const dispoMessageId = cfg.dispoMessages?.[jour];
@@ -212,13 +206,25 @@ async function fetchDispoDataForDay(guild, jour) {
       .setURL(messageURL)
   );
 
-  return { cfg, dispoChannel, message, messageURL, rowBtn, reacted, yes, no, eligibles, nonRepondus, presentsAll, absentsAll };
+  return {
+    cfg,
+    dispoChannel,
+    message,
+    messageURL,
+    rowBtn,
+    reacted,
+    yes,
+    no,
+    eligibles,
+    nonRepondus,
+    presentsAll,
+    absentsAll
+  };
 }
 
 /* ============================================================
    12h : RAPPEL + RAPPORT
 ============================================================ */
-
 function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900) {
   const batches = [];
   let cur = [];
@@ -227,6 +233,7 @@ function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900)
   for (const id of allIds) {
     const mention = `<@${id}>`;
     const addLen = (cur.length ? sep.length : 0) + mention.length;
+
     if (curLen + addLen > limit) {
       batches.push(cur);
       cur = [id];
@@ -236,6 +243,7 @@ function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900)
       curLen += addLen;
     }
   }
+
   if (cur.length) batches.push(cur);
   return batches;
 }
@@ -250,7 +258,10 @@ async function runNoonReminderForGuild(client, guildId, jour) {
   const ids = [...data.nonRepondus.values()].map(m => m.id);
 
   if (!ids.length) {
-    await data.dispoChannel.send({ content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`, allowedMentions: { parse: [] } });
+    await data.dispoChannel.send({
+      content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`,
+      allowedMentions: { parse: [] }
+    });
     return;
   }
 
@@ -312,7 +323,6 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
 /* ============================================================
    17h : FERMETURE + SNAPSHOT
 ============================================================ */
-
 async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
@@ -387,7 +397,6 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
 /* ============================================================
    SEMAINE : DIMANCHE UNIQUEMENT (snapshots)
 ============================================================ */
-
 const DISPO_SNAP_REGEX = /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
 
 function readDispoSnapshotsInRange(fromDate, toDate) {
@@ -513,7 +522,6 @@ async function autoWeekDispoReportForGuild(client, guildId) {
 /* ============================================================
    SYNC PSEUDOS (nickname.*)
 ============================================================ */
-
 const MAX_LEN = 32;
 const SLEEP_MS = 350;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -591,9 +599,8 @@ async function autoSyncNicknamesForGuild(client, guildId) {
 /* ============================================================
    INIT SCHEDULER
 ============================================================ */
-
-function initScheduler(client, opts = {}) {
-  console.log('⏰ Scheduler: 12h (rappel+rapport) / 17h (rapport+close+snapshot) / dimanche 22h (semaine) / sync pseudos H:10');
+function initScheduler(client /*, opts = {} */) {
+  console.log('⏰ Scheduler (IGA ONLY): 12h / 17h / dimanche 22h / sync pseudos H:10');
 
   const last = { noon: null, close17: null, week: null, nick: null };
   let tickRunning = false;
@@ -606,7 +613,8 @@ function initScheduler(client, opts = {}) {
       const { hour, minute, isoDate: dateKey, jour } = getParisParts();
       if (!isEligibleDay(jour)) return;
 
-      const guildIds = computeTargetGuildIds(client, opts);
+      // ✅ IGA only (ignore toute config externe)
+      const guildIds = computeTargetGuildIds(client);
 
       // 12h → rappel + rapport (0-2)
       if (hour === 12 && inWindow(minute, 0, 2)) {
@@ -616,7 +624,9 @@ function initScheduler(client, opts = {}) {
 
           for (const gid of guildIds) {
             try {
-              if (AUTOMATION.enableNoonReminder) await runNoonReminderForGuild(client, gid, jour);
+              if (AUTOMATION.enableNoonReminder) {
+                await runNoonReminderForGuild(client, gid, jour);
+              }
             } catch (e) {
               console.error(`❌ [AUTO] rappel 12h (${gid})`, e);
             }
@@ -637,11 +647,17 @@ function initScheduler(client, opts = {}) {
           last.close17 = key;
 
           for (const gid of guildIds) {
-            try { await sendDetailedReportForGuild(client, gid, jour, '17h'); }
-            catch (e) { console.error(`❌ [AUTO] rapport 17h (${gid})`, e); }
+            try {
+              await sendDetailedReportForGuild(client, gid, jour, '17h');
+            } catch (e) {
+              console.error(`❌ [AUTO] rapport 17h (${gid})`, e);
+            }
 
-            try { await closeDisposAt17ForGuild(client, gid, jour, dateKey); }
-            catch (e) { console.error(`❌ [AUTO] close 17h (${gid})`, e); }
+            try {
+              await closeDisposAt17ForGuild(client, gid, jour, dateKey);
+            } catch (e) {
+              console.error(`❌ [AUTO] close 17h (${gid})`, e);
+            }
           }
         }
       }
@@ -653,8 +669,11 @@ function initScheduler(client, opts = {}) {
           last.week = key;
 
           for (const gid of guildIds) {
-            try { await autoWeekDispoReportForGuild(client, gid); }
-            catch (e) { console.error(`❌ [AUTO] dispo week (${gid})`, e); }
+            try {
+              await autoWeekDispoReportForGuild(client, gid);
+            } catch (e) {
+              console.error(`❌ [AUTO] dispo week (${gid})`, e);
+            }
           }
         }
       }
@@ -666,8 +685,11 @@ function initScheduler(client, opts = {}) {
           last.nick = key;
 
           for (const gid of guildIds) {
-            try { await autoSyncNicknamesForGuild(client, gid); }
-            catch (e) { console.error(`❌ [AUTO] sync pseudos (${gid})`, e); }
+            try {
+              await autoSyncNicknamesForGuild(client, gid);
+            } catch (e) {
+              console.error(`❌ [AUTO] sync pseudos (${gid})`, e);
+            }
           }
         }
       }
