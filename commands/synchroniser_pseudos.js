@@ -11,19 +11,16 @@ const SLEEP_MS = 350;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* =========================
-   UTILITAIRES
+   UTILS NICKNAME (même logique que scheduler)
 ========================= */
 
-// Pseudo : première lettre en majuscule, pas de chiffres/caractères spéciaux
 function cleanPseudo(username, room = MAX_LEN) {
   if (!username) return 'Joueur';
 
-  // Supprime tout sauf lettres
   let clean = username.replace(/[^A-Za-z]/g, '');
   if (!clean.length) return 'Joueur';
 
   clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
-
   if (clean.length > room) clean = clean.slice(0, room - 1) + '…';
   return clean;
 }
@@ -45,40 +42,31 @@ function getPostes(member, posteRoles = []) {
     .slice(0, 3);
 }
 
-/**
- * Construit le pseudo :
- * TAG RÔLE Pseudo | Poste1/Poste2/Poste3 | A/B/C
- */
-function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRoles) {
-  const tag = tagFromConfig || 'XIG';
+// ✅ Nouveau format: Pseudo | (Hiérarchie OU Team) | Poste(s)
+function buildNickname(member, nicknameCfg = {}) {
+  const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
+  const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
+  const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
+
   const hierarchy = getHierarchy(member, hierarchyRoles);
   const team = getTeam(member, teamRoles);
-  const postes = getPostes(member, posteRoles);
+  const mid = hierarchy || team || '';
+
+  const postesArr = getPostes(member, posteRoles);
+  const postes = postesArr.length ? postesArr.join('/') : '';
 
   const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
-  let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
 
-  const suffixParts = [];
-  if (postes.length) suffixParts.push(postes.join('/'));
-  if (team) suffixParts.push(team);
+  const parts = [pseudoBase, mid, postes].filter(Boolean);
+  let full = parts.join(' | ');
 
-  let full = base;
-  if (suffixParts.length) full += ' | ' + suffixParts.join(' | ');
-
-  // Si on dépasse 32, on réduit le pseudo en priorité
   if (full.length > MAX_LEN) {
-    const fixedPrefix = `${tag}${hierarchy ? ' ' + hierarchy : ''}`.trim();
-    const suffix = suffixParts.length ? ' | ' + suffixParts.join(' | ') : '';
-
-    const roomForPseudo = Math.max(
-      3,
-      MAX_LEN - (fixedPrefix.length ? fixedPrefix.length + 1 : 0) - suffix.length
-    );
+    const suffix = parts.slice(1).join(' | ');
+    const suffixStr = suffix ? ` | ${suffix}` : '';
+    const roomForPseudo = Math.max(3, MAX_LEN - suffixStr.length);
 
     const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
-    full = fixedPrefix.length
-      ? `${fixedPrefix} ${trimmedPseudo}${suffix}`
-      : `${trimmedPseudo}${suffix}`;
+    full = `${trimmedPseudo}${suffixStr}`;
   }
 
   return full.slice(0, MAX_LEN);
@@ -91,7 +79,7 @@ function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRo
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('synchroniser_pseudos')
-    .setDescription('Synchronise les pseudos au format : TAG RÔLE Pseudo | Poste1/Poste2/Poste3 | A/B/C')
+    .setDescription('Synchronise les pseudos au format : Pseudo | (Hiérarchie OU Team) | Poste(s)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
     .addBooleanOption(o =>
       o.setName('simulation')
@@ -118,16 +106,15 @@ module.exports = {
       });
     }
 
-    // 🔧 Récupération de la config serveur (tag + mapping des rôles)
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
-    const tag = guildConfig?.tag || 'XIG';
-
     const nicknameCfg = guildConfig?.nickname || {};
-    const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
-    const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
-    const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
 
-    if (!hierarchyRoles.length && !teamRoles.length && !posteRoles.length) {
+    const hasAny =
+      (Array.isArray(nicknameCfg.hierarchy) && nicknameCfg.hierarchy.length) ||
+      (Array.isArray(nicknameCfg.teams) && nicknameCfg.teams.length) ||
+      (Array.isArray(nicknameCfg.postes) && nicknameCfg.postes.length);
+
+    if (!hasAny) {
       return interaction.reply({
         content:
           '❌ La configuration des rôles pour les pseudos est manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
@@ -137,8 +124,8 @@ module.exports = {
 
     await interaction.reply({
       content: simulation
-        ? `🧪 Simulation de synchronisation des pseudos en cours… (tag : **${tag}**)`
-        : `🔧 Synchronisation des pseudos en cours… (tag : **${tag}**)`,
+        ? '🧪 Simulation de synchronisation des pseudos en cours…'
+        : '🔧 Synchronisation des pseudos en cours…',
       ephemeral: true
     });
 
@@ -151,7 +138,7 @@ module.exports = {
     const errors = [];
 
     for (const member of members.values()) {
-      const newNick = buildNickname(member, tag, hierarchyRoles, teamRoles, posteRoles);
+      const newNick = buildNickname(member, nicknameCfg);
       const current = member.nickname || member.user.username;
 
       if (current === newNick) {
@@ -166,7 +153,7 @@ module.exports = {
 
       if (!simulation) {
         try {
-          await member.setNickname(newNick, 'Synchronisation pseudos XIG');
+          await member.setNickname(newNick, 'Synchronisation pseudos (manuel)');
           await sleep(SLEEP_MS);
         } catch (e) {
           errors.push({ member, err: String(e?.message || e) });
@@ -177,7 +164,6 @@ module.exports = {
       changes.push({ member, from: current, to: newNick });
     }
 
-    // ⚠️ Protection longueur message (Discord)
     const makePreview = () => {
       const lines = changes
         .slice(0, 25)
@@ -185,7 +171,7 @@ module.exports = {
 
       let preview = lines.join('\n') || 'Aucun pseudo modifié.';
       if (changes.length > 25) preview += `\n... (+${changes.length - 25} autres)`;
-      return preview.slice(0, 1500); // garde une marge
+      return preview.slice(0, 1500);
     };
 
     await interaction.followUp({
