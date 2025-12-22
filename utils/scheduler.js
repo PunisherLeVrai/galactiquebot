@@ -111,6 +111,8 @@ function idsLine(colOrArray) {
   return arr.map(id => `<@${id}>`).join(' - ');
 }
 
+/* ------------------------- Utils dates ------------------------- */
+
 function parseISODate(d) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
   if (!m) return null;
@@ -146,7 +148,6 @@ function isEligibleDay(jour) {
 function computeTargetGuildIds(client, opts = {}) {
   const present = new Set([...client.guilds.cache.keys()]);
 
-  // On lit ce que index.js envoie… mais on filtre DANS TOUS LES CAS vers IGA uniquement
   const source =
     (opts.targetGuildIds instanceof Set) ? [...opts.targetGuildIds] :
     (Array.isArray(opts.targetGuildIds)) ? opts.targetGuildIds :
@@ -226,7 +227,20 @@ async function fetchDispoDataForDay(guild, jour) {
       .setURL(messageURL)
   );
 
-  return { cfg, dispoChannel, message, messageURL, rowBtn, reacted, yes, no, eligibles, nonRepondus, presentsAll, absentsAll };
+  return {
+    cfg,
+    dispoChannel,
+    message,
+    messageURL,
+    rowBtn,
+    reacted,
+    yes,
+    no,
+    eligibles,
+    nonRepondus,
+    presentsAll,
+    absentsAll
+  };
 }
 
 /* ============================================================
@@ -255,7 +269,7 @@ function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900)
 }
 
 async function runNoonReminderForGuild(client, guildId, jour) {
-  if (String(guildId) !== String(IGA_GUILD_ID)) return; // 🔒 safety
+  if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
@@ -298,7 +312,7 @@ async function runNoonReminderForGuild(client, guildId, jour) {
 }
 
 async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
-  if (String(guildId) !== String(IGA_GUILD_ID)) return; // 🔒 safety
+  if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
@@ -335,7 +349,7 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
 ============================================================ */
 
 async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
-  if (String(guildId) !== String(IGA_GUILD_ID)) return; // 🔒 safety
+  if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
@@ -421,6 +435,7 @@ function readDispoSnapshotsInRange(fromDate, toDate) {
   for (const f of files) {
     const m = DISPO_SNAP_REGEX.exec(f);
     if (!m) continue;
+
     const fileDate = parseISODate(m[2]);
     if (!fileDate) continue;
 
@@ -437,7 +452,7 @@ function readDispoSnapshotsInRange(fromDate, toDate) {
 }
 
 async function autoWeekDispoReportForGuild(client, guildId) {
-  if (String(guildId) !== String(IGA_GUILD_ID)) return; // 🔒 safety
+  if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
@@ -495,7 +510,9 @@ async function autoWeekDispoReportForGuild(client, guildId) {
     }
   }
 
-  const entries = [...misses.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const entries = [...misses.entries()]
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
 
   const headerLines = [
     '📅 **Analyse disponibilités (Snapshots auto)**',
@@ -536,7 +553,8 @@ async function autoWeekDispoReportForGuild(client, guildId) {
 }
 
 /* ============================================================
-   SYNC PSEUDOS — IGA ONLY
+   SYNC PSEUDOS — IGA ONLY (NOUVEAU FORMAT)
+   Format: Pseudo | (Hiérarchie OU Team) | Poste(s)
 ============================================================ */
 
 const MAX_LEN = 32;
@@ -545,43 +563,67 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function cleanPseudo(username, room = MAX_LEN) {
   if (!username) return 'Joueur';
+
   let clean = username.replace(/[^A-Za-z]/g, '');
   if (!clean.length) return 'Joueur';
+
   clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
   if (clean.length > room) clean = clean.slice(0, room - 1) + '…';
   return clean;
 }
 
-function buildNickname(member, tagFromConfig, hierarchyRoles, teamRoles, posteRoles) {
-  const tag = tagFromConfig || 'XIG';
+function getHierarchy(member, hierarchyRoles = []) {
+  const found = hierarchyRoles.find(r => member.roles.cache.has(r.id));
+  return found ? found.label : null;
+}
 
-  const hierarchy = hierarchyRoles.find(r => member.roles.cache.has(r.id))?.label || null;
-  const team = teamRoles.find(r => member.roles.cache.has(r.id))?.label || null;
-  const postes = posteRoles.filter(p => member.roles.cache.has(p.id)).map(p => p.label).slice(0, 3);
+function getTeam(member, teamRoles = []) {
+  const found = teamRoles.find(r => member.roles.cache.has(r.id));
+  return found ? found.label : null;
+}
+
+function getPostes(member, posteRoles = []) {
+  return posteRoles
+    .filter(p => member.roles.cache.has(p.id))
+    .map(p => p.label)
+    .slice(0, 3);
+}
+
+// ✅ Nouveau format: Pseudo | (Hiérarchie OU Team) | Poste(s)
+function buildNickname(member, nicknameCfg = {}) {
+  const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
+  const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
+  const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
+
+  const hierarchy = getHierarchy(member, hierarchyRoles);
+  const team = getTeam(member, teamRoles);
+
+  // Priorité: hiérarchie -> sinon team
+  const mid = hierarchy || team || '';
+
+  const postesArr = getPostes(member, posteRoles);
+  const postes = postesArr.length ? postesArr.join('/') : '';
 
   const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
-  let base = `${tag}${hierarchy ? ' ' + hierarchy : ''} ${pseudoBase}`.trim();
 
-  const suffixParts = [];
-  if (postes.length) suffixParts.push(postes.join('/'));
-  if (team) suffixParts.push(team);
+  const parts = [pseudoBase, mid, postes].filter(Boolean);
+  let full = parts.join(' | ');
 
-  let full = base;
-  if (suffixParts.length) full += ' | ' + suffixParts.join(' | ');
-
+  // Si dépasse 32: on réduit le pseudo en priorité
   if (full.length > MAX_LEN) {
-    const fixedPrefix = `${tag}${hierarchy ? ' ' + hierarchy : ''}`.trim();
-    const suffix = suffixParts.length ? ' | ' + suffixParts.join(' | ') : '';
-    const roomForPseudo = Math.max(3, MAX_LEN - (fixedPrefix.length ? fixedPrefix.length + 1 : 0) - suffix.length);
+    const suffix = parts.slice(1).join(' | ');
+    const suffixStr = suffix ? ` | ${suffix}` : '';
+    const roomForPseudo = Math.max(3, MAX_LEN - suffixStr.length);
+
     const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
-    full = fixedPrefix.length ? `${fixedPrefix} ${trimmedPseudo}${suffix}` : `${trimmedPseudo}${suffix}`;
+    full = `${trimmedPseudo}${suffixStr}`;
   }
 
   return full.slice(0, MAX_LEN);
 }
 
 async function autoSyncNicknamesForGuild(client, guildId) {
-  if (String(guildId) !== String(IGA_GUILD_ID)) return; // 🔒 safety
+  if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
@@ -590,21 +632,22 @@ async function autoSyncNicknamesForGuild(client, guildId) {
   if (!me || !me.permissions.has(PermissionFlagsBits.ManageNicknames)) return;
 
   const cfg = getGuildConfig(guild.id) || {};
-  const tag = cfg.tag || 'XIG';
-
   const nicknameCfg = cfg.nickname || {};
-  const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
-  const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
-  const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
 
-  if (!hierarchyRoles.length && !teamRoles.length && !posteRoles.length) return;
+  const hasAny =
+    (Array.isArray(nicknameCfg.hierarchy) && nicknameCfg.hierarchy.length) ||
+    (Array.isArray(nicknameCfg.teams) && nicknameCfg.teams.length) ||
+    (Array.isArray(nicknameCfg.postes) && nicknameCfg.postes.length);
+
+  if (!hasAny) return;
 
   await guild.members.fetch().catch(() => {});
   const members = guild.members.cache.filter(m => !m.user.bot);
 
   for (const member of members.values()) {
-    const newNick = buildNickname(member, tag, hierarchyRoles, teamRoles, posteRoles);
+    const newNick = buildNickname(member, nicknameCfg);
     const current = member.nickname || member.user.username;
+
     if (current === newNick) continue;
     if (!member.manageable) continue;
 
