@@ -96,7 +96,7 @@ function mergeObj(base, patch) {
   return { ...b, ...p };
 }
 
-// ✅ merge roles/dispoMessages/nickname/compo si fournis
+// ✅ merge roles/dispoMessages/nickname/compo/planning si fournis
 function updateGuildConfig(guildId, patch) {
   if (!guildId || !patch || typeof patch !== 'object') return;
 
@@ -111,6 +111,9 @@ function updateGuildConfig(guildId, patch) {
   }
 
   if (patch.compo) next.compo = mergeObj(existing.compo, patch.compo);
+
+  // ✅ AJOUT : planning (merge par jour)
+  if (patch.planning) next.planning = mergeObj(existing.planning, patch.planning);
 
   serversConfig[guildId] = next;
   saveServersConfig();
