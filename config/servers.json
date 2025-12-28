@@ -57,6 +57,39 @@
         { "id": "1444317669859004518", "label": "ATG" },
         { "id": "1444317741505974333", "label": "ATD" }
       ]
+    },
+
+    "automationSchedule": {
+      "timezone": "Europe/Paris",
+
+      "noon": {
+        "enabled": true,
+        "time": "12:00",
+        "windowMin": 2,
+        "mentionInReminder": true,
+        "mentionInReports": false
+      },
+
+      "close": {
+        "enabled": true,
+        "time": "17:00",
+        "windowMin": 2,
+        "clearReactions": true,
+        "sendCloseMessage": true
+      },
+
+      "weekly": {
+        "enabled": true,
+        "day": "dimanche",
+        "time": "22:00",
+        "windowMin": 2
+      },
+
+      "nickSync": {
+        "enabled": true,
+        "minute": 10,
+        "sleepMs": 350
+      }
     }
   },
 
@@ -88,6 +121,39 @@
       "hierarchy": [],
       "teams": [],
       "postes": []
+    },
+
+    "automationSchedule": {
+      "timezone": "Europe/Paris",
+
+      "noon": {
+        "enabled": false,
+        "time": "12:00",
+        "windowMin": 2,
+        "mentionInReminder": false,
+        "mentionInReports": false
+      },
+
+      "close": {
+        "enabled": false,
+        "time": "17:00",
+        "windowMin": 2,
+        "clearReactions": false,
+        "sendCloseMessage": false
+      },
+
+      "weekly": {
+        "enabled": false,
+        "day": "dimanche",
+        "time": "22:00",
+        "windowMin": 2
+      },
+
+      "nickSync": {
+        "enabled": false,
+        "minute": 10,
+        "sleepMs": 350
+      }
     }
   }
 }
