@@ -7,10 +7,7 @@ const {
   ChannelType
 } = require('discord.js');
 
-const {
-  getConfigFromInteraction,
-  updateGuildConfig
-} = require('../utils/config');
+const { getConfigFromInteraction, updateGuildConfig } = require('../utils/config');
 
 const JOURS = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'];
 
@@ -25,8 +22,6 @@ const TITRES = {
 };
 
 const DESC_PAR_DEFAUT = 'Réagissez ci-dessous :\n\n✅ **Présent**  |  ❌ **Absent**';
-const DESCRIPTION_DEFAUT_ROUVRIR = '🕓 Session à 20h45 — merci de réagir ci-dessous ✅ / ❌';
-
 const DEFAULT_COLOR = 0xff4db8;
 
 // 🔒 Anti-mentions
@@ -55,7 +50,7 @@ function getEmbedColor(cfg) {
 }
 
 /* ============================================================
-   🔁 RÉSOLUTION IDS (ids optionnels, fallback servers.json)
+   🔁 RÉSOLUTION IDS (ids optionnels, fallback config)
 ============================================================ */
 function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
   const dispo = guildCfg?.dispoMessages || {};
@@ -87,17 +82,17 @@ function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
     };
   }
 
-  // 🔹 Fallback servers.json
+  // 🔹 Fallback config
   if (jourChoisi === 'all') {
     const missing = JOURS.filter(j => !isValidId(dispo[j]));
     if (missing.length) {
-      return { error: `❌ IDs manquants/invalides dans servers.json → ${missing.join(', ')}` };
+      return { error: `❌ IDs manquants/invalides dans la config → ${missing.join(', ')}` };
     }
     return { mapping: { ...dispo }, joursCibles: [...JOURS], from: 'config' };
   }
 
   if (!isValidId(dispo[jourChoisi])) {
-    return { error: `❌ ID manquant/invalide dans servers.json → dispoMessages.${jourChoisi}` };
+    return { error: `❌ ID manquant/invalide dans la config → dispoMessages.${jourChoisi}` };
   }
 
   return {
@@ -108,19 +103,8 @@ function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
 }
 
 /* ============================================================
-   🧩 Helpers embed (safe)
+   🧩 Embeds helpers
 ============================================================ */
-function buildBaseEmbed({ color, clubName, jour, description, imageUrl }) {
-  const e = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(TITRES[jour] || `📅 ${jour.toUpperCase()}`)
-    .setDescription(description)
-    .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-  if (imageUrl && isValidHttpUrl(imageUrl)) e.setImage(imageUrl);
-  return e;
-}
-
 function safeFromExistingEmbed(msg, fallbackEmbed) {
   const exist = msg?.embeds?.[0];
   if (!exist) return fallbackEmbed;
@@ -131,19 +115,150 @@ function safeFromExistingEmbed(msg, fallbackEmbed) {
   }
 }
 
+function buildEmbed({ color, clubName, jour, description }) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(TITRES[jour] || `📅 ${String(jour).toUpperCase()}`)
+    .setDescription(description)
+    .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+}
+
+function buildEmbedsBatch({ count, color, clubName, jour, description }) {
+  const c = Math.max(1, Math.min(10, Number(count) || 1)); // Discord: max 10 embeds / message
+  const embeds = [];
+  for (let i = 0; i < c; i++) {
+    // On garde le même embed (propre). Si tu veux un numéro visible, décommente.
+    const e = buildEmbed({ color, clubName, jour, description });
+    // if (c > 1) e.setTitle(`${TITRES[jour] || jour.toUpperCase()} • ${i + 1}/${c}`);
+    embeds.push(e);
+  }
+  return embeds;
+}
+
+function pickFinalImage(interaction) {
+  // ✅ priorité upload (galerie)
+  const att = interaction.options.getAttachment('image');
+  if (att?.url) {
+    // nom de fichier "safe" pour attachment://
+    const name = (att.name || 'image.png').replace(/[^\w.\-]/g, '_');
+    return { kind: 'attachment', url: att.url, name };
+  }
+
+  const raw = interaction.options.getString('image_url')?.trim();
+  if (raw && isValidHttpUrl(raw)) return { kind: 'url', url: raw, name: null };
+
+  return null;
+}
+
+/**
+ * Envoie / édite un message selon:
+ * - mode: 'embed' | 'image' | 'both'
+ * - imageDansEmbed: si true et image fournie => image dans embed (setImage)
+ *                  si false => image "brute" (fichier) + embed(s) sans image
+ *
+ * NOTE: "image seule" :
+ * - si attachment => message avec fichier
+ * - si url => content = url (Discord affichera l’aperçu image)
+ */
+async function sendOrEditDispoMessage({
+  channel,
+  existingMessage = null,
+  mode,
+  embedsCount,
+  color,
+  clubName,
+  jour,
+  description,
+  image,
+  imageDansEmbed
+}) {
+  const payload = {
+    content: '',
+    embeds: [],
+    files: [],
+    allowedMentions: { parse: [] }
+  };
+
+  const wantEmbed = mode === 'embed' || mode === 'both';
+  const wantImage = mode === 'image' || mode === 'both';
+
+  // --- EMBEDS ---
+  if (wantEmbed) {
+    payload.embeds = buildEmbedsBatch({
+      count: embedsCount,
+      color,
+      clubName,
+      jour,
+      description
+    });
+  }
+
+  // --- IMAGE ---
+  if (wantImage && image) {
+    if (image.kind === 'attachment') {
+      // On joint le fichier au message
+      payload.files.push({ attachment: image.url, name: image.name });
+
+      // Image dans embed ?
+      if (wantEmbed && imageDansEmbed) {
+        for (const e of payload.embeds) e.setImage(`attachment://${image.name}`);
+      } else if (!wantEmbed) {
+        // image seule => on laisse juste l’attachment (content vide)
+      } else {
+        // both mais image brute => on garde embed(s) sans image + attachment
+      }
+    } else if (image.kind === 'url') {
+      if (wantEmbed && imageDansEmbed) {
+        for (const e of payload.embeds) e.setImage(image.url);
+      } else if (!wantEmbed) {
+        // image seule => lien en content (aperçu Discord)
+        payload.content = image.url;
+      } else {
+        // both mais image brute => lien en content + embed(s)
+        payload.content = image.url;
+      }
+    }
+  }
+
+  // Nettoyage : si ni embed ni content ni file => on garde au moins un embed (fallback)
+  if (!payload.embeds.length && !payload.content && !payload.files.length) {
+    payload.embeds = buildEmbedsBatch({
+      count: 1,
+      color,
+      clubName,
+      jour,
+      description
+    });
+  }
+
+  // EDIT or SEND
+  if (existingMessage) {
+    // ⚠️ Discord limite parfois l’edit d’attachments selon contexte.
+    // En pratique, message.edit({ files }) remplace les attachments.
+    return existingMessage.edit(payload);
+  }
+  return channel.send(payload);
+}
+
+async function ensureReactions(msg, enabled) {
+  if (!enabled) return;
+  try { await msg.react('✅'); } catch {}
+  try { await msg.react('❌'); } catch {}
+}
+
 /* ============================================================
    📦 COMMANDE
 ============================================================ */
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('dispos_admin')
-    .setDescription('Gestion avancée des disponibilités (IDs auto via servers.json)')
+    .setDescription('Gestion avancée des disponibilités')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     /* -------------------- PUBLIER -------------------- */
     .addSubcommand(sc =>
       sc.setName('publier')
-        .setDescription('Publie les 7 messages et sauvegarde les IDs automatiquement.')
+        .setDescription('Publie 1 message (jour) ou 7 messages (tous) + sauvegarde IDs.')
         .addChannelOption(o =>
           o.setName('salon')
             .setDescription('Salon des disponibilités')
@@ -151,24 +266,49 @@ module.exports = {
             .setRequired(true)
         )
         .addStringOption(o =>
-          o.setName('texte')
-            .setDescription('Texte personnalisé (facultatif)')
+          o.setName('jour')
+            .setDescription('Jour ou tous')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Tous', value: 'all' },
+              ...JOURS.map(j => ({ name: j, value: j }))
+            )
+        )
+        .addStringOption(o =>
+          o.setName('mode')
+            .setDescription('embed = uniquement embed(s), image = uniquement image, both = embed(s)+image')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Embed uniquement', value: 'embed' },
+              { name: 'Image uniquement', value: 'image' },
+              { name: 'Embed + Image', value: 'both' }
+            )
+        )
+        .addIntegerOption(o =>
+          o.setName('embeds')
+            .setDescription('Nombre d’embeds dans le message (1 à 10) — utilisé si mode=embed/both')
+            .setMinValue(1)
+            .setMaxValue(10)
             .setRequired(false)
         )
-        // ✅ UPLOAD depuis galerie (iPhone/PC) : Attachment
+        .addStringOption(o =>
+          o.setName('texte')
+            .setDescription('Texte (facultatif)')
+            .setRequired(false)
+        )
         .addAttachmentOption(o =>
           o.setName('image')
-            .setDescription('Image (upload depuis ta galerie) — prioritaire sur image_url')
+            .setDescription('Image (upload galerie) — prioritaire sur image_url')
             .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('image_url')
-            .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
+            .setDescription('URL image (optionnel)')
             .setRequired(false)
         )
         .addBooleanOption(o =>
-          o.setName('image_brute')
-            .setDescription('Envoyer l’image en message brut au lieu de l’intégrer à l’embed (défaut: non)')
+          o.setName('image_dans_embed')
+            .setDescription('Mettre l’image dans l’embed (si mode=embed/both). Défaut: oui')
             .setRequired(false)
         )
         .addBooleanOption(o =>
@@ -181,7 +321,7 @@ module.exports = {
     /* -------------------- MODIFIER -------------------- */
     .addSubcommand(sc =>
       sc.setName('modifier')
-        .setDescription('Modifie les messages (IDs auto depuis servers.json)')
+        .setDescription('Modifie les messages existants (IDs via config ou override).')
         .addChannelOption(o =>
           o.setName('salon')
             .setDescription('Salon des disponibilités')
@@ -198,29 +338,45 @@ module.exports = {
             )
         )
         .addStringOption(o =>
-          o.setName('texte')
-            .setDescription('Nouveau texte')
+          o.setName('mode')
+            .setDescription('embed = uniquement embed(s), image = uniquement image, both = embed(s)+image')
             .setRequired(true)
+            .addChoices(
+              { name: 'Embed uniquement', value: 'embed' },
+              { name: 'Image uniquement', value: 'image' },
+              { name: 'Embed + Image', value: 'both' }
+            )
         )
-        // ✅ UPLOAD depuis galerie
+        .addIntegerOption(o =>
+          o.setName('embeds')
+            .setDescription('Nombre d’embeds dans le message (1 à 10) — utilisé si mode=embed/both')
+            .setMinValue(1)
+            .setMaxValue(10)
+            .setRequired(false)
+        )
+        .addStringOption(o =>
+          o.setName('texte')
+            .setDescription('Nouveau texte (facultatif) — si absent, garde la description actuelle si possible')
+            .setRequired(false)
+        )
         .addAttachmentOption(o =>
           o.setName('image')
-            .setDescription('Image (upload depuis ta galerie) — prioritaire sur image_url')
+            .setDescription('Image (upload galerie) — prioritaire sur image_url')
             .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('image_url')
-            .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
+            .setDescription('URL image (optionnel)')
             .setRequired(false)
         )
         .addBooleanOption(o =>
-          o.setName('image_brute')
-            .setDescription('Envoyer l’image en message brut au lieu de l’intégrer à l’embed (défaut: non)')
+          o.setName('image_dans_embed')
+            .setDescription('Mettre l’image dans l’embed (si mode=embed/both). Défaut: oui')
             .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('ids')
-            .setDescription('Override ID(s) (optionnel)')
+            .setDescription('Override ID(s) (optionnel) — 1 ID ou 7 IDs si jour=all')
             .setRequired(false)
         )
     )
@@ -228,7 +384,7 @@ module.exports = {
     /* -------------------- RESET -------------------- */
     .addSubcommand(sc =>
       sc.setName('reinitialiser')
-        .setDescription('Reset réactions (IDs auto)')
+        .setDescription('Reset réactions (IDs auto via config ou override).')
         .addChannelOption(o =>
           o.setName('salon')
             .setDescription('Salon des disponibilités')
@@ -246,49 +402,7 @@ module.exports = {
         )
         .addStringOption(o =>
           o.setName('ids')
-            .setDescription('Override ID(s) (optionnel)')
-            .setRequired(false)
-        )
-    )
-
-    /* -------------------- ROUVRIR -------------------- */
-    .addSubcommand(sc =>
-      sc.setName('rouvrir')
-        .setDescription('Rouvre les disponibilités')
-        .addChannelOption(o =>
-          o.setName('salon')
-            .setDescription('Salon des disponibilités')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName('jour')
-            .setDescription('Jour ou tous')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Tous', value: 'all' },
-              ...JOURS.map(j => ({ name: j, value: j }))
-            )
-        )
-        // ✅ UPLOAD depuis galerie
-        .addAttachmentOption(o =>
-          o.setName('image')
-            .setDescription('Image (upload depuis ta galerie) — prioritaire sur image_url')
-            .setRequired(false)
-        )
-        .addStringOption(o =>
-          o.setName('image_url')
-            .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
-            .setRequired(false)
-        )
-        .addBooleanOption(o =>
-          o.setName('image_brute')
-            .setDescription('Envoyer l’image en message brut au lieu de l’intégrer à l’embed (défaut: non)')
-            .setRequired(false)
-        )
-        .addStringOption(o =>
-          o.setName('ids')
-            .setDescription('Override ID(s) (optionnel)')
+            .setDescription('Override ID(s) (optionnel) — 1 ID ou 7 IDs si jour=all')
             .setRequired(false)
         )
     ),
@@ -300,7 +414,6 @@ module.exports = {
     if (!guild) return;
 
     const me = guild.members.me;
-
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const color = getEmbedColor(guildCfg);
     const clubName = guildCfg?.clubName || guild.name || 'Club';
@@ -323,22 +436,29 @@ module.exports = {
       });
     }
 
-    // ✅ image options (upload prioritaire)
-    const attachment = interaction.options.getAttachment('image');
-    const attachmentUrl = attachment?.url || null;
+    // 🔥 SUB: PUBLISH / MODIFY share base
+    if (sub === 'publier' || sub === 'modifier') {
+      const jourChoisi = interaction.options.getString('jour', true);
+      const mode = interaction.options.getString('mode', true); // embed|image|both
+      const embedsCount = interaction.options.getInteger('embeds') ?? 1;
+      const imageDansEmbed = interaction.options.getBoolean('image_dans_embed') ?? true;
 
-    const imageUrlRaw = interaction.options.getString('image_url')?.trim() || null;
-    const urlFromField = imageUrlRaw && isValidHttpUrl(imageUrlRaw) ? imageUrlRaw : null;
+      const image = pickFinalImage(interaction);
 
-    const finalImageUrl = attachmentUrl || urlFromField; // ✅ priorité upload
-    const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
+      // Texte: publish => fallback default; modify => optional
+      const texteOption = interaction.options.getString('texte');
+      const descriptionPublish = sanitize(texteOption || DESC_PAR_DEFAUT);
 
-    // 🔥 PUBLIER
-    if (sub === 'publier') {
-      const texte = sanitize(interaction.options.getString('texte') || DESC_PAR_DEFAUT);
-      const reactions = interaction.options.getBoolean('reactions') ?? true;
+      // Pour modifier: si texte absent, on tente de garder l’existant
+      const keepExistingDescriptionIfPossible = (texteOption == null);
 
-      if (reactions) {
+      // Réactions: seulement publish (par défaut oui)
+      const reactionsEnabled = (sub === 'publier')
+        ? (interaction.options.getBoolean('reactions') ?? true)
+        : true; // modifier ne retire jamais les réactions
+
+      // Permissions réactions si besoin (publier => on ajoute)
+      if (sub === 'publier' && reactionsEnabled) {
         const reactPerms = new PermissionsBitField([
           PermissionsBitField.Flags.AddReactions,
           PermissionsBitField.Flags.ReadMessageHistory
@@ -353,51 +473,171 @@ module.exports = {
 
       await interaction.deferReply({ ephemeral: true });
 
-      // ✅ Si image brute: on l’envoie UNE FOIS (pas 7 fois)
-      if (finalImageUrl && imageBrute) {
-        await channel.send({ content: finalImageUrl, allowedMentions: { parse: [] } }).catch(() => {});
-      }
+      // --------- PUBLIER ---------
+      if (sub === 'publier') {
+        const joursCibles = (jourChoisi === 'all') ? [...JOURS] : [jourChoisi];
+        const idsByJour = { ...(guildCfg?.dispoMessages || {}) };
 
-      const idsByJour = {};
+        for (const j of joursCibles) {
+          const msg = await sendOrEditDispoMessage({
+            channel,
+            existingMessage: null,
+            mode,
+            embedsCount,
+            color,
+            clubName,
+            jour: j,
+            description: descriptionPublish,
+            image,
+            imageDansEmbed
+          });
 
-      for (const jour of JOURS) {
-        const embed = buildBaseEmbed({
-          color,
-          clubName,
-          jour,
-          description: texte,
-          imageUrl: (finalImageUrl && !imageBrute) ? finalImageUrl : null
-        });
-
-        const msg = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
-
-        if (reactions) {
-          try { await msg.react('✅'); } catch {}
-          try { await msg.react('❌'); } catch {}
+          await ensureReactions(msg, reactionsEnabled);
+          idsByJour[j] = msg.id;
         }
 
-        idsByJour[jour] = msg.id;
+        // 💾 Sauvegarde automatique
+        updateGuildConfig(guild.id, { dispoMessages: idsByJour });
+
+        return interaction.editReply({
+          content: `✅ Publié: **${jourChoisi === 'all' ? '7 jours' : jourChoisi}** — IDs sauvegardés (dispoMessages).`
+        });
       }
 
-      updateGuildConfig(guild.id, { dispoMessages: idsByJour });
+      // --------- MODIFIER ---------
+      if (sub === 'modifier') {
+        const idsInput = interaction.options.getString('ids') || null;
+        const resolved = resolveIdsMapping(guildCfg, jourChoisi, idsInput);
+        if (resolved?.error) {
+          return interaction.editReply({ content: resolved.error });
+        }
 
-      return interaction.editReply({
-        content: '✅ Messages publiés **et IDs sauvegardés automatiquement** (dispoMessages) ✅'
-      });
+        const { mapping, joursCibles } = resolved;
+
+        let done = 0;
+        let missing = 0;
+
+        for (const j of joursCibles) {
+          const id = mapping[j];
+          const msg = await channel.messages.fetch(id).catch(() => null);
+          if (!msg) { missing++; continue; }
+
+          // description: soit nouveau texte, soit garde existant si possible
+          let description = descriptionPublish;
+          if (keepExistingDescriptionIfPossible) {
+            const exist = msg.embeds?.[0];
+            const existDesc = exist?.description ? sanitize(exist.description) : null;
+            description = existDesc || DESC_PAR_DEFAUT;
+          } else {
+            description = sanitize(texteOption || DESC_PAR_DEFAUT);
+          }
+
+          // si mode embed/both et texte a été fourni, on remet aussi la ligne réactions (cohérence)
+          if ((mode === 'embed' || mode === 'both') && !keepExistingDescriptionIfPossible) {
+            // si l’admin a tapé un texte custom, on ajoute la ligne standard si elle n’est pas déjà dedans
+            if (!/✅\s*\*\*Présent\*\*/.test(description) && !/❌\s*\*\*Absent\*\*/.test(description)) {
+              description = `${description}\n\n✅ **Présent**  |  ❌ **Absent**`;
+            }
+          }
+
+          // fallback embed si on doit "safeFromExistingEmbed"
+          const fallback = buildEmbed({ color, clubName, jour: j, description });
+
+          // Si mode=embed/both et on veut préserver certains champs existants (optionnel),
+          // on garde l’embed existant comme base uniquement si texte absent.
+          // Sinon on reconstruit proprement.
+          let msgToEdit = msg;
+
+          // On édite via helper (propre)
+          // MAIS: si mode=embed/both et texte absent, on part d’un embed existant pour ne pas casser.
+          if ((mode === 'embed' || mode === 'both') && keepExistingDescriptionIfPossible) {
+            // On remplace quand même par notre structure, mais en utilisant le 1er embed existant comme base
+            const base = safeFromExistingEmbed(msg, fallback)
+              .setColor(color)
+              .setTitle(TITRES[j] || `📅 ${String(j).toUpperCase()}`)
+              .setDescription(description)
+              .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+            const embeds = [];
+            const c = Math.max(1, Math.min(10, Number(embedsCount) || 1));
+            for (let i = 0; i < c; i++) embeds.push(i === 0 ? base : EmbedBuilder.from(base));
+
+            // Applique image si besoin
+            if (image && imageDansEmbed && (mode === 'embed' || mode === 'both')) {
+              if (image.kind === 'attachment') {
+                // On doit éditer avec files pour que attachment:// marche
+                const files = [{ attachment: image.url, name: image.name }];
+                for (const e of embeds) e.setImage(`attachment://${image.name}`);
+
+                // Si mode both et image brute => on joint aussi l’attachment; sinon l’image est déjà dans embed
+                // Ici imageDansEmbed=true donc OK
+                await msgToEdit.edit({ content: '', embeds, files, allowedMentions: { parse: [] } });
+              } else {
+                for (const e of embeds) e.setImage(image.url);
+                await msgToEdit.edit({ content: '', embeds, allowedMentions: { parse: [] } });
+              }
+            } else {
+              // pas d’image dans embed (ou mode image only)
+              if (mode === 'image') {
+                // image only
+                if (image?.kind === 'attachment') {
+                  await msgToEdit.edit({ content: '', embeds: [], files: [{ attachment: image.url, name: image.name }], allowedMentions: { parse: [] } });
+                } else if (image?.kind === 'url') {
+                  await msgToEdit.edit({ content: image.url, embeds: [], allowedMentions: { parse: [] } });
+                } else {
+                  // aucun media => on vide pas, on met un embed minimal pour éviter un message vide
+                  await msgToEdit.edit({ content: '', embeds: [fallback], allowedMentions: { parse: [] } });
+                }
+              } else {
+                // embed or both without imageDansEmbed
+                let content = '';
+                let files = [];
+                if (mode === 'both' && image) {
+                  if (image.kind === 'attachment') files = [{ attachment: image.url, name: image.name }];
+                  else content = image.url;
+                }
+                await msgToEdit.edit({ content, embeds, files, allowedMentions: { parse: [] } });
+              }
+            }
+          } else {
+            // Version générique (reconstruit proprement)
+            await sendOrEditDispoMessage({
+              channel,
+              existingMessage: msgToEdit,
+              mode,
+              embedsCount,
+              color,
+              clubName,
+              jour: j,
+              description,
+              image,
+              imageDansEmbed
+            });
+          }
+
+          // On ne touche pas aux réactions (tu veux les garder)
+          done++;
+        }
+
+        return interaction.editReply({
+          content: `✅ Modifier effectué (${done} message(s))${missing ? ` — ⚠️ introuvable: ${missing}` : ''}.`
+        });
+      }
     }
 
-    // MODIFIER / RESET / ROUVRIR
-    const jour = interaction.options.getString('jour', true);
-    const idsInput = interaction.options.getString('ids') || null;
-
-    const resolved = resolveIdsMapping(guildCfg, jour, idsInput);
-    if (resolved?.error) {
-      return interaction.reply({ content: resolved.error, ephemeral: true });
-    }
-
-    const { mapping, joursCibles } = resolved;
-
+    // 🔥 SUB: RESET REACTIONS
     if (sub === 'reinitialiser') {
+      const jourChoisi = interaction.options.getString('jour', true);
+      const idsInput = interaction.options.getString('ids') || null;
+
+      const resolved = resolveIdsMapping(guildCfg, jourChoisi, idsInput);
+      if (resolved?.error) {
+        return interaction.reply({ content: resolved.error, ephemeral: true });
+      }
+
+      const { mapping, joursCibles } = resolved;
+
+      // perms reset
       const perms = new PermissionsBitField([
         PermissionsBitField.Flags.ManageMessages,
         PermissionsBitField.Flags.AddReactions,
@@ -409,73 +649,26 @@ module.exports = {
           ephemeral: true
         });
       }
-    }
 
-    await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
 
-    let done = 0;
-    let missing = 0;
+      let done = 0;
+      let missing = 0;
 
-    for (const j of joursCibles) {
-      const id = mapping[j];
-      const msg = await channel.messages.fetch(id).catch(() => null);
-      if (!msg) { missing++; continue; }
+      for (const j of joursCibles) {
+        const id = mapping[j];
+        const msg = await channel.messages.fetch(id).catch(() => null);
+        if (!msg) { missing++; continue; }
 
-      const fallback = buildBaseEmbed({
-        color,
-        clubName,
-        jour: j,
-        description: DESC_PAR_DEFAUT,
-        imageUrl: (finalImageUrl && !imageBrute) ? finalImageUrl : null
-      });
-
-      if (sub === 'modifier') {
-        const texte = sanitize(interaction.options.getString('texte', true));
-        const newDesc = `${texte}\n\n✅ **Présent** | ❌ **Absent**`;
-
-        if (finalImageUrl && imageBrute) {
-          await channel.send({ content: finalImageUrl, allowedMentions: { parse: [] } }).catch(() => {});
-        }
-
-        const embed = safeFromExistingEmbed(msg, fallback)
-          .setColor(color)
-          .setTitle(TITRES[j] || `📅 ${j.toUpperCase()}`)
-          .setDescription(newDesc)
-          .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-        if (finalImageUrl && !imageBrute) embed.setImage(finalImageUrl);
-
-        await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
-        done++;
-      }
-
-      if (sub === 'reinitialiser') {
         try { await msg.reactions.removeAll(); } catch {}
         try { await msg.react('✅'); } catch {}
         try { await msg.react('❌'); } catch {}
         done++;
       }
 
-      if (sub === 'rouvrir') {
-        if (finalImageUrl && imageBrute) {
-          await channel.send({ content: finalImageUrl, allowedMentions: { parse: [] } }).catch(() => {});
-        }
-
-        const embed = safeFromExistingEmbed(msg, fallback)
-          .setColor(color)
-          .setTitle(TITRES[j] || `📅 ${j.toUpperCase()}`)
-          .setDescription(DESCRIPTION_DEFAUT_ROUVRIR)
-          .setFooter({ text: `${clubName} ⚫ Disponibilités` });
-
-        if (finalImageUrl && !imageBrute) embed.setImage(finalImageUrl);
-
-        await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
-        done++;
-      }
+      return interaction.editReply({
+        content: `✅ Réinitialiser effectué (${done} message(s))${missing ? ` — ⚠️ introuvable: ${missing}` : ''}.`
+      });
     }
-
-    return interaction.editReply({
-      content: `✅ **${sub} effectué** (${done} message(s))${missing ? ` — ⚠️ introuvable: ${missing}` : ''}.`
-    });
   }
 };
