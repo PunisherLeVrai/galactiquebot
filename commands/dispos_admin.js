@@ -37,6 +37,15 @@ function isValidId(id) {
   return !!id && id !== '0' && /^\d{10,30}$/.test(String(id));
 }
 
+function isValidHttpUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function getEmbedColor(cfg) {
   const hex = cfg?.embedColor;
   if (!hex) return DEFAULT_COLOR;
@@ -103,12 +112,15 @@ function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
    🧩 Helpers embed (safe)
 ============================================================ */
 
-function buildBaseEmbed({ color, clubName, jour, description }) {
-  return new EmbedBuilder()
+function buildBaseEmbed({ color, clubName, jour, description, imageUrl }) {
+  const e = new EmbedBuilder()
     .setColor(color)
     .setTitle(TITRES[jour] || `📅 ${jour.toUpperCase()}`)
     .setDescription(description)
     .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+  if (imageUrl && isValidHttpUrl(imageUrl)) e.setImage(imageUrl);
+  return e;
 }
 
 function safeFromExistingEmbed(msg, fallbackEmbed) {
@@ -146,6 +158,16 @@ module.exports = {
             .setDescription('Texte personnalisé (facultatif)')
             .setRequired(false)
         )
+        .addStringOption(o =>
+          o.setName('image_url')
+            .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
+            .setRequired(false)
+        )
+        .addBooleanOption(o =>
+          o.setName('image_brute')
+            .setDescription('Envoyer l’image en message brut au lieu de l’intégrer à l’embed (défaut: non)')
+            .setRequired(false)
+        )
         .addBooleanOption(o =>
           o.setName('reactions')
             .setDescription('Ajouter ✅ ❌ (défaut : oui)')
@@ -176,6 +198,16 @@ module.exports = {
           o.setName('texte')
             .setDescription('Nouveau texte')
             .setRequired(true)
+        )
+        .addStringOption(o =>
+          o.setName('image_url')
+            .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
+            .setRequired(false)
+        )
+        .addBooleanOption(o =>
+          o.setName('image_brute')
+            .setDescription('Envoyer l’image en message brut au lieu de l’intégrer à l’embed (défaut: non)')
+            .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('ids')
@@ -230,6 +262,16 @@ module.exports = {
             )
         )
         .addStringOption(o =>
+          o.setName('image_url')
+            .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
+            .setRequired(false)
+        )
+        .addBooleanOption(o =>
+          o.setName('image_brute')
+            .setDescription('Envoyer l’image en message brut au lieu de l’intégrer à l’embed (défaut: non)')
+            .setRequired(false)
+        )
+        .addStringOption(o =>
           o.setName('ids')
             .setDescription('Override ID(s) (optionnel)')
             .setRequired(false)
@@ -266,6 +308,11 @@ module.exports = {
       });
     }
 
+    // image options (selon sub)
+    const imageUrlRaw = interaction.options.getString('image_url')?.trim() || null;
+    const imageUrl = imageUrlRaw && isValidHttpUrl(imageUrlRaw) ? imageUrlRaw : null;
+    const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
+
     // 🔥 PUBLIER
     if (sub === 'publier') {
       const texte = sanitize(interaction.options.getString('texte') || DESC_PAR_DEFAUT);
@@ -286,6 +333,11 @@ module.exports = {
 
       await interaction.deferReply({ ephemeral: true });
 
+      // ✅ Si image brute: on l’envoie UNE FOIS (pas 7 fois)
+      if (imageUrl && imageBrute) {
+        await channel.send({ content: imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
+      }
+
       const idsByJour = {};
 
       for (const jour of JOURS) {
@@ -293,7 +345,9 @@ module.exports = {
           color,
           clubName,
           jour,
-          description: texte
+          description: texte,
+          // si image brute => pas d’image dans embed
+          imageUrl: (imageUrl && !imageBrute) ? imageUrl : null
         });
 
         const msg = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
@@ -350,23 +404,30 @@ module.exports = {
       const msg = await channel.messages.fetch(id).catch(() => null);
       if (!msg) { missing++; continue; }
 
-      // embed fallback si pas d’embed
       const fallback = buildBaseEmbed({
         color,
         clubName,
         jour: j,
-        description: DESC_PAR_DEFAUT
+        description: DESC_PAR_DEFAUT,
+        imageUrl: (imageUrl && !imageBrute) ? imageUrl : null
       });
 
       if (sub === 'modifier') {
         const texte = sanitize(interaction.options.getString('texte', true));
         const newDesc = `${texte}\n\n✅ **Présent** | ❌ **Absent**`;
 
+        // ✅ si image brute: envoie une fois, puis modifie embeds normalement
+        if (imageUrl && imageBrute) {
+          await channel.send({ content: imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
+        }
+
         const embed = safeFromExistingEmbed(msg, fallback)
           .setColor(color)
           .setTitle(TITRES[j] || `📅 ${j.toUpperCase()}`)
           .setDescription(newDesc)
           .setFooter({ text: `${clubName} ⚫ Disponibilités` });
+
+        if (imageUrl && !imageBrute) embed.setImage(imageUrl);
 
         await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
         done++;
@@ -380,19 +441,22 @@ module.exports = {
       }
 
       if (sub === 'rouvrir') {
+        if (imageUrl && imageBrute) {
+          await channel.send({ content: imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
+        }
+
         const embed = safeFromExistingEmbed(msg, fallback)
           .setColor(color)
           .setTitle(TITRES[j] || `📅 ${j.toUpperCase()}`)
           .setDescription(DESCRIPTION_DEFAUT_ROUVRIR)
           .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
+        if (imageUrl && !imageBrute) embed.setImage(imageUrl);
+
         await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
         done++;
       }
     }
-
-    // (Optionnel) si tu veux que l’override "ids" mette aussi à jour la config automatiquement :
-    // if (idsInput) updateGuildConfig(guild.id, { dispoMessages: { ...(guildCfg?.dispoMessages || {}), ...mapping } });
 
     return interaction.editReply({
       content: `✅ **${sub} effectué** (${done} message(s))${missing ? ` — ⚠️ introuvable: ${missing}` : ''}.`
