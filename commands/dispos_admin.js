@@ -57,7 +57,6 @@ function getEmbedColor(cfg) {
 /* ============================================================
    🔁 RÉSOLUTION IDS (ids optionnels, fallback servers.json)
 ============================================================ */
-
 function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
   const dispo = guildCfg?.dispoMessages || {};
 
@@ -111,7 +110,6 @@ function resolveIdsMapping(guildCfg, jourChoisi, idsInput) {
 /* ============================================================
    🧩 Helpers embed (safe)
 ============================================================ */
-
 function buildBaseEmbed({ color, clubName, jour, description, imageUrl }) {
   const e = new EmbedBuilder()
     .setColor(color)
@@ -136,7 +134,6 @@ function safeFromExistingEmbed(msg, fallbackEmbed) {
 /* ============================================================
    📦 COMMANDE
 ============================================================ */
-
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('dispos_admin')
@@ -156,6 +153,12 @@ module.exports = {
         .addStringOption(o =>
           o.setName('texte')
             .setDescription('Texte personnalisé (facultatif)')
+            .setRequired(false)
+        )
+        // ✅ UPLOAD depuis galerie (iPhone/PC) : Attachment
+        .addAttachmentOption(o =>
+          o.setName('image')
+            .setDescription('Image (upload depuis ta galerie) — prioritaire sur image_url')
             .setRequired(false)
         )
         .addStringOption(o =>
@@ -198,6 +201,12 @@ module.exports = {
           o.setName('texte')
             .setDescription('Nouveau texte')
             .setRequired(true)
+        )
+        // ✅ UPLOAD depuis galerie
+        .addAttachmentOption(o =>
+          o.setName('image')
+            .setDescription('Image (upload depuis ta galerie) — prioritaire sur image_url')
+            .setRequired(false)
         )
         .addStringOption(o =>
           o.setName('image_url')
@@ -261,6 +270,12 @@ module.exports = {
               ...JOURS.map(j => ({ name: j, value: j }))
             )
         )
+        // ✅ UPLOAD depuis galerie
+        .addAttachmentOption(o =>
+          o.setName('image')
+            .setDescription('Image (upload depuis ta galerie) — prioritaire sur image_url')
+            .setRequired(false)
+        )
         .addStringOption(o =>
           o.setName('image_url')
             .setDescription('URL image (optionnel). Si brute=true, l’URL sera envoyée en message brut.')
@@ -308,9 +323,14 @@ module.exports = {
       });
     }
 
-    // image options (selon sub)
+    // ✅ image options (upload prioritaire)
+    const attachment = interaction.options.getAttachment('image');
+    const attachmentUrl = attachment?.url || null;
+
     const imageUrlRaw = interaction.options.getString('image_url')?.trim() || null;
-    const imageUrl = imageUrlRaw && isValidHttpUrl(imageUrlRaw) ? imageUrlRaw : null;
+    const urlFromField = imageUrlRaw && isValidHttpUrl(imageUrlRaw) ? imageUrlRaw : null;
+
+    const finalImageUrl = attachmentUrl || urlFromField; // ✅ priorité upload
     const imageBrute = interaction.options.getBoolean('image_brute') ?? false;
 
     // 🔥 PUBLIER
@@ -334,8 +354,8 @@ module.exports = {
       await interaction.deferReply({ ephemeral: true });
 
       // ✅ Si image brute: on l’envoie UNE FOIS (pas 7 fois)
-      if (imageUrl && imageBrute) {
-        await channel.send({ content: imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
+      if (finalImageUrl && imageBrute) {
+        await channel.send({ content: finalImageUrl, allowedMentions: { parse: [] } }).catch(() => {});
       }
 
       const idsByJour = {};
@@ -346,8 +366,7 @@ module.exports = {
           clubName,
           jour,
           description: texte,
-          // si image brute => pas d’image dans embed
-          imageUrl: (imageUrl && !imageBrute) ? imageUrl : null
+          imageUrl: (finalImageUrl && !imageBrute) ? finalImageUrl : null
         });
 
         const msg = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
@@ -360,7 +379,6 @@ module.exports = {
         idsByJour[jour] = msg.id;
       }
 
-      // 💾 Sauvegarde automatique
       updateGuildConfig(guild.id, { dispoMessages: idsByJour });
 
       return interaction.editReply({
@@ -379,7 +397,6 @@ module.exports = {
 
     const { mapping, joursCibles } = resolved;
 
-    // ✅ Permissions supplémentaires selon action
     if (sub === 'reinitialiser') {
       const perms = new PermissionsBitField([
         PermissionsBitField.Flags.ManageMessages,
@@ -409,16 +426,15 @@ module.exports = {
         clubName,
         jour: j,
         description: DESC_PAR_DEFAUT,
-        imageUrl: (imageUrl && !imageBrute) ? imageUrl : null
+        imageUrl: (finalImageUrl && !imageBrute) ? finalImageUrl : null
       });
 
       if (sub === 'modifier') {
         const texte = sanitize(interaction.options.getString('texte', true));
         const newDesc = `${texte}\n\n✅ **Présent** | ❌ **Absent**`;
 
-        // ✅ si image brute: envoie une fois, puis modifie embeds normalement
-        if (imageUrl && imageBrute) {
-          await channel.send({ content: imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
+        if (finalImageUrl && imageBrute) {
+          await channel.send({ content: finalImageUrl, allowedMentions: { parse: [] } }).catch(() => {});
         }
 
         const embed = safeFromExistingEmbed(msg, fallback)
@@ -427,7 +443,7 @@ module.exports = {
           .setDescription(newDesc)
           .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
-        if (imageUrl && !imageBrute) embed.setImage(imageUrl);
+        if (finalImageUrl && !imageBrute) embed.setImage(finalImageUrl);
 
         await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
         done++;
@@ -441,8 +457,8 @@ module.exports = {
       }
 
       if (sub === 'rouvrir') {
-        if (imageUrl && imageBrute) {
-          await channel.send({ content: imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
+        if (finalImageUrl && imageBrute) {
+          await channel.send({ content: finalImageUrl, allowedMentions: { parse: [] } }).catch(() => {});
         }
 
         const embed = safeFromExistingEmbed(msg, fallback)
@@ -451,7 +467,7 @@ module.exports = {
           .setDescription(DESCRIPTION_DEFAUT_ROUVRIR)
           .setFooter({ text: `${clubName} ⚫ Disponibilités` });
 
-        if (imageUrl && !imageBrute) embed.setImage(imageUrl);
+        if (finalImageUrl && !imageBrute) embed.setImage(finalImageUrl);
 
         await msg.edit({ embeds: [embed], allowedMentions: { parse: [] } });
         done++;
