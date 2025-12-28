@@ -10,7 +10,7 @@ const {
 } = require('discord.js');
 
 const { getGuildConfig } = require('./config');
-const { SNAPSHOT_DIR } = require('./paths');
+const { SNAPSHOT_DIR, ensureSnapshotDirectory } = require('./paths');
 
 const DEFAULT_COLOR = 0xff4db8;
 
@@ -32,13 +32,26 @@ const AUTOMATION = {
 
   // 17h : fermeture + snapshot
   clearReactionsAt17: true,
-  sendCloseMessageAt17: true
+  sendCloseMessageAt17: true,
+
+  // 22h : check non-réagis (mercredi + dimanche)
+  enable22hCheck: true,
+  checkDaysAt22h: ['mercredi', 'dimanche'],
+
+  // ✅ DIMANCHE : rapport semaine snapshots (22:04 - 22:06)
+  enableWeeklySnapshotsReport: true
 };
+
+/* =========================
+   LOG
+========================= */
+function logInfo(...args) { console.log('ℹ️ [AUTO]', ...args); }
+function logWarn(...args) { console.log('⚠️ [AUTO]', ...args); }
+function logErr(...args)  { console.error('❌ [AUTO]', ...args); }
 
 /* =========================
    UTILS
 ========================= */
-
 function isValidId(id) {
   return !!id && id !== '0';
 }
@@ -112,7 +125,6 @@ function idsLine(colOrArray) {
 }
 
 /* ------------------------- Utils dates ------------------------- */
-
 function parseISODate(d) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
   if (!m) return null;
@@ -144,7 +156,6 @@ function isEligibleDay(jour) {
 /* ============================================================
    CIBLAGE SERVEURS — IGA ONLY
 ============================================================ */
-
 function computeTargetGuildIds(client, opts = {}) {
   const present = new Set([...client.guilds.cache.keys()]);
 
@@ -160,30 +171,44 @@ function computeTargetGuildIds(client, opts = {}) {
 }
 
 /* ============================================================
-   DISPOS : RÉCUP DATA
+   DISPOS : RÉCUP DATA (durci + logs)
 ============================================================ */
-
 async function fetchDispoDataForDay(guild, jour) {
   const cfg = getGuildConfig(guild.id) || {};
   const dispoMessageId = cfg.dispoMessages?.[jour];
   const dispoChannelId = cfg.mainDispoChannelId;
 
-  if (!isValidId(dispoChannelId) || !isValidId(dispoMessageId)) return null;
+  if (!isValidId(dispoChannelId)) {
+    logWarn(`fetchDispoDataForDay: mainDispoChannelId invalide (jour=${jour})`);
+    return null;
+  }
+  if (!isValidId(dispoMessageId)) {
+    logWarn(`fetchDispoDataForDay: dispoMessages[${jour}] invalide`);
+    return null;
+  }
 
   const roleJoueurId = isValidId(cfg.roles?.joueur) ? cfg.roles.joueur : null;
   const roleEssaiId  = isValidId(cfg.roles?.essai)  ? cfg.roles.essai  : null;
-  if (!roleJoueurId && !roleEssaiId) return null;
+  if (!roleJoueurId && !roleEssaiId) {
+    logWarn(`fetchDispoDataForDay: roles.joueur/essai absents (jour=${jour})`);
+    return null;
+  }
 
   const dispoChannel = await guild.channels.fetch(dispoChannelId).catch(() => null);
-  if (!dispoChannel || !dispoChannel.isTextBased()) return null;
+  if (!dispoChannel || !dispoChannel.isTextBased()) {
+    logWarn(`fetchDispoDataForDay: salon dispo introuvable ou non text-based (${dispoChannelId})`);
+    return null;
+  }
 
   let message;
   try {
     message = await dispoChannel.messages.fetch(dispoMessageId);
-  } catch {
+  } catch (e) {
+    logWarn(`fetchDispoDataForDay: message introuvable (${dispoMessageId}) jour=${jour}`);
     return null;
   }
 
+  // Charge membres (utile pour rôles/eligibles)
   await guild.members.fetch().catch(() => {});
 
   const roleJoueur = roleJoueurId ? guild.roles.cache.get(roleJoueurId) : null;
@@ -246,7 +271,6 @@ async function fetchDispoDataForDay(guild, jour) {
 /* ============================================================
    12h : RAPPEL + RAPPORT
 ============================================================ */
-
 function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900) {
   const batches = [];
   let cur = [];
@@ -321,7 +345,10 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
   if (!data) return;
 
   const reportChannelId = data.cfg.rapportChannelId;
-  if (!isValidId(reportChannelId)) return;
+  if (!isValidId(reportChannelId)) {
+    logWarn(`sendDetailedReportForGuild: rapportChannelId invalide`);
+    return;
+  }
 
   const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
   if (!reportChannel || !reportChannel.isTextBased()) return;
@@ -345,24 +372,28 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel) {
 }
 
 /* ============================================================
-   17h : FERMETURE + SNAPSHOT
+   17h : FERMETURE + SNAPSHOT (durci + logs)
 ============================================================ */
-
 async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
   if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
 
+  logInfo(`close 17h: guild=${guildId} jour=${jour} date=${isoDate}`);
+
   const data = await fetchDispoDataForDay(guild, jour);
-  if (!data) return;
+  if (!data) {
+    logWarn(`close 17h: data=null (message/chan introuvable) jour=${jour}`);
+    return;
+  }
 
   const clubName = getClubName(data.cfg, guild);
   const color = getEmbedColorFromConfig(guild.id);
 
-  // Snapshot
+  // Snapshot (persistant)
   try {
-    if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    ensureSnapshotDirectory();
 
     const snapshot = {
       type: 'dispos',
@@ -380,8 +411,9 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
 
     const snapPath = path.join(SNAPSHOT_DIR, `dispos-${jour}-${isoDate}.json`);
     fs.writeFileSync(snapPath, JSON.stringify(snapshot, null, 2), 'utf8');
+    logInfo(`✅ snapshot écrit: ${snapPath}`);
   } catch (e) {
-    console.error('❌ [AUTO] snapshot dispo 17h:', e);
+    logErr('snapshot dispo 17h (écriture) :', e?.message || e);
   }
 
   // Lock embed
@@ -422,10 +454,56 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
 }
 
 /* ============================================================
-   SEMAINE : DIMANCHE UNIQUEMENT (snapshots) — IGA ONLY
+   22h : CHECK NON-RÉAGIS (mercredi + dimanche)
+   -> basé sur le message du jour (pas sur snapshots)
 ============================================================ */
+async function checkNonReactedAt22ForGuild(client, guildId, jour) {
+  if (String(guildId) !== String(IGA_GUILD_ID)) return;
 
-const DISPO_SNAP_REGEX = /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return;
+
+  const data = await fetchDispoDataForDay(guild, jour);
+  if (!data) return;
+
+  const reportChannelId = data.cfg.rapportChannelId;
+  if (!isValidId(reportChannelId)) return;
+
+  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
+  if (!reportChannel || !reportChannel.isTextBased()) return;
+
+  const clubLabel = getClubName(data.cfg, guild);
+  const color = getEmbedColorFromConfig(guild.id);
+
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`⏰ CHECK 22H — ${jour.toUpperCase()} (non-réagis)`)
+    .setDescription(
+      [
+        'Vérification automatique à 22h des disponibilités du jour.',
+        `➡️ Message : ${data.messageURL}`
+      ].join('\n')
+    )
+    .addFields(
+      { name: `⏳ N’ont pas réagi (${data.nonRepondus.size})`, value: idsLine(data.nonRepondus) },
+      { name: `✅ Présents (${data.presentsAll.size})`, value: idsLine(data.presentsAll) },
+      { name: `❌ Absents (${data.absentsAll.size})`, value: idsLine(data.absentsAll) }
+    )
+    .setFooter({ text: `${clubLabel} • Check automatique 22h` })
+    .setTimestamp();
+
+  await reportChannel.send({
+    embeds: [embed],
+    components: [data.rowBtn],
+    allowedMentions: { parse: [] }
+  });
+}
+
+/* ============================================================
+   SEMAINE : DIMANCHE UNIQUEMENT (snapshots)
+============================================================ */
+const DISPO_SNAP_REGEX =
+  /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
 
 function readDispoSnapshotsInRange(fromDate, toDate) {
   const snaps = [];
@@ -553,10 +631,8 @@ async function autoWeekDispoReportForGuild(client, guildId) {
 }
 
 /* ============================================================
-   SYNC PSEUDOS — IGA ONLY (NOUVEAU FORMAT)
-   Format: Pseudo | (Hiérarchie OU Team) | Poste(s)
+   SYNC PSEUDOS — IGA ONLY (Format: Pseudo | (Hiérarchie OU Team) | Poste(s))
 ============================================================ */
-
 const MAX_LEN = 32;
 const SLEEP_MS = 350;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -589,7 +665,6 @@ function getPostes(member, posteRoles = []) {
     .slice(0, 3);
 }
 
-// ✅ Nouveau format: Pseudo | (Hiérarchie OU Team) | Poste(s)
 function buildNickname(member, nicknameCfg = {}) {
   const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
   const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
@@ -661,11 +736,12 @@ async function autoSyncNicknamesForGuild(client, guildId) {
 /* ============================================================
    INIT SCHEDULER — IGA ONLY
 ============================================================ */
-
 function initScheduler(client, opts = {}) {
-  console.log('⏰ Scheduler: IGA ONLY — 12h (rappel+rapport) / 17h (rapport+close+snapshot) / dimanche 22h (semaine) / sync pseudos H:10');
+  ensureSnapshotDirectory();
 
-  const last = { noon: null, close17: null, week: null, nick: null };
+  logInfo('Scheduler: IGA ONLY — 12h (rappel+rapport) / 17h (rapport+close+snapshot) / mer+dim 22h (check non-réagis) / dim 22:04 (semaine) / sync pseudos H:10');
+
+  const last = { noon: null, close17: null, week: null, nick: null, check22: null };
   let tickRunning = false;
 
   setInterval(async () => {
@@ -688,20 +764,16 @@ function initScheduler(client, opts = {}) {
           for (const gid of guildIds) {
             try {
               if (AUTOMATION.enableNoonReminder) await runNoonReminderForGuild(client, gid, jour);
-            } catch (e) {
-              console.error(`❌ [AUTO] rappel 12h (${gid})`, e);
-            }
+            } catch (e) { logErr(`rappel 12h (${gid})`, e?.message || e); }
 
             try {
               await sendDetailedReportForGuild(client, gid, jour, '12h');
-            } catch (e) {
-              console.error(`❌ [AUTO] rapport 12h (${gid})`, e);
-            }
+            } catch (e) { logErr(`rapport 12h (${gid})`, e?.message || e); }
           }
         }
       }
 
-      // 17h → rapport + fermeture (0-2)
+      // 17h → rapport + fermeture + snapshot (0-2)
       if (hour === 17 && inWindow(minute, 0, 2)) {
         const key = `${dateKey}-17`;
         if (last.close17 !== key) {
@@ -709,23 +781,34 @@ function initScheduler(client, opts = {}) {
 
           for (const gid of guildIds) {
             try { await sendDetailedReportForGuild(client, gid, jour, '17h'); }
-            catch (e) { console.error(`❌ [AUTO] rapport 17h (${gid})`, e); }
+            catch (e) { logErr(`rapport 17h (${gid})`, e?.message || e); }
 
             try { await closeDisposAt17ForGuild(client, gid, jour, dateKey); }
-            catch (e) { console.error(`❌ [AUTO] close 17h (${gid})`, e); }
+            catch (e) { logErr(`close 17h (${gid})`, e?.message || e); }
           }
         }
       }
 
-      // ✅ DIMANCHE uniquement : rapport semaine (22:04 - 22:06)
-      if (jour === 'dimanche' && hour === 22 && inWindow(minute, 4, 6)) {
+      // 22h → check non-réagis (mercredi + dimanche) (0-2)
+      if (AUTOMATION.enable22hCheck && hour === 22 && inWindow(minute, 0, 2) && AUTOMATION.checkDaysAt22h.includes(jour)) {
+        const key = `${dateKey}-22-check-${jour}`;
+        if (last.check22 !== key) {
+          last.check22 = key;
+          for (const gid of guildIds) {
+            try { await checkNonReactedAt22ForGuild(client, gid, jour); }
+            catch (e) { logErr(`check 22h (${jour}) (${gid})`, e?.message || e); }
+          }
+        }
+      }
+
+      // ✅ DIMANCHE : rapport semaine snapshots (22:04 - 22:06)
+      if (AUTOMATION.enableWeeklySnapshotsReport && jour === 'dimanche' && hour === 22 && inWindow(minute, 4, 6)) {
         const key = `${dateKey}-22-week`;
         if (last.week !== key) {
           last.week = key;
-
           for (const gid of guildIds) {
             try { await autoWeekDispoReportForGuild(client, gid); }
-            catch (e) { console.error(`❌ [AUTO] dispo week (${gid})`, e); }
+            catch (e) { logErr(`dispo week (${gid})`, e?.message || e); }
           }
         }
       }
@@ -735,10 +818,9 @@ function initScheduler(client, opts = {}) {
         const key = `${dateKey}-${hour}`;
         if (last.nick !== key) {
           last.nick = key;
-
           for (const gid of guildIds) {
             try { await autoSyncNicknamesForGuild(client, gid); }
-            catch (e) { console.error(`❌ [AUTO] sync pseudos (${gid})`, e); }
+            catch (e) { logErr(`sync pseudos (${gid})`, e?.message || e); }
           }
         }
       }
@@ -750,9 +832,12 @@ function initScheduler(client, opts = {}) {
 
 module.exports = {
   initScheduler,
+
+  // exposés (debug / tests)
   runNoonReminderForGuild,
   sendDetailedReportForGuild,
   closeDisposAt17ForGuild,
+  checkNonReactedAt22ForGuild,
   autoWeekDispoReportForGuild,
   autoSyncNicknamesForGuild
 };
