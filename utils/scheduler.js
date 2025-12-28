@@ -18,10 +18,14 @@ const DEFAULT_COLOR = 0xff4db8;
    🔒 IGA ONLY — HARD BLOCK
 ============================================================ */
 const IGA_GUILD_ID = '1392639720491581551';
-
-// ✅ Même si index.js passe d'autres guildIds, on ne garde que IGA
 const DEFAULT_ALLOWED_GUILDS = [IGA_GUILD_ID];
 
+/**
+ * ✅ Corrections demandées :
+ * - Supprimer le check 22h "non-réagis" basé sur le message du jour (mercredi + dimanche)
+ * - Garder UNIQUEMENT le check de la semaine le dimanche à 22h via snapshots
+ * - Conserver 12h / 17h tous les jours + sync pseudos H:10
+ */
 const AUTOMATION = {
   timezone: 'Europe/Paris',
 
@@ -34,11 +38,7 @@ const AUTOMATION = {
   clearReactionsAt17: true,
   sendCloseMessageAt17: true,
 
-  // 22h : check non-réagis (mercredi + dimanche)
-  enable22hCheck: true,
-  checkDaysAt22h: ['mercredi', 'dimanche'],
-
-  // ✅ DIMANCHE : rapport semaine snapshots (22:04 - 22:06)
+  // ✅ Dimanche 22h : check semaine via snapshots (UNIQUE tâche à 22h)
   enableWeeklySnapshotsReport: true
 };
 
@@ -454,52 +454,6 @@ async function closeDisposAt17ForGuild(client, guildId, jour, isoDate) {
 }
 
 /* ============================================================
-   22h : CHECK NON-RÉAGIS (mercredi + dimanche)
-   -> basé sur le message du jour (pas sur snapshots)
-============================================================ */
-async function checkNonReactedAt22ForGuild(client, guildId, jour) {
-  if (String(guildId) !== String(IGA_GUILD_ID)) return;
-
-  const guild = client.guilds.cache.get(guildId);
-  if (!guild) return;
-
-  const data = await fetchDispoDataForDay(guild, jour);
-  if (!data) return;
-
-  const reportChannelId = data.cfg.rapportChannelId;
-  if (!isValidId(reportChannelId)) return;
-
-  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
-  if (!reportChannel || !reportChannel.isTextBased()) return;
-
-  const clubLabel = getClubName(data.cfg, guild);
-  const color = getEmbedColorFromConfig(guild.id);
-
-  const embed = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(`⏰ CHECK 22H — ${jour.toUpperCase()} (non-réagis)`)
-    .setDescription(
-      [
-        'Vérification automatique à 22h des disponibilités du jour.',
-        `➡️ Message : ${data.messageURL}`
-      ].join('\n')
-    )
-    .addFields(
-      { name: `⏳ N’ont pas réagi (${data.nonRepondus.size})`, value: idsLine(data.nonRepondus) },
-      { name: `✅ Présents (${data.presentsAll.size})`, value: idsLine(data.presentsAll) },
-      { name: `❌ Absents (${data.absentsAll.size})`, value: idsLine(data.absentsAll) }
-    )
-    .setFooter({ text: `${clubLabel} • Check automatique 22h` })
-    .setTimestamp();
-
-  await reportChannel.send({
-    embeds: [embed],
-    components: [data.rowBtn],
-    allowedMentions: { parse: [] }
-  });
-}
-
-/* ============================================================
    SEMAINE : DIMANCHE UNIQUEMENT (snapshots)
 ============================================================ */
 const DISPO_SNAP_REGEX =
@@ -673,7 +627,6 @@ function buildNickname(member, nicknameCfg = {}) {
   const hierarchy = getHierarchy(member, hierarchyRoles);
   const team = getTeam(member, teamRoles);
 
-  // Priorité: hiérarchie -> sinon team
   const mid = hierarchy || team || '';
 
   const postesArr = getPostes(member, posteRoles);
@@ -684,7 +637,6 @@ function buildNickname(member, nicknameCfg = {}) {
   const parts = [pseudoBase, mid, postes].filter(Boolean);
   let full = parts.join(' | ');
 
-  // Si dépasse 32: on réduit le pseudo en priorité
   if (full.length > MAX_LEN) {
     const suffix = parts.slice(1).join(' | ');
     const suffixStr = suffix ? ` | ${suffix}` : '';
@@ -739,9 +691,9 @@ async function autoSyncNicknamesForGuild(client, guildId) {
 function initScheduler(client, opts = {}) {
   ensureSnapshotDirectory();
 
-  logInfo('Scheduler: IGA ONLY — 12h (rappel+rapport) / 17h (rapport+close+snapshot) / mer+dim 22h (check non-réagis) / dim 22:04 (semaine) / sync pseudos H:10');
+  logInfo('Scheduler: IGA ONLY — 12h (rappel+rapport) / 17h (rapport+close+snapshot) / dim 22h (check semaine snapshots) / sync pseudos H:10');
 
-  const last = { noon: null, close17: null, week: null, nick: null, check22: null };
+  const last = { noon: null, close17: null, week: null, nick: null };
   let tickRunning = false;
 
   setInterval(async () => {
@@ -789,20 +741,8 @@ function initScheduler(client, opts = {}) {
         }
       }
 
-      // 22h → check non-réagis (mercredi + dimanche) (0-2)
-      if (AUTOMATION.enable22hCheck && hour === 22 && inWindow(minute, 0, 2) && AUTOMATION.checkDaysAt22h.includes(jour)) {
-        const key = `${dateKey}-22-check-${jour}`;
-        if (last.check22 !== key) {
-          last.check22 = key;
-          for (const gid of guildIds) {
-            try { await checkNonReactedAt22ForGuild(client, gid, jour); }
-            catch (e) { logErr(`check 22h (${jour}) (${gid})`, e?.message || e); }
-          }
-        }
-      }
-
-      // ✅ DIMANCHE : rapport semaine snapshots (22:04 - 22:06)
-      if (AUTOMATION.enableWeeklySnapshotsReport && jour === 'dimanche' && hour === 22 && inWindow(minute, 4, 6)) {
+      // ✅ DIMANCHE 22h : check semaine snapshots (0-2) — UNIQUE tâche à 22h
+      if (AUTOMATION.enableWeeklySnapshotsReport && jour === 'dimanche' && hour === 22 && inWindow(minute, 0, 2)) {
         const key = `${dateKey}-22-week`;
         if (last.week !== key) {
           last.week = key;
@@ -837,7 +777,6 @@ module.exports = {
   runNoonReminderForGuild,
   sendDetailedReportForGuild,
   closeDisposAt17ForGuild,
-  checkNonReactedAt22ForGuild,
   autoWeekDispoReportForGuild,
   autoSyncNicknamesForGuild
 };
