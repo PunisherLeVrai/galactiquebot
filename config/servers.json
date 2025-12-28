@@ -103,17 +103,18 @@
     "mainDispoChannelId": "1441625985559691304",
 
     "dispoMessages": {
-      "lundi": "1449021079505862798",
-      "mardi": "1449021127874707538",
-      "mercredi": "1449021167477456957",
-      "jeudi": "1449021204458639371",
-      "vendredi": "1449021260653924473",
-      "dimanche": "1449021028129832971"
+      "lundi": "1454851657731936479",
+      "mardi": "1454851819766415441",
+      "mercredi": "1454851972065919049",
+      "jeudi": "1454852115259195394",
+      "vendredi": "0",
+      "samedi": "0",
+      "dimanche": "1454851417675268129"
     },
 
     "roles": {
-      "joueur": "0",
-      "essai": "0",
+      "joueur": "1410246320656093296",
+      "essai": "1410246320656093295",
       "convoque": "0"
     },
 
@@ -127,19 +128,19 @@
       "timezone": "Europe/Paris",
 
       "noon": {
-        "enabled": false,
+        "enabled": true,
         "time": "12:00",
         "windowMin": 2,
-        "mentionInReminder": false,
+        "mentionInReminder": true,
         "mentionInReports": false
       },
 
       "close": {
-        "enabled": false,
+        "enabled": true,
         "time": "17:00",
         "windowMin": 2,
-        "clearReactions": false,
-        "sendCloseMessage": false
+        "clearReactions": true,
+        "sendCloseMessage": true
       },
 
       "weekly": {
