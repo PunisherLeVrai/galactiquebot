@@ -8,7 +8,8 @@ const {
   Client,
   Collection,
   GatewayIntentBits,
-  ActivityType
+  ActivityType,
+  Partials
 } = require('discord.js');
 
 const { getGlobalConfig } = require('./utils/config');
@@ -19,9 +20,10 @@ const { ensureSnapshotDirectory } = require('./utils/paths');
 ensureSnapshotDirectory();
 
 /* ============================================================
-   🔒 SERVEUR AUTORISÉ POUR AUTOMATISATIONS
+   ✅ SERVEURS AUTORISÉS POUR AUTOMATISATIONS (IG + DOR)
 ============================================================ */
-const IGA_GUILD_ID = '1392639720491581551';
+const IG_GUILD_ID = '1392639720491581551';   // INTER GALACTIQUE
+const DOR_GUILD_ID = '1410246320324870217';  // XIG DOR
 
 /* ============================================================
    HEALTHCHECK (Railway Web Service)
@@ -53,6 +55,7 @@ startHealthcheck();
 
 /* ============================================================
    CLIENT DISCORD
+   ✅ partials ajoutés (réactions/messages pas en cache)
 ============================================================ */
 const client = new Client({
   intents: [
@@ -60,6 +63,12 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.GuildMembers
+  ],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
+    Partials.User
   ]
 });
 
@@ -89,14 +98,25 @@ client.once('ready', async () => {
 
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
   console.log(`🟢 ${BOT_NAME} prêt`);
-  console.log(`🔒 Automatisations actives UNIQUEMENT sur IGA`);
+
+  // 🔎 Debug: serveurs visibles
+  try {
+    console.log(
+      '🏟️ [GUILDS] visibles:',
+      client.guilds.cache.map(g => `${g.name} (${g.id})`).join(' | ')
+    );
+  } catch {}
+
+  console.log('🕒 Automatisations actives sur :');
+  console.log(`- INTER GALACTIQUE (${IG_GUILD_ID})`);
+  console.log(`- XIG DOR (${DOR_GUILD_ID})`);
 
   // Presence (léger)
   const activities = [
     'Dispos 12h / 17h',
     'Snapshots automatiques',
-    'Rapport semaine',
-    'Sync pseudos'
+    'Rapport semaine (si activé)',
+    'Sync pseudos (si activé)'
   ];
 
   let i = 0;
@@ -110,10 +130,12 @@ client.once('ready', async () => {
   updatePresence();
   setInterval(updatePresence, 300000);
 
-  // ✅ Scheduler — IGA ONLY
+  // ✅ Scheduler — IG + DOR
   initScheduler(client, {
-    targetGuildIds: new Set([IGA_GUILD_ID])
+    targetGuildIds: new Set([IG_GUILD_ID, DOR_GUILD_ID])
   });
+
+  console.log('✅ Scheduler initialisé (IG + DOR).');
 });
 
 /* ============================================================
