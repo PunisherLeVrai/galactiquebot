@@ -128,7 +128,7 @@
       "timezone": "Europe/Paris",
 
       "noon": {
-        "enabled": true,
+        "enabled": false,
         "time": "12:00",
         "windowMin": 2,
         "mentionInReminder": true,
@@ -136,7 +136,7 @@
       },
 
       "close": {
-        "enabled": true,
+        "enabled": false,
         "time": "17:00",
         "windowMin": 2,
         "clearReactions": true,
