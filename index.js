@@ -130,6 +130,10 @@ client.once('ready', async () => {
   updatePresence();
   setInterval(updatePresence, 300000);
 
+  // ✅ Important: attendre que le cache guilds soit bien prêt
+  // (sur Railway parfois le ready arrive alors que certaines infos arrivent juste après)
+  await new Promise(r => setTimeout(r, 1500));
+
   // ✅ Scheduler — IG + DOR
   initScheduler(client, {
     targetGuildIds: new Set([IG_GUILD_ID, DOR_GUILD_ID])
