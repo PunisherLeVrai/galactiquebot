@@ -80,7 +80,7 @@
 
       "weekly": {
         "enabled": true,
-        "day": "dimanche",
+        "day": "jeudi",
         "time": "22:00",
         "windowMin": 2
       },
@@ -128,7 +128,7 @@
       "timezone": "Europe/Paris",
 
       "noon": {
-        "enabled": false,
+        "enabled": true,
         "time": "12:00",
         "windowMin": 2,
         "mentionInReminder": true,
@@ -136,7 +136,7 @@
       },
 
       "close": {
-        "enabled": false,
+        "enabled": true,
         "time": "17:00",
         "windowMin": 2,
         "clearReactions": true,
