@@ -59,6 +59,7 @@ function getParisParts(timezone = 'Europe/Paris') {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     weekday: 'long',
     hour12: false
   });
@@ -72,6 +73,7 @@ function getParisParts(timezone = 'Europe/Paris') {
 
   let hour = Number(get('hour'));
   const minute = Number(get('minute'));
+  const second = Number(get('second'));
   if (hour === 24) hour = 0;
 
   const weekday = (get('weekday') || '').toLowerCase();
@@ -83,12 +85,7 @@ function getParisParts(timezone = 'Europe/Paris') {
   };
   const jour = mapJour[weekday] || 'lundi';
 
-  return { year, month, day, hour, minute, isoDate, jour };
-}
-
-function inWindow(minute, windowMin = 2) {
-  // windowMin = 2 => minute 0..2 inclus
-  return minute >= 0 && minute <= windowMin;
+  return { year, month, day, hour, minute, second, isoDate, jour };
 }
 
 function parseTimeHHMM(str, fallback = { hour: 12, minute: 0 }) {
@@ -99,6 +96,21 @@ function parseTimeHHMM(str, fallback = { hour: 12, minute: 0 }) {
   if (h < 0 || h > 23) return fallback;
   if (mi < 0 || mi > 59) return fallback;
   return { hour: h, minute: mi };
+}
+
+function minutesOfDay(hour, minute) {
+  return (Number(hour) * 60) + Number(minute);
+}
+
+/**
+ * Fenêtre "inratable":
+ * - on déclenche si NOW est après l'heure cible et dans une période de grâce
+ * - graceMin par défaut = 10 minutes (si redémarrage à 12:07 -> OK)
+ */
+function withinGraceAfter(nowH, nowM, targetH, targetM, graceMin = 10) {
+  const now = minutesOfDay(nowH, nowM);
+  const target = minutesOfDay(targetH, targetM);
+  return now >= target && now <= (target + graceMin);
 }
 
 /* ============================================================
@@ -126,7 +138,9 @@ function getScheduleForGuild(guildId) {
       enabled: noon.enabled ?? true,
       hour: noonTime.hour,
       minute: noonTime.minute,
+      // windowMin conservé, mais on utilise surtout graceMin
       windowMin: Number.isFinite(noon.windowMin) ? noon.windowMin : 2,
+      graceMin: Number.isFinite(noon.graceMin) ? noon.graceMin : 10,
       mentionInReminder: noon.mentionInReminder ?? true,
       mentionInReports: noon.mentionInReports ?? false
     },
@@ -136,6 +150,7 @@ function getScheduleForGuild(guildId) {
       hour: closeTime.hour,
       minute: closeTime.minute,
       windowMin: Number.isFinite(close.windowMin) ? close.windowMin : 2,
+      graceMin: Number.isFinite(close.graceMin) ? close.graceMin : 10,
       clearReactions: close.clearReactions ?? true,
       sendCloseMessage: close.sendCloseMessage ?? true
     },
@@ -145,7 +160,8 @@ function getScheduleForGuild(guildId) {
       day: (weekly.day || 'dimanche').toLowerCase(),
       hour: weeklyTime.hour,
       minute: weeklyTime.minute,
-      windowMin: Number.isFinite(weekly.windowMin) ? weekly.windowMin : 2
+      windowMin: Number.isFinite(weekly.windowMin) ? weekly.windowMin : 2,
+      graceMin: Number.isFinite(weekly.graceMin) ? weekly.graceMin : 10
     },
 
     nickSync: {
@@ -158,8 +174,6 @@ function getScheduleForGuild(guildId) {
 
 /* ============================================================
    CIBLAGE SERVEURS
-   - Si opts.targetGuildIds fourni => on filtre
-   - Sinon => tous les serveurs du client qui ont une config
 ============================================================ */
 function computeTargetGuildIds(client, opts = {}) {
   const present = new Set([...client.guilds.cache.keys()]);
@@ -169,11 +183,8 @@ function computeTargetGuildIds(client, opts = {}) {
     (Array.isArray(opts.targetGuildIds)) ? opts.targetGuildIds :
     null;
 
-  const base = manual && manual.length
-    ? manual
-    : [...present];
+  const base = manual && manual.length ? manual : [...present];
 
-  // on ne garde que les serveurs présents ET configurés
   return base
     .filter(id => present.has(id))
     .filter(id => !!getGuildConfig(id));
@@ -186,7 +197,6 @@ function idsLine(colOrArray) {
   const arr = Array.isArray(colOrArray) ? colOrArray : [...colOrArray.values()];
   if (!arr.length) return '_Aucun_';
 
-  // Collection de GuildMember
   if (arr[0] && arr[0].id && arr[0].user) {
     return arr
       .slice()
@@ -214,7 +224,8 @@ async function fetchDispoDataForDay(guild, jour) {
 
   let message;
   try {
-    message = await dispoChannel.messages.fetch(dispoMessageId);
+    // force fetch -> meilleur quand cache / partials
+    message = await dispoChannel.messages.fetch({ message: dispoMessageId, force: true });
   } catch {
     return null;
   }
@@ -228,10 +239,16 @@ async function fetchDispoDataForDay(guild, jour) {
   const yes = new Set();
   const no = new Set();
 
+  // sécurise: fetch des réactions si cache vide
+  try {
+    if (!message.reactions.cache.size) await message.fetch(true).catch(() => {});
+  } catch {}
+
   for (const [, reaction] of message.reactions.cache) {
     const emojiName = reaction.emoji?.name;
     if (!['✅', '❌'].includes(emojiName)) continue;
 
+    // fetch users ayant réagi (API)
     const users = await reaction.users.fetch().catch(() => null);
     if (!users) continue;
 
@@ -315,7 +332,7 @@ async function runNoonReminderForGuild(client, guildId, jour, schedule) {
     await data.dispoChannel.send({
       content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !`,
       allowedMentions: { parse: [] }
-    });
+    }).catch(() => {});
     return;
   }
 
@@ -332,14 +349,14 @@ async function runNoonReminderForGuild(client, guildId, jour, schedule) {
     await data.dispoChannel.send({
       content: `${header}\n\n${first.map(id => `<@${id}>`).join(' - ')}`,
       allowedMentions: schedule.noon.mentionInReminder ? { users: first, parse: [] } : { parse: [] }
-    });
+    }).catch(() => {});
   }
 
   for (const batch of batches) {
     await data.dispoChannel.send({
       content: batch.map(id => `<@${id}>`).join(' - '),
       allowedMentions: schedule.noon.mentionInReminder ? { users: batch, parse: [] } : { parse: [] }
-    });
+    }).catch(() => {});
   }
 }
 
@@ -360,9 +377,9 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
     .setColor(getEmbedColorFromConfig(guild.id))
     .setTitle(`📅 RAPPORT - ${jour.toUpperCase()} (${hourLabel})`)
     .addFields(
-      { name: `✅ Présents (${data.presentsAll.size})`, value: idsLine(data.presentsAll) },
-      { name: `❌ Ont dit absent (${data.absentsAll.size})`, value: idsLine(data.absentsAll) },
-      { name: `⏳ N’ont pas réagi (${data.nonRepondus.size})`, value: idsLine(data.nonRepondus) }
+      { name: `✅ Présents (${data.presentsAll.size})`, value: idsLine(data.presentsAll).slice(0, 1024) || '_Aucun_' },
+      { name: `❌ Ont dit absent (${data.absentsAll.size})`, value: idsLine(data.absentsAll).slice(0, 1024) || '_Aucun_' },
+      { name: `⏳ N’ont pas réagi (${data.nonRepondus.size})`, value: idsLine(data.nonRepondus).slice(0, 1024) || '_Aucun_' }
     )
     .setFooter({ text: `${getClubName(data.cfg, guild)} ⚫ Rapport automatisé` })
     .setTimestamp();
@@ -371,7 +388,7 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
     embeds: [embed],
     components: [data.rowBtn],
     allowedMentions: schedule.noon.mentionInReports ? { parse: ['users'] } : { parse: [] }
-  });
+  }).catch(() => {});
 }
 
 /* ============================================================
@@ -423,7 +440,7 @@ async function closeDisposForGuild(client, guildId, jour, isoDate, schedule) {
         e.setDescription([desc, '', lockLine].filter(Boolean).join('\n'));
         e.setFooter({ text: `${clubName} ⚫ Disponibilités (fermées)` });
         e.setColor(color);
-        await data.message.edit({ content: '', embeds: [e] });
+        await data.message.edit({ content: '', embeds: [e] }).catch(() => {});
       }
     }
   } catch {}
@@ -450,7 +467,7 @@ async function closeDisposForGuild(client, guildId, jour, isoDate, schedule) {
 }
 
 /* ============================================================
-   RAPPORT SEMAINE via SNAPSHOTS (DIMANCHE UNIQUEMENT)
+   RAPPORT SEMAINE via SNAPSHOTS
 ============================================================ */
 const DISPO_SNAP_REGEX =
   /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
@@ -534,7 +551,7 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
       .setFooter({ text: `${clubLabel} • Rapport snapshots` })
       .setTimestamp();
 
-    await reportChannel.send({ embeds: [embedEmpty], allowedMentions: { parse: [] } });
+    await reportChannel.send({ embeds: [embedEmpty], allowedMentions: { parse: [] } }).catch(() => {});
     return;
   }
 
@@ -575,7 +592,7 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
       .setFooter({ text: `${clubLabel} • Rapport snapshots` })
       .setTimestamp();
 
-    await reportChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } });
+    await reportChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } }).catch(() => {});
     return;
   }
 
@@ -595,7 +612,7 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
     .setFooter({ text: `${clubLabel} • Rapport snapshots` })
     .setTimestamp();
 
-  await reportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+  await reportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
 }
 
 /* ============================================================
@@ -692,18 +709,20 @@ async function autoSyncNicknamesForGuild(client, guildId, schedule) {
 }
 
 /* ============================================================
-   INIT SCHEDULER
+   INIT SCHEDULER (INRATABLE)
 ============================================================ */
 function initScheduler(client, opts = {}) {
   ensureSnapshotDirectory();
 
-  logInfo('Scheduler ON (multi-serveurs config) : noon / close+snapshot / weekly snapshots dimanche / nickSync');
+  logInfo('Scheduler ON (robuste) : noon / close+snapshot / weekly / nickSync');
 
-  // lastRun[guildId] = { noonKey, closeKey, weeklyKey, nickKey }
+  // lastRun[guildId] = { noon, close, weekly, nick }
   const lastRun = new Map();
   let tickRunning = false;
 
-  setInterval(async () => {
+  const TICK_MS = 15 * 1000; // ✅ 15s -> beaucoup plus fiable qu'1 minute
+
+  const tick = async () => {
     if (tickRunning) return;
     tickRunning = true;
 
@@ -718,78 +737,54 @@ function initScheduler(client, opts = {}) {
 
         const state = lastRun.get(gid) || { noon: null, close: null, weekly: null, nick: null };
 
-        // --- NOON ---
-        if (schedule.noon.enabled && hour === schedule.noon.hour && minute === schedule.noon.minute && inWindow(0, schedule.noon.windowMin)) {
-          // ⚠️ inWindow ici n’a pas de sens car minute est exact. On gère la fenêtre différemment :
-        }
-
-        // Fenêtre robuste: on autorise minute dans [targetMinute .. targetMinute+windowMin]
-        const withinNoonWindow =
-          hour === schedule.noon.hour &&
-          minute >= schedule.noon.minute &&
-          minute <= (schedule.noon.minute + schedule.noon.windowMin);
-
-        if (schedule.noon.enabled && withinNoonWindow) {
+        // --- NOON (rappel + rapport) ---
+        if (schedule.noon.enabled && withinGraceAfter(hour, minute, schedule.noon.hour, schedule.noon.minute, schedule.noon.graceMin)) {
           const key = `${dateKey}-noon-${schedule.noon.hour}:${schedule.noon.minute}`;
           if (state.noon !== key) {
             state.noon = key;
-            try {
-              await runNoonReminderForGuild(client, gid, jour, schedule);
-            } catch (e) { logErr(`noon reminder (${gid})`, e?.message || e); }
+            logInfo(`NOON ${gid} -> ${jour} (${schedule.noon.hour}:${String(schedule.noon.minute).padStart(2,'0')})`);
+            try { await runNoonReminderForGuild(client, gid, jour, schedule); }
+            catch (e) { logErr(`noon reminder (${gid})`, e?.message || e); }
 
-            try {
-              await sendDetailedReportForGuild(client, gid, jour, `${schedule.noon.hour}h${String(schedule.noon.minute).padStart(2,'0')}`, schedule);
-            } catch (e) { logErr(`noon report (${gid})`, e?.message || e); }
+            try { await sendDetailedReportForGuild(client, gid, jour, `${schedule.noon.hour}h${String(schedule.noon.minute).padStart(2,'0')}`, schedule); }
+            catch (e) { logErr(`noon report (${gid})`, e?.message || e); }
           }
         }
 
-        // --- CLOSE ---
-        const withinCloseWindow =
-          hour === schedule.close.hour &&
-          minute >= schedule.close.minute &&
-          minute <= (schedule.close.minute + schedule.close.windowMin);
-
-        if (schedule.close.enabled && withinCloseWindow) {
+        // --- CLOSE (rapport + fermeture + snapshot) ---
+        if (schedule.close.enabled && withinGraceAfter(hour, minute, schedule.close.hour, schedule.close.minute, schedule.close.graceMin)) {
           const key = `${dateKey}-close-${schedule.close.hour}:${schedule.close.minute}`;
           if (state.close !== key) {
             state.close = key;
+            logInfo(`CLOSE ${gid} -> ${jour} (${schedule.close.hour}:${String(schedule.close.minute).padStart(2,'0')})`);
 
-            try {
-              await sendDetailedReportForGuild(client, gid, jour, `${schedule.close.hour}h${String(schedule.close.minute).padStart(2,'0')}`, schedule);
-            } catch (e) { logErr(`close report (${gid})`, e?.message || e); }
+            try { await sendDetailedReportForGuild(client, gid, jour, `${schedule.close.hour}h${String(schedule.close.minute).padStart(2,'0')}`, schedule); }
+            catch (e) { logErr(`close report (${gid})`, e?.message || e); }
 
-            try {
-              await closeDisposForGuild(client, gid, jour, dateKey, schedule);
-            } catch (e) { logErr(`close + snapshot (${gid})`, e?.message || e); }
+            try { await closeDisposForGuild(client, gid, jour, dateKey, schedule); }
+            catch (e) { logErr(`close + snapshot (${gid})`, e?.message || e); }
           }
         }
 
-        // --- WEEKLY (dimanche unique) ---
+        // --- WEEKLY ---
         const weeklyDayOk = jour === String(schedule.weekly.day || 'dimanche').toLowerCase();
-        const withinWeeklyWindow =
-          weeklyDayOk &&
-          hour === schedule.weekly.hour &&
-          minute >= schedule.weekly.minute &&
-          minute <= (schedule.weekly.minute + schedule.weekly.windowMin);
-
-        if (schedule.weekly.enabled && withinWeeklyWindow) {
+        if (schedule.weekly.enabled && weeklyDayOk && withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)) {
           const key = `${dateKey}-weekly-${schedule.weekly.hour}:${schedule.weekly.minute}`;
           if (state.weekly !== key) {
             state.weekly = key;
-            try {
-              await autoWeekDispoReportForGuild(client, gid, schedule);
-            } catch (e) { logErr(`weekly snapshots (${gid})`, e?.message || e); }
+            logInfo(`WEEKLY ${gid} -> ${jour} (${schedule.weekly.hour}:${String(schedule.weekly.minute).padStart(2,'0')})`);
+            try { await autoWeekDispoReportForGuild(client, gid, schedule); }
+            catch (e) { logErr(`weekly snapshots (${gid})`, e?.message || e); }
           }
         }
 
-        // --- NICK SYNC (H:minute) ---
+        // --- NICK SYNC (tous les jours à minute X, 1 fois par heure) ---
         if (schedule.nickSync.enabled && minute === schedule.nickSync.minute) {
           const key = `${dateKey}-nick-${hour}`;
           if (state.nick !== key) {
             state.nick = key;
-            try {
-              await autoSyncNicknamesForGuild(client, gid, schedule);
-            } catch (e) { logErr(`nick sync (${gid})`, e?.message || e); }
+            try { await autoSyncNicknamesForGuild(client, gid, schedule); }
+            catch (e) { logErr(`nick sync (${gid})`, e?.message || e); }
           }
         }
 
@@ -798,7 +793,11 @@ function initScheduler(client, opts = {}) {
     } finally {
       tickRunning = false;
     }
-  }, 60 * 1000);
+  };
+
+  // ✅ tick régulier + tick immédiat (super utile après redéploiement)
+  tick().catch(() => {});
+  setInterval(() => tick().catch(() => {}), TICK_MS);
 }
 
 module.exports = {
