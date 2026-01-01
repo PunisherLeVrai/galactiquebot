@@ -3,11 +3,9 @@
     "clubName": "INTER GALACTIQUE",
     "tag": "XIG",
     "embedColor": "ff4db8",
-
     "logChannelId": "1393776090086117426",
     "rapportChannelId": "1446471718943326259",
     "mainDispoChannelId": "1429059902852173936",
-
     "dispoMessages": {
       "lundi": "1429061125307105290",
       "mardi": "1429061128742502450",
@@ -17,13 +15,11 @@
       "samedi": "1429061144428937326",
       "dimanche": "1429061148459794504"
     },
-
     "roles": {
       "joueur": "1393784530124668988",
       "essai": "1393784904809975850",
       "convoque": "1439759021371428955"
     },
-
     "nickname": {
       "hierarchy": [
         { "id": "1393784275853246666", "label": "PRÉSIDENT" },
@@ -58,10 +54,8 @@
         { "id": "1444317741505974333", "label": "ATD" }
       ]
     },
-
     "automationSchedule": {
       "timezone": "Europe/Paris",
-
       "noon": {
         "enabled": true,
         "time": "12:00",
@@ -69,7 +63,6 @@
         "mentionInReminder": true,
         "mentionInReports": false
       },
-
       "close": {
         "enabled": true,
         "time": "17:00",
@@ -77,14 +70,12 @@
         "clearReactions": true,
         "sendCloseMessage": true
       },
-
       "weekly": {
         "enabled": true,
         "day": "jeudi",
         "time": "22:00",
         "windowMin": 2
       },
-
       "nickSync": {
         "enabled": true,
         "minute": 10,
@@ -97,11 +88,9 @@
     "clubName": "XIG DOR",
     "tag": "XIG",
     "embedColor": "f1c40f",
-
     "logChannelId": "1448726984795488286",
     "rapportChannelId": "1448731756478857337",
     "mainDispoChannelId": "1441625985559691304",
-
     "dispoMessages": {
       "lundi": "1454851657731936479",
       "mardi": "1454851819766415441",
@@ -111,22 +100,18 @@
       "samedi": "0",
       "dimanche": "1454851417675268129"
     },
-
     "roles": {
       "joueur": "1410246320656093296",
       "essai": "1410246320656093295",
       "convoque": "0"
     },
-
     "nickname": {
       "hierarchy": [],
       "teams": [],
       "postes": []
     },
-
     "automationSchedule": {
       "timezone": "Europe/Paris",
-
       "noon": {
         "enabled": true,
         "time": "12:00",
@@ -134,7 +119,6 @@
         "mentionInReminder": true,
         "mentionInReports": false
       },
-
       "close": {
         "enabled": true,
         "time": "17:00",
@@ -142,14 +126,12 @@
         "clearReactions": true,
         "sendCloseMessage": true
       },
-
       "weekly": {
         "enabled": false,
         "day": "dimanche",
         "time": "22:00",
         "windowMin": 2
       },
-
       "nickSync": {
         "enabled": false,
         "minute": 10,
