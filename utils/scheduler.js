@@ -11,7 +11,7 @@ const {
 
 const { getGuildConfig } = require('./config');
 const { SNAPSHOT_DIR, ensureSnapshotDirectory } = require('./paths');
-const { buildNickname } = require('./nickname'); // ✅ NEW: format configurable + réutilisé partout
+const { buildNickname } = require('./nickname'); // ✅ format configurable + réutilisé partout
 
 const DEFAULT_COLOR = 0xff4db8;
 
@@ -106,7 +106,7 @@ function minutesOfDay(hour, minute) {
 /**
  * Fenêtre "inratable":
  * - on déclenche si NOW est après l'heure cible et dans une période de grâce
- * - graceMin par défaut = 10 minutes (si redémarrage à 12:07 -> OK)
+ * - graceMin par défaut = 10 minutes
  */
 function withinGraceAfter(nowH, nowM, targetH, targetM, graceMin = 10) {
   const now = minutesOfDay(nowH, nowM);
@@ -139,7 +139,6 @@ function getScheduleForGuild(guildId) {
       enabled: noon.enabled ?? true,
       hour: noonTime.hour,
       minute: noonTime.minute,
-      // windowMin conservé, mais on utilise surtout graceMin
       windowMin: Number.isFinite(noon.windowMin) ? noon.windowMin : 2,
       graceMin: Number.isFinite(noon.graceMin) ? noon.graceMin : 10,
       mentionInReminder: noon.mentionInReminder ?? true,
@@ -198,6 +197,7 @@ function idsLine(colOrArray) {
   const arr = Array.isArray(colOrArray) ? colOrArray : [...colOrArray.values()];
   if (!arr.length) return '_Aucun_';
 
+  // Collection<Member>
   if (arr[0] && arr[0].id && arr[0].user) {
     return arr
       .slice()
@@ -206,6 +206,7 @@ function idsLine(colOrArray) {
       .join(' - ');
   }
 
+  // Array<string>
   return arr.map(id => `<@${id}>`).join(' - ');
 }
 
@@ -225,7 +226,6 @@ async function fetchDispoDataForDay(guild, jour) {
 
   let message;
   try {
-    // force fetch -> meilleur quand cache / partials
     message = await dispoChannel.messages.fetch({ message: dispoMessageId, force: true });
   } catch {
     return null;
@@ -240,16 +240,13 @@ async function fetchDispoDataForDay(guild, jour) {
   const yes = new Set();
   const no = new Set();
 
-  // sécurise: fetch des réactions si cache vide
-  try {
-    if (!message.reactions.cache.size) await message.fetch(true).catch(() => {});
-  } catch {}
+  // sécurise: refresh si besoin
+  try { await message.fetch().catch(() => {}); } catch {}
 
   for (const [, reaction] of message.reactions.cache) {
     const emojiName = reaction.emoji?.name;
     if (!['✅', '❌'].includes(emojiName)) continue;
 
-    // fetch users ayant réagi (API)
     const users = await reaction.users.fetch().catch(() => null);
     if (!users) continue;
 
@@ -617,7 +614,7 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
 }
 
 /* ============================================================
-   SYNC PSEUDOS (auto) — ✅ utilise utils/nickname.js + nickname.format
+   SYNC PSEUDOS (auto) — utilise utils/nickname.js + nickname.format
 ============================================================ */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -642,7 +639,7 @@ async function autoSyncNicknamesForGuild(client, guildId, schedule) {
   const members = guild.members.cache.filter(m => !m.user.bot);
 
   for (const member of members.values()) {
-    const newNick = buildNickname(member, nicknameCfg, cfg); // ✅ format + tag/club support
+    const newNick = buildNickname(member, nicknameCfg, cfg);
     const current = member.nickname || member.user.username;
 
     if (current === newNick) continue;
@@ -667,7 +664,7 @@ function initScheduler(client, opts = {}) {
   const lastRun = new Map();
   let tickRunning = false;
 
-  const TICK_MS = 15 * 1000; // ✅ 15s -> beaucoup plus fiable qu'1 minute
+  const TICK_MS = 15 * 1000;
 
   const tick = async () => {
     if (tickRunning) return;
@@ -685,28 +682,49 @@ function initScheduler(client, opts = {}) {
         const state = lastRun.get(gid) || { noon: null, close: null, weekly: null, nick: null };
 
         // --- NOON (rappel + rapport) ---
-        if (schedule.noon.enabled && withinGraceAfter(hour, minute, schedule.noon.hour, schedule.noon.minute, schedule.noon.graceMin)) {
+        if (
+          schedule.noon.enabled &&
+          withinGraceAfter(hour, minute, schedule.noon.hour, schedule.noon.minute, schedule.noon.graceMin)
+        ) {
           const key = `${dateKey}-noon-${schedule.noon.hour}:${schedule.noon.minute}`;
           if (state.noon !== key) {
             state.noon = key;
             logInfo(`NOON ${gid} -> ${jour} (${schedule.noon.hour}:${String(schedule.noon.minute).padStart(2,'0')})`);
+
             try { await runNoonReminderForGuild(client, gid, jour, schedule); }
             catch (e) { logErr(`noon reminder (${gid})`, e?.message || e); }
 
-            try { await sendDetailedReportForGuild(client, gid, jour, `${schedule.noon.hour}h${String(schedule.noon.minute).padStart(2,'0')}`, schedule); }
-            catch (e) { logErr(`noon report (${gid})`, e?.message || e); }
+            try {
+              await sendDetailedReportForGuild(
+                client, gid, jour,
+                `${schedule.noon.hour}h${String(schedule.noon.minute).padStart(2,'0')}`,
+                schedule
+              );
+            } catch (e) {
+              logErr(`noon report (${gid})`, e?.message || e);
+            }
           }
         }
 
         // --- CLOSE (rapport + fermeture + snapshot) ---
-        if (schedule.close.enabled && withinGraceAfter(hour, minute, schedule.close.hour, schedule.close.minute, schedule.close.graceMin)) {
+        if (
+          schedule.close.enabled &&
+          withinGraceAfter(hour, minute, schedule.close.hour, schedule.close.minute, schedule.close.graceMin)
+        ) {
           const key = `${dateKey}-close-${schedule.close.hour}:${schedule.close.minute}`;
           if (state.close !== key) {
             state.close = key;
             logInfo(`CLOSE ${gid} -> ${jour} (${schedule.close.hour}:${String(schedule.close.minute).padStart(2,'0')})`);
 
-            try { await sendDetailedReportForGuild(client, gid, jour, `${schedule.close.hour}h${String(schedule.close.minute).padStart(2,'0')}`, schedule); }
-            catch (e) { logErr(`close report (${gid})`, e?.message || e); }
+            try {
+              await sendDetailedReportForGuild(
+                client, gid, jour,
+                `${schedule.close.hour}h${String(schedule.close.minute).padStart(2,'0')}`,
+                schedule
+              );
+            } catch (e) {
+              logErr(`close report (${gid})`, e?.message || e);
+            }
 
             try { await closeDisposForGuild(client, gid, jour, dateKey, schedule); }
             catch (e) { logErr(`close + snapshot (${gid})`, e?.message || e); }
@@ -715,7 +733,11 @@ function initScheduler(client, opts = {}) {
 
         // --- WEEKLY ---
         const weeklyDayOk = jour === String(schedule.weekly.day || 'dimanche').toLowerCase();
-        if (schedule.weekly.enabled && weeklyDayOk && withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)) {
+        if (
+          schedule.weekly.enabled &&
+          weeklyDayOk &&
+          withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)
+        ) {
           const key = `${dateKey}-weekly-${schedule.weekly.hour}:${schedule.weekly.minute}`;
           if (state.weekly !== key) {
             state.weekly = key;
@@ -742,7 +764,6 @@ function initScheduler(client, opts = {}) {
     }
   };
 
-  // ✅ tick régulier + tick immédiat (super utile après redéploiement)
   tick().catch(() => {});
   setInterval(() => tick().catch(() => {}), TICK_MS);
 }
