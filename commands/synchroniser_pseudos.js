@@ -36,8 +36,9 @@ module.exports = {
       });
     }
 
-    const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
-    const nicknameCfg = guildConfig?.nickname || {};
+    const cfgPack = getConfigFromInteraction(interaction) || {};
+    const guildConfig = cfgPack.guild || {}; // ✅ évite null
+    const nicknameCfg = guildConfig.nickname || {};
 
     const hasAny =
       (Array.isArray(nicknameCfg.hierarchy) && nicknameCfg.hierarchy.length) ||
@@ -46,8 +47,7 @@ module.exports = {
 
     if (!hasAny) {
       return interaction.reply({
-        content:
-          '❌ Config pseudos manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
+        content: '❌ Config pseudos manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
         ephemeral: true
       });
     }
