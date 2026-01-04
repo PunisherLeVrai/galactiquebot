@@ -121,7 +121,7 @@
       },
       "close": {
         "enabled": true,
-        "time": "17:00",
+        "time": "19:00",
         "windowMin": 2,
         "clearReactions": true,
         "sendCloseMessage": true
