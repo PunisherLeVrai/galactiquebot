@@ -1,85 +1,15 @@
 // commands/synchroniser_pseudos.js
-const {
-  SlashCommandBuilder,
-  PermissionFlagsBits
-} = require('discord.js');
-
+const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const { getConfigFromInteraction } = require('../utils/config');
+const { buildNickname } = require('../utils/nickname');
 
-const MAX_LEN = 32;
 const SLEEP_MS = 350;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-/* =========================
-   UTILS NICKNAME (même logique que scheduler)
-========================= */
-
-function cleanPseudo(username, room = MAX_LEN) {
-  if (!username) return 'Joueur';
-
-  let clean = username.replace(/[^A-Za-z]/g, '');
-  if (!clean.length) return 'Joueur';
-
-  clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
-  if (clean.length > room) clean = clean.slice(0, room - 1) + '…';
-  return clean;
-}
-
-function getHierarchy(member, hierarchyRoles = []) {
-  const found = hierarchyRoles.find(r => member.roles.cache.has(r.id));
-  return found ? found.label : null;
-}
-
-function getTeam(member, teamRoles = []) {
-  const found = teamRoles.find(r => member.roles.cache.has(r.id));
-  return found ? found.label : null;
-}
-
-function getPostes(member, posteRoles = []) {
-  return posteRoles
-    .filter(p => member.roles.cache.has(p.id))
-    .map(p => p.label)
-    .slice(0, 3);
-}
-
-// ✅ Nouveau format: Pseudo | (Hiérarchie OU Team) | Poste(s)
-function buildNickname(member, nicknameCfg = {}) {
-  const hierarchyRoles = Array.isArray(nicknameCfg.hierarchy) ? nicknameCfg.hierarchy : [];
-  const teamRoles = Array.isArray(nicknameCfg.teams) ? nicknameCfg.teams : [];
-  const posteRoles = Array.isArray(nicknameCfg.postes) ? nicknameCfg.postes : [];
-
-  const hierarchy = getHierarchy(member, hierarchyRoles);
-  const team = getTeam(member, teamRoles);
-  const mid = hierarchy || team || '';
-
-  const postesArr = getPostes(member, posteRoles);
-  const postes = postesArr.length ? postesArr.join('/') : '';
-
-  const pseudoBase = cleanPseudo(member.user.username, MAX_LEN);
-
-  const parts = [pseudoBase, mid, postes].filter(Boolean);
-  let full = parts.join(' | ');
-
-  if (full.length > MAX_LEN) {
-    const suffix = parts.slice(1).join(' | ');
-    const suffixStr = suffix ? ` | ${suffix}` : '';
-    const roomForPseudo = Math.max(3, MAX_LEN - suffixStr.length);
-
-    const trimmedPseudo = cleanPseudo(member.user.username, roomForPseudo);
-    full = `${trimmedPseudo}${suffixStr}`;
-  }
-
-  return full.slice(0, MAX_LEN);
-}
-
-/* =========================
-   COMMANDE
-========================= */
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('synchroniser_pseudos')
-    .setDescription('Synchronise les pseudos au format : Pseudo | (Hiérarchie OU Team) | Poste(s)')
+    .setDescription('Synchronise les pseudos selon le format configuré dans servers.json (nickname.format)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
     .addBooleanOption(o =>
       o.setName('simulation')
@@ -117,15 +47,18 @@ module.exports = {
     if (!hasAny) {
       return interaction.reply({
         content:
-          '❌ La configuration des rôles pour les pseudos est manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
+          '❌ Config pseudos manquante dans `servers.json` (`nickname.hierarchy`, `nickname.teams`, `nickname.postes`).',
         ephemeral: true
       });
     }
 
+    const format = nicknameCfg.format || '{PSEUDO} | {MID} | {POSTES}';
+
     await interaction.reply({
-      content: simulation
-        ? '🧪 Simulation de synchronisation des pseudos en cours…'
-        : '🔧 Synchronisation des pseudos en cours…',
+      content: [
+        simulation ? '🧪 Simulation de synchronisation en cours…' : '🔧 Synchronisation en cours…',
+        `📌 Format actif : \`${format}\``
+      ].join('\n'),
       ephemeral: true
     });
 
@@ -138,7 +71,7 @@ module.exports = {
     const errors = [];
 
     for (const member of members.values()) {
-      const newNick = buildNickname(member, nicknameCfg);
+      const newNick = buildNickname(member, nicknameCfg, guildConfig);
       const current = member.nickname || member.user.username;
 
       if (current === newNick) {
@@ -177,6 +110,7 @@ module.exports = {
     await interaction.followUp({
       content: [
         simulation ? '🧪 **SIMULATION TERMINÉE**' : '✅ **SYNCHRONISATION TERMINÉE**',
+        `📌 Format : \`${format}\``,
         `✅ Modifiés : ${changes.length}`,
         `⏭️ Déjà conformes : ${unchanged.length}`,
         `🔒 Non modifiables (hiérarchie / permissions) : ${blocked.length}`,
