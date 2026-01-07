@@ -1,22 +1,16 @@
-// commands/planning.js
+// commands/planning.js  ✅ VERSION SANS EMBED (format clean pro)
+// - /planning show  -> affiche le planning (texte)
+// - /planning set   -> définit/écrase le jour
+// - /planning clear -> supprime un jour
+// - /planning post  -> poste le planning dans un salon
+
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType,
-  EmbedBuilder
+  ChannelType
 } = require('discord.js');
 
 const { getConfigFromInteraction, updateGuildConfig } = require('../utils/config');
-
-const DEFAULT_COLOR = 0xff4db8;
-
-function getEmbedColor(cfg) {
-  const hex = cfg?.embedColor;
-  if (!hex) return DEFAULT_COLOR;
-  const clean = String(hex).replace(/^0x/i, '').replace('#', '');
-  const num = parseInt(clean, 16);
-  return Number.isNaN(num) ? DEFAULT_COLOR : num;
-}
 
 const JOURS = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'];
 
@@ -30,7 +24,6 @@ function parseTimeRange(input) {
   const raw = String(input || '').trim();
   const m = raw.match(/^([01]\d|2[0-3]):([0-5]\d)\s*(?:-|→|>|to)\s*([01]\d|2[0-3]):([0-5]\d)$/i);
   if (!m) return null;
-
   const start = `${m[1]}:${m[2]}`;
   const end = `${m[3]}:${m[4]}`;
   return { start, end, normalized: `${start}-${end}` };
@@ -38,51 +31,121 @@ function parseTimeRange(input) {
 
 function dayLabelFR(jour) {
   const map = {
-    lundi: 'Lundi',
-    mardi: 'Mardi',
-    mercredi: 'Mercredi',
-    jeudi: 'Jeudi',
-    vendredi: 'Vendredi',
-    samedi: 'Samedi',
-    dimanche: 'Dimanche'
+    lundi: 'LUNDI',
+    mardi: 'MARDI',
+    mercredi: 'MERCREDI',
+    jeudi: 'JEUDI',
+    vendredi: 'VENDREDI',
+    samedi: 'SAMEDI',
+    dimanche: 'DIMANCHE'
   };
-  return map[jour] || jour;
+  return map[jour] || String(jour || '').toUpperCase();
 }
 
-function formatPlanningLines(planning = {}) {
-  const lines = [];
+/** Centre un texte dans une largeur fixe (sans dépendre des polices) */
+function centerText(txt, width = 22) {
+  const t = String(txt || '').trim();
+  if (t.length >= width) return t;
+  const left = Math.floor((width - t.length) / 2);
+  const right = width - t.length - left;
+  return ' '.repeat(left) + t + ' '.repeat(right);
+}
 
-  for (const j of JOURS) {
-    const item = planning?.[j];
-    if (!item || typeof item !== 'object') {
-      lines.push(`**${dayLabelFR(j)}** : _—_`);
-      continue;
-    }
+function lineSep(width = 22) {
+  // style comme ton screen
+  return '━'.repeat(width);
+}
 
-    const heure = item.heure || item.time || null;
-    const titre = item.titre || item.title || 'Session';
-    const salonId = item.salonId || item.channelId || null;
+/**
+ * Rend une "carte" texte comme ton screen:
+ * ━━━━━━━━━━━━
+ *      LUNDI
+ * ━━━━━━━━━━━━
+ * 20:45-23:00 ▸ Session • #salon
+ *
+ * Supporte planning[jour] au format:
+ * - objet: { heure, titre, salonId }
+ * - ou tableau d'objets: [{ heure, titre, salonId }, ...]
+ */
+function renderDayBlock(jour, value) {
+  const width = 28; // un poil plus large pour un rendu clean sur mobile
+  const title = centerText(dayLabelFR(jour), width);
 
-    const hourStr = heure ? `**${heure}**` : '_Horaire non défini_';
+  const header = [
+    lineSep(width),
+    title,
+    lineSep(width)
+  ];
+
+  const formatItem = (it) => {
+    const heure = it?.heure || it?.time || null;
+    const titre = it?.titre || it?.title || 'Session';
+    const salonId = it?.salonId || it?.channelId || null;
+
+    // "Joueur par défaut : Dylan | Postes" => ici on met "—" si vide
+    const hourStr = heure ? `${heure}` : '—';
     const chanStr = salonId ? ` • <#${salonId}>` : '';
 
-    lines.push(`**${dayLabelFR(j)}** : ${hourStr} — ${titre}${chanStr}`);
+    return `${hourStr} ▸ ${titre}${chanStr}`;
+  };
+
+  let bodyLines = [];
+
+  if (!value) {
+    bodyLines = ['—'];
+  } else if (Array.isArray(value)) {
+    const items = value.filter(x => x && typeof x === 'object');
+    bodyLines = items.length ? items.map(formatItem) : ['—'];
+  } else if (typeof value === 'object') {
+    bodyLines = [formatItem(value)];
+  } else {
+    bodyLines = ['—'];
   }
 
-  return lines;
+  // bloc final (dans un code block pour garder l’alignement)
+  return ['```', ...header, ...bodyLines, '```'].join('\n');
+}
+
+/** Rend tout le planning en blocs (1 bloc / jour) + découpe si besoin */
+function renderPlanningMessage(planning = {}, clubLabel = 'PLANNING') {
+  const blocks = [];
+
+  // En-tête simple (hors code block)
+  blocks.push(`🗓️ **PLANNING — ${clubLabel}**`);
+
+  for (const j of JOURS) {
+    blocks.push(renderDayBlock(j, planning?.[j]));
+  }
+
+  return blocks.join('\n\n');
+}
+
+/** Découpe si jamais le message dépasse 2000 caractères */
+function chunkMessage(str, limit = 1900) {
+  const parts = [];
+  let cur = '';
+  const lines = String(str || '').split('\n');
+
+  for (const line of lines) {
+    if ((cur + '\n' + line).length > limit) {
+      parts.push(cur);
+      cur = line;
+    } else {
+      cur = cur ? (cur + '\n' + line) : line;
+    }
+  }
+  if (cur) parts.push(cur);
+  return parts;
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('planning')
-    .setDescription('Gère le planning de la semaine.')
-
+    .setDescription('Gère le planning de la semaine (format texte clean).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     .addSubcommand(sc =>
-      sc
-        .setName('show')
-        .setDescription('Affiche le planning.')
+      sc.setName('show').setDescription('Affiche le planning.')
     )
 
     .addSubcommand(sc =>
@@ -142,7 +205,6 @@ module.exports = {
     const guild = interaction.guild;
 
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
-    const embedColor = getEmbedColor(guildConfig);
     const clubLabel = guildConfig?.clubName || guild?.name || 'INTER GALACTIQUE';
 
     const currentPlanning = (guildConfig?.planning && typeof guildConfig.planning === 'object')
@@ -151,16 +213,15 @@ module.exports = {
 
     // ---------- SHOW ----------
     if (sub === 'show') {
-      const lines = formatPlanningLines(currentPlanning);
+      const msg = renderPlanningMessage(currentPlanning, clubLabel);
+      const chunks = chunkMessage(msg);
 
-      const embed = new EmbedBuilder()
-        .setColor(embedColor)
-        .setTitle(`🗓️ Planning — ${clubLabel}`)
-        .setDescription(lines.join('\n'))
-        .setFooter({ text: `${clubLabel} • Planning` })
-        .setTimestamp();
-
-      return interaction.reply({ embeds: [embed], ephemeral: false });
+      // 1er en reply, le reste en followUp si besoin
+      await interaction.reply({ content: chunks[0], ephemeral: false });
+      for (const extra of chunks.slice(1)) {
+        await interaction.followUp({ content: extra, ephemeral: false }).catch(() => {});
+      }
+      return;
     }
 
     // ---------- SET ----------
@@ -194,8 +255,11 @@ module.exports = {
 
       updateGuildConfig(guild.id, patch);
 
+      // aperçu directement au format final (super utile)
+      const preview = renderDayBlock(jour, patch.planning[jour]);
+
       return interaction.reply({
-        content: `✅ Planning mis à jour : **${dayLabelFR(jour)}** → **${parsed.normalized}** — ${titre}${salon ? ` • <#${salon.id}>` : ''}`,
+        content: `✅ **${dayLabelFR(jour)}** mis à jour.\n\n${preview}`,
         ephemeral: true
       });
     }
@@ -205,14 +269,13 @@ module.exports = {
       const jour = normalizeJour(interaction.options.getString('jour'));
       if (!jour) return interaction.reply({ content: '❌ Jour invalide.', ephemeral: true });
 
-      // on supprime en écrivant null puis en nettoyant
       const next = { ...(currentPlanning || {}) };
       delete next[jour];
 
       updateGuildConfig(guild.id, { planning: next });
 
       return interaction.reply({
-        content: `🗑️ Jour supprimé du planning : **${dayLabelFR(jour)}**`,
+        content: `🗑️ Jour supprimé : **${dayLabelFR(jour)}**`,
         ephemeral: true
       });
     }
@@ -230,16 +293,12 @@ module.exports = {
         });
       }
 
-      const lines = formatPlanningLines(currentPlanning);
+      const msg = renderPlanningMessage(currentPlanning, clubLabel);
+      const chunks = chunkMessage(msg);
 
-      const embed = new EmbedBuilder()
-        .setColor(embedColor)
-        .setTitle(`🗓️ Planning — ${clubLabel}`)
-        .setDescription(lines.join('\n'))
-        .setFooter({ text: `${clubLabel} • Planning` })
-        .setTimestamp();
-
-      await targetChannel.send({ embeds: [embed] });
+      for (const part of chunks) {
+        await targetChannel.send({ content: part }).catch(() => {});
+      }
 
       return interaction.reply({
         content: `📌 Planning posté dans <#${targetChannel.id}>.`,
