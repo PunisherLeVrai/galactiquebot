@@ -1,11 +1,8 @@
-// commands/planning.js ✅ (SANS EMBED) + ✅ horaires par défaut 21:00→23:00 toutes les 20 min
-// + ✅ possibilité d'afficher UN jour OU TOUT
-//
-// /planning show (jour optionnel)
-// /planning set (jour + heure + titre + salon)
-// /planning clear (jour)
-// /planning post (salon optionnel, jour optionnel)
-// /planning init (initialise la semaine avec les créneaux par défaut)
+// commands/planning.js  ✅ VERSION SANS EMBED (format clean pro)
+// - /planning show [jour]  -> affiche le planning (1 jour ou toute la semaine)
+// - /planning set          -> ajoute un créneau à un jour (ou remplace si mode=replace)
+// - /planning clear        -> supprime un jour (le remet au défaut si tu veux via reset)
+// - /planning post [salon] [jour] -> poste le planning (1 jour ou semaine)
 
 const {
   SlashCommandBuilder,
@@ -22,6 +19,17 @@ function normalizeJour(j) {
   return JOURS.includes(x) ? x : null;
 }
 
+// accepte: "20:45-23:00" ou "20:45 → 23:00"
+function parseTimeRange(input) {
+  const raw = String(input || '').trim();
+  const m = raw.match(/^([01]\d|2[0-3]):([0-5]\d)\s*(?:-|→|>|to)\s*([01]\d|2[0-3]):([0-5]\d)$/i);
+  if (!m) return null;
+
+  const start = `${m[1]}:${m[2]}`;
+  const end = `${m[3]}:${m[4]}`;
+  return { start, end, normalized: `${start}-${end}` };
+}
+
 function dayLabelFR(jour) {
   const map = {
     lundi: 'LUNDI',
@@ -35,19 +43,7 @@ function dayLabelFR(jour) {
   return map[jour] || String(jour || '').toUpperCase();
 }
 
-// accepte: "20:45-23:00" ou "20:45 → 23:00"
-function parseTimeRange(input) {
-  const raw = String(input || '').trim();
-  const m = raw.match(/^([01]\d|2[0-3]):([0-5]\d)\s*(?:-|→|>|to)\s*([01]\d|2[0-3]):([0-5]\d)$/i);
-  if (!m) return null;
-
-  const start = `${m[1]}:${m[2]}`;
-  const end = `${m[3]}:${m[4]}`;
-  return { start, end, normalized: `${start}-${end}` };
-}
-
-/** Centre un texte dans une largeur fixe */
-function centerText(txt, width = 22) {
+function centerText(txt, width = 28) {
   const t = String(txt || '').trim();
   if (t.length >= width) return t;
   const left = Math.floor((width - t.length) / 2);
@@ -55,45 +51,80 @@ function centerText(txt, width = 22) {
   return ' '.repeat(left) + t + ' '.repeat(right);
 }
 
-function lineSep(width = 22) {
+function lineSep(width = 28) {
   return '━'.repeat(width);
 }
 
 /* =========================
-   Créneaux par défaut
-   21:00 -> 23:00 toutes les 20 minutes
-   => 21:00, 21:20, 21:40, 22:00, 22:20, 22:40, 23:00
+   DEFAULT PLANNING (AUTO)
+   21:00 → 23:00 toutes les 20 min
 ========================= */
+function pad2(n) { return String(n).padStart(2, '0'); }
 
-function minutesToHHMM(min) {
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+function buildDefaultSlots({
+  startHour = 21,
+  startMinute = 0,
+  endHour = 23,
+  endMinute = 0,
+  stepMin = 20,
+  titre = 'Session',
+  salonId = null
+} = {}) {
+  // créneaux en "HH:MM-HH:MM" : 21:00-21:20 ... 22:40-23:00
+  const slots = [];
+
+  const startTotal = startHour * 60 + startMinute;
+  const endTotal = endHour * 60 + endMinute;
+
+  for (let t = startTotal; t + stepMin <= endTotal; t += stepMin) {
+    const sH = Math.floor(t / 60);
+    const sM = t % 60;
+    const e = t + stepMin;
+    const eH = Math.floor(e / 60);
+    const eM = e % 60;
+
+    slots.push({
+      heure: `${pad2(sH)}:${pad2(sM)}-${pad2(eH)}:${pad2(eM)}`,
+      titre,
+      salonId
+    });
+  }
+
+  return slots;
 }
 
-function buildDefaultSlots({ start = '21:00', end = '23:00', stepMin = 20 } = {}) {
-  const [sh, sm] = start.split(':').map(Number);
-  const [eh, em] = end.split(':').map(Number);
-  const startMin = (sh * 60) + sm;
-  const endMin = (eh * 60) + em;
+function buildDefaultPlanningForAllDays(defaultOptions = {}) {
+  const p = {};
+  for (const j of JOURS) p[j] = buildDefaultSlots(defaultOptions);
+  return p;
+}
 
-  const out = [];
-  for (let t = startMin; t <= endMin; t += stepMin) {
-    out.push(minutesToHHMM(t));
+function mergeWithDefaults(currentPlanning, defaultPlanning) {
+  // si planning vide -> defaults complets
+  if (!currentPlanning || typeof currentPlanning !== 'object') return defaultPlanning;
+
+  // si un jour absent -> defaults pour ce jour
+  const out = { ...defaultPlanning, ...currentPlanning };
+  for (const j of JOURS) {
+    if (!out[j] || (Array.isArray(out[j]) && out[j].length === 0)) {
+      out[j] = defaultPlanning[j];
+    }
   }
   return out;
 }
 
-/**
- * Supporte planning[jour] au format :
- * - tableau : [{ heure, titre, salonId }, ...]
- * - objet : { heure, titre, salonId }  (compat ancienne)
- */
+/* =========================
+   RENDER TEXT
+========================= */
 function renderDayBlock(jour, value) {
   const width = 28;
   const title = centerText(dayLabelFR(jour), width);
 
-  const header = [lineSep(width), title, lineSep(width)];
+  const header = [
+    lineSep(width),
+    title,
+    lineSep(width)
+  ];
 
   const formatItem = (it) => {
     const heure = it?.heure || it?.time || null;
@@ -102,7 +133,6 @@ function renderDayBlock(jour, value) {
 
     const hourStr = heure ? `${heure}` : '—';
     const chanStr = salonId ? ` • <#${salonId}>` : '';
-
     return `${hourStr} ▸ ${titre}${chanStr}`;
   };
 
@@ -122,21 +152,19 @@ function renderDayBlock(jour, value) {
   return ['```', ...header, ...bodyLines, '```'].join('\n');
 }
 
-/** Rend tout le planning ou un seul jour */
-function renderPlanningMessage(planning = {}, clubLabel = 'PLANNING', onlyDay = null) {
+function renderPlanningMessage(planning = {}, clubLabel = 'PLANNING', onlyJour = null) {
   const blocks = [];
   blocks.push(`🗓️ **PLANNING — ${clubLabel}**`);
 
-  if (onlyDay) {
-    blocks.push(renderDayBlock(onlyDay, planning?.[onlyDay]));
-    return blocks.join('\n\n');
+  if (onlyJour) {
+    blocks.push(renderDayBlock(onlyJour, planning?.[onlyJour]));
+  } else {
+    for (const j of JOURS) blocks.push(renderDayBlock(j, planning?.[j]));
   }
 
-  for (const j of JOURS) blocks.push(renderDayBlock(j, planning?.[j]));
   return blocks.join('\n\n');
 }
 
-/** Découpe si > 2000 */
 function chunkMessage(str, limit = 1900) {
   const parts = [];
   let cur = '';
@@ -154,45 +182,61 @@ function chunkMessage(str, limit = 1900) {
   return parts;
 }
 
-/** Construit une semaine complète avec slots par défaut */
-function buildDefaultWeekPlanning({ titre = 'Session', salonId = null } = {}) {
-  const slots = buildDefaultSlots({ start: '21:00', end: '23:00', stepMin: 20 });
-
-  const dayItems = slots.map(h => ({
-    heure: h,
-    titre,
-    salonId
-  }));
-
-  const planning = {};
-  for (const j of JOURS) planning[j] = dayItems;
-  return planning;
+/* =========================
+   HELPERS DATA
+========================= */
+function normalizeDayValueToArray(dayVal) {
+  if (!dayVal) return [];
+  if (Array.isArray(dayVal)) return dayVal.filter(x => x && typeof x === 'object');
+  if (typeof dayVal === 'object') return [dayVal];
+  return [];
 }
 
+/* =========================
+   COMMAND
+========================= */
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('planning')
     .setDescription('Gère le planning de la semaine (format texte clean).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
-    // /planning show [jour]
+    // SHOW
     .addSubcommand(sc =>
       sc
         .setName('show')
-        .setDescription('Affiche le planning (tous les jours ou un jour).')
+        .setDescription('Affiche le planning (jour ou semaine).')
         .addStringOption(o =>
           o.setName('jour')
-            .setDescription('Optionnel : afficher uniquement ce jour')
+            .setDescription('Optionnel : afficher un seul jour')
             .setRequired(false)
             .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
         )
     )
 
-    // /planning set jour heure titre salon
+    // INIT (optionnel mais super pratique)
+    .addSubcommand(sc =>
+      sc
+        .setName('init')
+        .setDescription('Initialise le planning par défaut : 21:00-23:00 toutes les 20 min.')
+        .addStringOption(o =>
+          o.setName('titre')
+            .setDescription('Titre par défaut (ex: Session officielle)')
+            .setRequired(false)
+        )
+        .addChannelOption(o =>
+          o.setName('salon')
+            .setDescription('Salon par défaut (optionnel)')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false)
+        )
+    )
+
+    // SET
     .addSubcommand(sc =>
       sc
         .setName('set')
-        .setDescription('Définit/Modifie un créneau unique sur un jour.')
+        .setDescription('Ajoute un créneau à un jour (ou remplace la journée).')
         .addStringOption(o =>
           o.setName('jour')
             .setDescription('Jour (lundi..dimanche)')
@@ -201,12 +245,12 @@ module.exports = {
         )
         .addStringOption(o =>
           o.setName('heure')
-            .setDescription('Ex: 20:45-23:00 OU 21:20-21:40')
+            .setDescription('Ex: 21:00-21:20')
             .setRequired(true)
         )
         .addStringOption(o =>
           o.setName('titre')
-            .setDescription('Ex: Session officielle / Match / Entraînement')
+            .setDescription('Ex: Session / Match / Entraînement')
             .setRequired(false)
         )
         .addChannelOption(o =>
@@ -215,9 +259,18 @@ module.exports = {
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
+        .addStringOption(o =>
+          o.setName('mode')
+            .setDescription('Ajouter (add) ou remplacer la journée (replace)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Ajouter', value: 'add' },
+              { name: 'Remplacer', value: 'replace' }
+            )
+        )
     )
 
-    // /planning clear jour
+    // CLEAR
     .addSubcommand(sc =>
       sc
         .setName('clear')
@@ -230,11 +283,11 @@ module.exports = {
         )
     )
 
-    // /planning post [salon] [jour]
+    // POST
     .addSubcommand(sc =>
       sc
         .setName('post')
-        .setDescription('Poste le planning (tous les jours ou un jour) dans un salon.')
+        .setDescription('Poste le planning dans un salon (jour ou semaine).')
         .addChannelOption(o =>
           o.setName('salon')
             .setDescription('Salon cible (défaut: salon actuel)')
@@ -243,27 +296,9 @@ module.exports = {
         )
         .addStringOption(o =>
           o.setName('jour')
-            .setDescription('Optionnel : poster uniquement ce jour')
+            .setDescription('Optionnel : poster un seul jour')
             .setRequired(false)
             .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
-        )
-    )
-
-    // /planning init [titre] [salon]
-    .addSubcommand(sc =>
-      sc
-        .setName('init')
-        .setDescription('Initialise la semaine avec les créneaux par défaut (21h→23h / 20 min).')
-        .addStringOption(o =>
-          o.setName('titre')
-            .setDescription('Titre par défaut (ex: Session)')
-            .setRequired(false)
-        )
-        .addChannelOption(o =>
-          o.setName('salon')
-            .setDescription('Salon par défaut (optionnel)')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
         )
     ),
 
@@ -274,37 +309,25 @@ module.exports = {
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
     const clubLabel = guildConfig?.clubName || guild?.name || 'INTER GALACTIQUE';
 
-    const currentPlanning = (guildConfig?.planning && typeof guildConfig.planning === 'object')
-      ? guildConfig.planning
-      : {};
+    // 🔥 défaut auto : 21:00-23:00 toutes les 20 minutes
+    const defaultOptions = {
+      titre: 'Session',
+      salonId: null
+    };
+    const defaultPlanning = buildDefaultPlanningForAllDays(defaultOptions);
 
-    // ---------- INIT (créneaux par défaut) ----------
-    if (sub === 'init') {
-      const titre = interaction.options.getString('titre') || 'Session';
-      const salon = interaction.options.getChannel('salon');
+    const currentPlanningRaw =
+      (guildConfig?.planning && typeof guildConfig.planning === 'object')
+        ? guildConfig.planning
+        : {};
 
-      const week = buildDefaultWeekPlanning({ titre: String(titre).slice(0, 60), salonId: salon?.id || null });
+    // planning "actif" = current + defaults si manque des jours
+    const activePlanning = mergeWithDefaults(currentPlanningRaw, defaultPlanning);
 
-      updateGuildConfig(guild.id, { planning: week });
-
-      const msg = renderPlanningMessage(week, clubLabel, null);
-      const chunks = chunkMessage(msg);
-
-      await interaction.reply({
-        content: `✅ Planning initialisé (21:00 → 23:00 / toutes les 20 min).\n\n${chunks[0]}`,
-        ephemeral: true
-      });
-
-      for (const extra of chunks.slice(1)) {
-        await interaction.followUp({ content: extra, ephemeral: true }).catch(() => {});
-      }
-      return;
-    }
-
-    // ---------- SHOW (jour optionnel) ----------
+    // ---------- SHOW ----------
     if (sub === 'show') {
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
-      const msg = renderPlanningMessage(currentPlanning, clubLabel, jourOpt);
+      const msg = renderPlanningMessage(activePlanning, clubLabel, jourOpt);
       const chunks = chunkMessage(msg);
 
       await interaction.reply({ content: chunks[0], ephemeral: false });
@@ -314,48 +337,69 @@ module.exports = {
       return;
     }
 
-    // ---------- SET (un créneau) ----------
+    // ---------- INIT ----------
+    if (sub === 'init') {
+      const titre = interaction.options.getString('titre') || 'Session';
+      const salon = interaction.options.getChannel('salon');
+
+      const p = buildDefaultPlanningForAllDays({
+        titre: String(titre).slice(0, 60),
+        salonId: salon?.id || null
+      });
+
+      updateGuildConfig(guild.id, { planning: p });
+
+      return interaction.reply({
+        content: `✅ Planning par défaut initialisé (**21:00 → 23:00 / toutes les 20 min**)${salon ? ` • Salon : <#${salon.id}>` : ''}.`,
+        ephemeral: true
+      });
+    }
+
+    // ---------- SET ----------
     if (sub === 'set') {
       const jour = normalizeJour(interaction.options.getString('jour'));
       const heureIn = interaction.options.getString('heure');
       const titre = interaction.options.getString('titre') || 'Session';
       const salon = interaction.options.getChannel('salon');
+      const mode = (interaction.options.getString('mode') || 'add').toLowerCase();
 
       if (!jour) return interaction.reply({ content: '❌ Jour invalide.', ephemeral: true });
 
       const parsed = parseTimeRange(heureIn);
       if (!parsed) {
         return interaction.reply({
-          content: '❌ Horaire invalide. Format attendu : `HH:MM-HH:MM` (ex: `21:20-21:40`).',
+          content: '❌ Horaire invalide. Format attendu : `HH:MM-HH:MM` (ex: `21:00-21:20`).',
           ephemeral: true
         });
       }
 
-      // 🔧 on stocke en tableau (multi-créneaux)
-      const next = { ...(currentPlanning || {}) };
-      const existing = next[jour];
-
-      const arr =
-        Array.isArray(existing) ? [...existing] :
-        (existing && typeof existing === 'object') ? [existing] :
-        [];
-
-      arr.push({
+      const newItem = {
         heure: parsed.normalized,
         titre: String(titre).slice(0, 60),
         salonId: salon?.id || null
-      });
+      };
 
-      // tri par heure (facultatif mais propre)
-      arr.sort((a, b) => String(a.heure).localeCompare(String(b.heure)));
+      // base = activePlanning (qui inclut déjà le défaut)
+      const nextPlanning = { ...activePlanning };
 
-      next[jour] = arr;
-      updateGuildConfig(guild.id, { planning: next });
+      if (mode === 'replace') {
+        nextPlanning[jour] = [newItem];
+      } else {
+        // add
+        const arr = normalizeDayValueToArray(nextPlanning[jour]);
+        arr.push(newItem);
 
-      const preview = renderDayBlock(jour, next[jour]);
+        // tri simple par heure de début
+        arr.sort((a, b) => String(a.heure || '').localeCompare(String(b.heure || '')));
+        nextPlanning[jour] = arr;
+      }
+
+      updateGuildConfig(guild.id, { planning: nextPlanning });
+
+      const preview = renderDayBlock(jour, nextPlanning[jour]);
 
       return interaction.reply({
-        content: `✅ Créneau ajouté sur **${dayLabelFR(jour)}** : **${parsed.normalized}** — ${titre}${salon ? ` • <#${salon.id}>` : ''}\n\n${preview}`,
+        content: `✅ **${dayLabelFR(jour)}** mis à jour (${mode === 'replace' ? 'remplacé' : 'ajouté'}).\n\n${preview}`,
         ephemeral: true
       });
     }
@@ -365,18 +409,19 @@ module.exports = {
       const jour = normalizeJour(interaction.options.getString('jour'));
       if (!jour) return interaction.reply({ content: '❌ Jour invalide.', ephemeral: true });
 
-      const next = { ...(currentPlanning || {}) };
+      // on supprime le jour du planning sauvegardé
+      const next = { ...(currentPlanningRaw || {}) };
       delete next[jour];
 
       updateGuildConfig(guild.id, { planning: next });
 
       return interaction.reply({
-        content: `🗑️ Jour supprimé : **${dayLabelFR(jour)}**`,
+        content: `🗑️ Jour supprimé : **${dayLabelFR(jour)}** (il réaffichera le défaut automatiquement).`,
         ephemeral: true
       });
     }
 
-    // ---------- POST (jour optionnel) ----------
+    // ---------- POST ----------
     if (sub === 'post') {
       const targetChannel = interaction.options.getChannel('salon') || interaction.channel;
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
@@ -390,7 +435,7 @@ module.exports = {
         });
       }
 
-      const msg = renderPlanningMessage(currentPlanning, clubLabel, jourOpt);
+      const msg = renderPlanningMessage(activePlanning, clubLabel, jourOpt);
       const chunks = chunkMessage(msg);
 
       for (const part of chunks) {
@@ -398,9 +443,7 @@ module.exports = {
       }
 
       return interaction.reply({
-        content: jourOpt
-          ? `📌 Planning posté (**${dayLabelFR(jourOpt)}**) dans <#${targetChannel.id}>.`
-          : `📌 Planning posté (**semaine complète**) dans <#${targetChannel.id}>.`,
+        content: `📌 Planning posté dans <#${targetChannel.id}>${jourOpt ? ` (jour : **${dayLabelFR(jourOpt)}**)` : ''}.`,
         ephemeral: true
       });
     }
