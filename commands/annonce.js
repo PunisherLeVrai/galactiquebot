@@ -40,7 +40,7 @@ function buildMention(mention, role) {
 
 function getAllowedMentionsForHeader(mentionType, role) {
   if (mentionType === 'everyone') return { parse: ['everyone'] };
-  if (mentionType === 'here') return { parse: ['here'] }; // ✅ correct pour @here
+  if (mentionType === 'here') return { parse: ['here'] };
   if (mentionType === 'role' && role) return { roles: [role.id] };
   return { parse: [] };
 }
@@ -52,6 +52,37 @@ function isValidHttpUrl(u) {
   } catch {
     return false;
   }
+}
+
+/* ---------- Message LOGE (compact + règlement compact) ---------- */
+function buildLodgeMessage({ userId, clubName }) {
+  // Texte compact comme tu voulais
+  return [
+    `## 🏟️・**BIENVENUE DANS L’EFFECTIF OFFICIEL**`,
+    `👋 **Bonjour <@${userId}>**, bienvenue dans l’effectif officiel **${clubName}** 🌌`,
+    `💬 Tu disposes d’une **LOGE PERSONNELLE** (canal privé staff) : **seul espace officiel** pour toute demande ou signalement.`,
+    `⚠️ **Aucun MP staff ne sera pris en compte** — tout passe par ta loge.`,
+    `📸 Photo/capture possible pour une **PP personnalisée**.`,
+    `🎯 **Rigueur • Respect • Engagement** — **honore le maillot.**`,
+    ``,
+    `---`,
+    ``,
+    `## 🪐 RÈGLEMENT OFFICIEL — **XIG INTER GALACTIQUE**`,
+    `> En restant sur ce serveur, tu acceptes ce règlement.`,
+    ``,
+    `• **Respect absolu**, zéro toxicité`,
+    `• **Présence obligatoire** si dispo (prévenir ≥ 2h avant)`,
+    `• **Dispos avant 17h** (✅ / ❌ obligatoire)`,
+    `• **Compos dès 17h**, convoqué = validation obligatoire`,
+    `• **Sessions 20h45 → 23h00**, prêt avant`,
+    `• **Micro obligatoire**, décisions staff non discutables`,
+    `• **Sanctions** : ⚠️ → ⛔ → 💀`,
+    `• **Discord** : pas de spam, pseudo clair, MP ≠ salons`,
+    ``,
+    `🌌 **XIG INTER GALACTIQUE** = discipline • engagement • performance`,
+    ``,
+    `✅ **Validation obligatoire ci-dessous :**`
+  ].join('\n');
 }
 
 module.exports = {
@@ -152,7 +183,6 @@ module.exports = {
         .setDescription('Retirer Essai → ajouter Joueur automatiquement (signature). Défaut : oui')
         .setRequired(false)
     )
-    // (optionnel) si tu veux forcer à la main, sinon on prendra servers.json
     .addRoleOption(o =>
       o.setName('role_joueur')
         .setDescription('Rôle Joueur à ajouter (signature)')
@@ -202,38 +232,32 @@ module.exports = {
     const allowedMentionHeader = getAllowedMentionsForHeader(mentionType, role);
 
     /* =========================
-       MODE LOGE OFFICIELLE
+       MODE LOGE OFFICIELLE (avec validation)
        ========================= */
     if (type === 'loge') {
       const user = interaction.options.getUser('joueur');
       if (!user) return interaction.editReply('❌ Tu dois préciser un `joueur` pour le mode **loge**.');
 
-      const msg = [
-        '## 🏟️・**BIENVENUE DANS L’EFFECTIF OFFICIEL**',
-        '',
-        `👋 **Bonjour <@${user.id}>**,`,
-        '',
-        `Tu intègres désormais **l’effectif officiel** de **${clubName}** 🌌`,
-        'Félicitations et bienvenue parmi les **joueurs titulaires** de notre structure.',
-        '',
-        '💬 Tu disposes dès à présent d’une **LOGE PERSONNELLE**, ton canal **privé et exclusif** avec le staff.',
-        '👉 C’est ton **seul espace de communication officielle** pour toute **demande**, **remarque** ou **signalement**.',
-        '',
-        '⚠️ **Aucun message privé adressé au staff ne sera pris en compte.**',
-        'Toutes les discussions passent **obligatoirement** par ta **loge**.',
-        '',
-        '📸 Tu peux également y envoyer une capture (pro) / photo pour une **photo de profil personnalisée**.',
-        '',
-        '---',
-        '',
-        '🎯 En rejoignant l’effectif, tu t’engages à faire preuve de **rigueur**, **respect** et **engagement**.',
-        `Bienvenue dans l’aventure **${clubName}** 💫`,
-        'Et surtout… **honore le maillot.**'
-      ].join('\n');
+      const msg = buildLodgeMessage({ userId: user.id, clubName });
+
+      // ✅ Bouton validation unique pour ce joueur
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`loge_accept:${interaction.guild.id}:${user.id}`)
+          .setLabel('✅ J’ai lu et j’accepte le règlement')
+          .setStyle(ButtonStyle.Success)
+      );
 
       try {
-        await salon.send({ content: msg, allowedMentions: { users: [user.id], parse: [] } });
-        return interaction.editReply(`✅ Annonce de loge envoyée dans <#${salon.id}>.`);
+        if (mentionLine) await salon.send({ content: mentionLine, allowedMentions: allowedMentionHeader });
+
+        await salon.send({
+          content: msg,
+          components: [row],
+          allowedMentions: { users: [user.id], parse: [] }
+        });
+
+        return interaction.editReply(`✅ Entrée en loge envoyée dans <#${salon.id}> (validation requise).`);
       } catch (e) {
         console.error('Erreur envoi annonce loge :', e);
         return interaction.editReply('❌ Impossible d’envoyer le message (permissions ?).');
@@ -250,7 +274,6 @@ module.exports = {
       const messagePerso = sanitize(interaction.options.getString('message') || '');
       const changerRoles = interaction.options.getBoolean('changer_roles') ?? true;
 
-      // ✅ si non fournis dans la commande -> on prend servers.json
       const roleJoueurFromCmd = interaction.options.getRole('role_joueur') || null;
       const roleEssaiFromCmd = interaction.options.getRole('role_essai') || null;
 
@@ -272,6 +295,7 @@ module.exports = {
         .setTimestamp();
 
       try {
+        if (mentionLine) await salon.send({ content: mentionLine, allowedMentions: allowedMentionHeader });
         await salon.send({ embeds: [embed], allowedMentions: { users: [user.id] } });
       } catch (err) {
         console.error('Erreur envoi annonce signature :', err);
@@ -292,6 +316,7 @@ module.exports = {
       try {
         const membre = await interaction.guild.members.fetch(user.id);
         const me = interaction.guild.members.me;
+
         if (!me?.permissions.has(PermissionFlagsBits.ManageRoles)) {
           rolesLog = '⚠️ Permission **Gérer les rôles** manquante.';
         } else {
@@ -388,7 +413,10 @@ module.exports = {
 
       const components = [];
       if (boutonLibelle && boutonURL) {
-        const btn = new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(boutonLibelle).setURL(boutonURL);
+        const btn = new ButtonBuilder()
+          .setStyle(ButtonStyle.Link)
+          .setLabel(boutonLibelle)
+          .setURL(boutonURL);
         components.push(new ActionRowBuilder().addComponents(btn));
       }
 
