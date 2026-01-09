@@ -1,4 +1,9 @@
-// index.js
+// index.js ✅ CORRIGÉ (anti "Une erreur est survenue" sur boutons/menus/modals)
+// - ACK garanti pour planning (deferUpdate si besoin)
+// - Support modals planning:*
+// - Garde le système LOGE
+// - Garde le scheduler + healthcheck
+
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -141,7 +146,7 @@ client.once('ready', async () => {
    INTERACTIONS (BOUTONS / MENUS / MODALS / SLASH)
 ============================================================ */
 
-// ✅ Disable all components safely (works with buttons + select menus)
+// ✅ Disable all components safely (buttons + select menus)
 function disableAllComponents(messageComponents = []) {
   try {
     return messageComponents.map(row => {
@@ -154,11 +159,23 @@ function disableAllComponents(messageComponents = []) {
   }
 }
 
+// ✅ ACK helper : évite "Une erreur est survenue" si un handler plante
+async function safeAckComponent(interaction) {
+  try {
+    if (interaction.deferred || interaction.replied) return true;
+    // pour bouton / select menu -> deferUpdate
+    await interaction.deferUpdate();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 client.on('interactionCreate', async (interaction) => {
   try {
     /* =========================
        1) MODALS (Planning)
-       - accepte planning:modal_note_time (et tout planning:modal_*)
+       - accepte planning:modal_* (ex: planning:modal_note_time)
     ========================= */
     if (interaction.isModalSubmit()) {
       const id = interaction.customId || '';
@@ -168,16 +185,17 @@ client.on('interactionCreate', async (interaction) => {
         if (cmd?.handleModalSubmit) {
           await cmd.handleModalSubmit(interaction);
         } else {
-          await interaction.reply({
-            content: '⚠️ Handler modal planning manquant.',
-            ephemeral: true
-          }).catch(() => {});
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+              content: '⚠️ Handler modal planning manquant.',
+              ephemeral: true
+            }).catch(() => {});
+          }
         }
         return;
       }
 
-      // autres modals non gérés
-      return;
+      return; // autres modals ignorés
     }
 
     /* =========================
@@ -230,18 +248,24 @@ client.on('interactionCreate', async (interaction) => {
       // ✅ B) Planning UI (menus + boutons)
       if (id.startsWith('planning:')) {
         const cmd = client.commands.get('planning');
+
+        // si jamais le handler crash, on ack d'abord pour éviter l'erreur rouge
+        // (le handler planning fait déjà deferUpdate dans la plupart des cas,
+        //  mais on sécurise à 100% ici)
+        await safeAckComponent(interaction);
+
         if (cmd?.handleComponentInteraction) {
           await cmd.handleComponentInteraction(interaction);
         } else {
-          // au moins ack pour éviter "échec interaction"
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.reply({ content: '⚠️ Handler planning manquant.', ephemeral: true }).catch(() => {});
-          }
+          // dernier recours (interaction déjà ack via safeAckComponent)
+          try {
+            await interaction.editReply({ content: '⚠️ Handler planning manquant.', components: [] });
+          } catch {}
         }
         return;
       }
 
-      // autres boutons/menus non gérés => ignore
+      // autres composants ignorés
       return;
     }
 
@@ -257,6 +281,7 @@ client.on('interactionCreate', async (interaction) => {
     if (!command) return;
 
     await command.execute(interaction);
+
   } catch (err) {
     console.error('❌ interactionCreate error:', err);
 
