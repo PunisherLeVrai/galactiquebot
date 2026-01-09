@@ -33,9 +33,7 @@ function readJson(filePath, fallback = null) {
     if (!fs.existsSync(filePath)) return fallback;
     const raw = fs.readFileSync(filePath, 'utf8');
     if (!raw.trim()) return fallback;
-
-    const parsed = JSON.parse(raw);
-    return parsed;
+    return JSON.parse(raw);
   } catch (e) {
     console.error(`⚠️ [config] read failed: ${filePath}`, e);
     return fallback;
@@ -57,12 +55,10 @@ function writeJsonAtomic(filePath, obj) {
     try {
       fs.renameSync(tmp, filePath);
     } catch (e) {
-      // fallback si rename non possible
       try {
         fs.copyFileSync(tmp, filePath);
         fs.unlinkSync(tmp);
       } catch (e2) {
-        // clean tmp si possible
         try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
         throw e2;
       }
@@ -97,6 +93,85 @@ if (!isPlainObject(globalConfig)) globalConfig = {};
 if (!isPlainObject(serversConfig)) serversConfig = {};
 
 if (!globalConfig.botName) globalConfig.botName = 'GalactiqueBot';
+
+/* ============================================================
+   ✅ MIGRATION / NORMALISATION PLANNING
+   Ancien format: planning[jour] = { times, comps, note: "..." }
+   Nouveau format: planning[jour] = { times, comps, notes: { "22:20": "..." } }
+
+   Règle: si "note" existe et "notes" absent -> on applique la note
+   à tous les horaires cochés, puis on supprime "note".
+============================================================ */
+function normalizePlanningForGuild(guildObj) {
+  if (!isPlainObject(guildObj)) return false;
+  if (!isPlainObject(guildObj.planning)) return false;
+
+  let changed = false;
+  const planning = guildObj.planning;
+
+  for (const [jour, day] of Object.entries(planning)) {
+    if (!isPlainObject(day)) continue;
+
+    // garantir structure
+    if (!Array.isArray(day.times)) day.times = Array.isArray(day.times) ? day.times : [];
+    if (!Array.isArray(day.comps)) day.comps = Array.isArray(day.comps) ? day.comps : [];
+    if (!isPlainObject(day.notes)) {
+      if (day.notes == null) {
+        day.notes = {};
+        changed = true;
+      } else if (!isPlainObject(day.notes)) {
+        day.notes = {};
+        changed = true;
+      }
+    }
+
+    // migration note -> notes
+    if (typeof day.note === 'string' && day.note.trim()) {
+      const legacy = day.note.trim().slice(0, 200);
+      const times = Array.isArray(day.times) ? day.times : [];
+
+      // appliquer sur chaque horaire coché (si aucun horaire, on ne fait rien)
+      if (times.length) {
+        for (const t of times) {
+          if (!day.notes[t]) {
+            day.notes[t] = legacy;
+          }
+        }
+        changed = true;
+      }
+
+      // supprimer l'ancien champ quoi qu'il arrive (évite confusion)
+      delete day.note;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function normalizeAllServersConfig() {
+  if (!isPlainObject(serversConfig)) return false;
+
+  let changed = false;
+  for (const [gid, g] of Object.entries(serversConfig)) {
+    if (!isPlainObject(g)) continue;
+    const c = normalizePlanningForGuild(g);
+    if (c) changed = true;
+  }
+  return changed;
+}
+
+// On normalise une fois au chargement
+try {
+  const changed = normalizeAllServersConfig();
+ добы
+  if (changed) {
+    writeJsonAtomic(serversPath, serversConfig);
+    console.log('✅ [config] Migration planning effectuée (note -> notes).');
+  }
+} catch (e) {
+  console.error('⚠️ [config] Migration planning error:', e);
+}
 
 function saveGlobalConfig() {
   return writeJsonAtomic(globalPath, globalConfig);
@@ -135,7 +210,7 @@ function mergeObj(base, patch) {
 /**
  * ✅ updateGuildConfig
  * - merge roles/dispoMessages/nickname/compo/planning (par jour)
- * - ne throw jamais (renvoie true/false si tu veux logger)
+ * - ne throw jamais
  */
 function updateGuildConfig(guildId, patch) {
   try {
@@ -153,12 +228,16 @@ function updateGuildConfig(guildId, patch) {
 
     if (patch.compo) next.compo = mergeObj(existing.compo, patch.compo);
 
-    // ✅ planning : merge par jour
-    if (patch.planning) {
-      next.planning = mergeObj(existing.planning, patch.planning);
-    }
+    // ✅ planning : merge par jour (chaque jour est remplacé par l’objet fourni par la commande)
+    if (patch.planning) next.planning = mergeObj(existing.planning, patch.planning);
 
     serversConfig[guildId] = next;
+
+    // re-normalise le planning du guild modifié (sécurité)
+    try {
+      normalizePlanningForGuild(serversConfig[guildId]);
+    } catch {}
+
     return saveServersConfig();
   } catch (e) {
     console.error('❌ [config] updateGuildConfig failed:', e);
