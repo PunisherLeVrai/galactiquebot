@@ -12,7 +12,7 @@ const {
   Partials
 } = require('discord.js');
 
-const { getGlobalConfig } = require('./utils/config');
+const { getGlobalConfig, getGuildConfig } = require('./utils/config'); // ✅ getGuildConfig ajouté
 const { initScheduler } = require('./utils/scheduler');
 const { ensureSnapshotDirectory } = require('./utils/paths');
 
@@ -131,7 +131,6 @@ client.once('ready', async () => {
   setInterval(updatePresence, 300000);
 
   // ✅ Important: attendre que le cache guilds soit bien prêt
-  // (sur Railway parfois le ready arrive alors que certaines infos arrivent juste après)
   await new Promise(r => setTimeout(r, 1500));
 
   // ✅ Scheduler — IG + DOR
@@ -143,9 +142,83 @@ client.once('ready', async () => {
 });
 
 /* ============================================================
-   INTERACTIONS (SLASH COMMANDS)
+   INTERACTIONS (BOUTONS + SLASH COMMANDS)
 ============================================================ */
+function disableAllComponents(components) {
+  // components = interaction.message.components (ActionRows)
+  // On reconstruit en désactivant les boutons
+  try {
+    return components.map(row => {
+      const newRow = { ...row };
+      newRow.components = row.components.map(c => {
+        // discord.js renvoie des objets "Component" avec méthodes
+        if (typeof c.setDisabled === 'function') return c.setDisabled(true);
+        // fallback si jamais
+        return { ...c, disabled: true };
+      });
+      return newRow;
+    });
+  } catch {
+    return [];
+  }
+}
+
 client.on('interactionCreate', async (interaction) => {
+  /* =========================
+     ✅ 1) BOUTONS (validation LOGE)
+     customId: "loge_accept:<guildId>:<userId>"
+  ========================= */
+  if (interaction.isButton()) {
+    const id = interaction.customId || '';
+    if (!id.startsWith('loge_accept:')) return;
+
+    const [, guildId, userId] = id.split(':');
+
+    // sécurité
+    if (!interaction.guild || interaction.guild.id !== guildId) {
+      return interaction.reply({ content: '❌ Contexte invalide.', ephemeral: true }).catch(() => {});
+    }
+
+    // seul le joueur concerné
+    if (interaction.user.id !== userId) {
+      return interaction.reply({ content: '❌ Ce bouton ne te concerne pas.', ephemeral: true }).catch(() => {});
+    }
+
+    // désactive le bouton + ajoute une ligne validation
+    const disabled = disableAllComponents(interaction.message.components);
+
+    try {
+      await interaction.update({
+        content: `${interaction.message.content}\n\n✅ <@${userId}> a **lu et accepté le règlement officiel**.`,
+        components: disabled
+      });
+    } catch (e) {
+      console.error('❌ [LOGE] update message:', e);
+      // fallback au reply
+      return interaction.reply({ content: '✅ Validation enregistrée.', ephemeral: true }).catch(() => {});
+    }
+
+    // log staff (optionnel via servers.json)
+    try {
+      const cfg = getGuildConfig(interaction.guild.id) || {};
+      const logChannelId = cfg.logChannelId;
+
+      if (logChannelId && logChannelId !== '0') {
+        const logChannel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
+        if (logChannel?.isTextBased()) {
+          await logChannel.send(`📜 Validation règlement : <@${userId}>`).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error('⚠️ [LOGE] logChannel:', e);
+    }
+
+    return; // ✅ on stop ici
+  }
+
+  /* =========================
+     ✅ 2) SLASH COMMANDS
+  ========================= */
   if (!interaction.isChatInputCommand()) return;
 
   const guildId = interaction.guild?.id;
