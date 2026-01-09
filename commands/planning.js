@@ -4,6 +4,9 @@
 // - /planning post [salon] [jour] -> poste jour OU semaine (texte only)
 // - /planning edit [jour] -> ouvre l’UI (horaires + compétitions + note) (tout facultatif)
 // Planning vide par défaut (aucune sélection).
+//
+// ✅ Affichage demandé : 1 horaire par ligne
+// ✅ Note AVANT compétitions (sur la même ligne)
 
 const {
   SlashCommandBuilder,
@@ -84,9 +87,12 @@ function getTodayJourParis() {
 const uiState = new Map();
 function getStateKey(guildId, userId) { return `${guildId}:${userId}`; }
 
+// =====================
+// DATA (persist)
+// =====================
 function getSavedPlanning(guildConfig) {
   const p = guildConfig?.planning;
-  return (p && typeof p === 'object') ? p : {};
+  return (p && typeof p === 'object') ? p : {}; // ✅ vide par défaut
 }
 
 function readDaySaved(savedPlanning, jour) {
@@ -109,7 +115,8 @@ function clampText(t, max = 300) {
 }
 
 // =====================
-// RENDER TEXTE
+// RENDER TEXTE (1 horaire par ligne)
+// NOTE AVANT COMPETS
 // =====================
 function lineSep(width = 28) { return '━'.repeat(width); }
 function centerText(txt, width = 28) {
@@ -132,14 +139,18 @@ function renderDayBlock(jour, dayData) {
   const comps = Array.isArray(dayData?.comps) ? dayData.comps : [];
   const note = String(dayData?.note || '').trim();
 
-  const timesLine = times.length ? times.join(' • ') : '—';
-  const compsLine = comps.length ? comps.join(' • ') : '—';
+  const compsTxt = comps.length ? comps.join(' • ') : '';
 
-  const body = [
-    `Horaires : ${timesLine}`,
-    `Compets  : ${compsLine}`
-  ];
-  if (note) body.push(`Note     : ${clampText(note, 220)}`);
+  // ✅ NOTE avant COMPETS
+  const suffix =
+    (note && compsTxt) ? `${note} • ${compsTxt}` :
+    (note) ? note :
+    (compsTxt) ? compsTxt :
+    '—';
+
+  const body = times.length
+    ? times.map(t => `${t} ▸ ${clampText(suffix, 220)}`)
+    : ['—'];
 
   return ['```', ...header, ...body, '```'].join('\n');
 }
@@ -147,12 +158,7 @@ function renderDayBlock(jour, dayData) {
 function renderWeekBlocks(savedPlanning) {
   const blocks = [];
   for (const j of JOURS) {
-    const d = savedPlanning?.[j] || {};
-    blocks.push(renderDayBlock(j, {
-      times: Array.isArray(d.times) ? d.times : [],
-      comps: Array.isArray(d.comps) ? d.comps : [],
-      note: typeof d.note === 'string' ? d.note : ''
-    }));
+    blocks.push(renderDayBlock(j, readDaySaved(savedPlanning, j)));
   }
   return blocks.join('\n\n');
 }
@@ -209,11 +215,26 @@ function buildCompsMenu(state) {
 
 function buildButtonsRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('planning:save_replace').setStyle(ButtonStyle.Success).setLabel('Enregistrer (REMPLACER)'),
-    new ButtonBuilder().setCustomId('planning:save_add').setStyle(ButtonStyle.Primary).setLabel('Enregistrer (AJOUTER)'),
-    new ButtonBuilder().setCustomId('planning:note').setStyle(ButtonStyle.Secondary).setLabel('✍️ Note'),
-    new ButtonBuilder().setCustomId('planning:clear').setStyle(ButtonStyle.Danger).setLabel('Tout vider'),
-    new ButtonBuilder().setCustomId('planning:cancel').setStyle(ButtonStyle.Secondary).setLabel('Fermer')
+    new ButtonBuilder()
+      .setCustomId('planning:save_replace')
+      .setStyle(ButtonStyle.Success)
+      .setLabel('Enregistrer (REMPLACER)'),
+    new ButtonBuilder()
+      .setCustomId('planning:save_add')
+      .setStyle(ButtonStyle.Primary)
+      .setLabel('Enregistrer (AJOUTER)'),
+    new ButtonBuilder()
+      .setCustomId('planning:note')
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel('✍️ Note'),
+    new ButtonBuilder()
+      .setCustomId('planning:clear')
+      .setStyle(ButtonStyle.Danger)
+      .setLabel('Tout vider'),
+    new ButtonBuilder()
+      .setCustomId('planning:cancel')
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel('Fermer')
   );
 }
 
@@ -246,6 +267,7 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
     ? {
         times: uniqueSorted([...(currentDay.times || []), ...inTimes]),
         comps: uniqueSorted([...(currentDay.comps || []), ...inComps]),
+        // note: si une note est tapée => remplace, sinon garde l’ancienne
         note: inNote ? inNote : currentDay.note
       }
     : { times: inTimes, comps: inComps, note: inNote };
@@ -285,7 +307,7 @@ function buildNoteModal(currentNote = '') {
 }
 
 // =====================
-// ROUTAGE INTERACTIONS
+// ROUTAGE INTERACTIONS (menus/boutons)
 // =====================
 async function handleComponentInteraction(interaction) {
   const customId = interaction.customId || '';
@@ -312,7 +334,7 @@ async function handleComponentInteraction(interaction) {
     st.__loadedFromSaved = true;
   }
 
-  // ✅ MENUS : deferUpdate + editReply (anti "échec interaction")
+  // ✅ MENUS : deferUpdate + editReply (anti "Échec de l’interaction")
   if (interaction.isStringSelectMenu()) {
     await interaction.deferUpdate().catch(() => {});
 
@@ -386,6 +408,9 @@ async function handleComponentInteraction(interaction) {
   return false;
 }
 
+// =====================
+// ROUTAGE MODAL
+// =====================
 async function handleModalSubmit(interaction) {
   const customId = interaction.customId || '';
   if (customId !== 'planning:modal_note') return false;
@@ -397,7 +422,10 @@ async function handleModalSubmit(interaction) {
 
   const st = uiState.get(key);
   if (!st) {
-    await interaction.reply({ content: '⚠️ Session planning introuvable. Relance `/planning edit`.', ephemeral: true }).catch(() => {});
+    await interaction.reply({
+      content: '⚠️ Session planning introuvable. Relance `/planning edit`.',
+      ephemeral: true
+    }).catch(() => {});
     return true;
   }
 
@@ -477,7 +505,7 @@ module.exports = {
 
       const content = jourOpt
         ? renderDayBlock(jourOpt, readDaySaved(savedPlanning, jourOpt))
-        : renderWeekBlocks(Object.fromEntries(JOURS.map(j => [j, readDaySaved(savedPlanning, j)])));
+        : renderWeekBlocks(savedPlanning);
 
       const chunks = chunkMessage(content);
       await interaction.reply({ content: chunks[0], ephemeral: false });
@@ -503,7 +531,7 @@ module.exports = {
 
       const content = jourOpt
         ? renderDayBlock(jourOpt, readDaySaved(savedPlanning, jourOpt))
-        : renderWeekBlocks(Object.fromEntries(JOURS.map(j => [j, readDaySaved(savedPlanning, j)])));
+        : renderWeekBlocks(savedPlanning);
 
       for (const part of chunkMessage(content)) {
         await targetChannel.send({ content: part }).catch(() => {});
@@ -538,6 +566,7 @@ module.exports = {
     }
   },
 
+  // ⚠️ À router dans index.js
   handleComponentInteraction,
   handleModalSubmit
 };
