@@ -127,6 +127,7 @@ client.once('ready', async () => {
   updatePresence();
   setInterval(updatePresence, 300000);
 
+  // petit délai Railway
   await new Promise(r => setTimeout(r, 1500));
 
   initScheduler(client, {
@@ -156,18 +157,26 @@ function disableAllComponents(messageComponents = []) {
 client.on('interactionCreate', async (interaction) => {
   try {
     /* =========================
-       1) MODALS (Planning note)
+       1) MODALS (Planning)
+       - accepte planning:modal_note_time (et tout planning:modal_*)
     ========================= */
     if (interaction.isModalSubmit()) {
       const id = interaction.customId || '';
-      if (id === 'planning:modal_note') {
+
+      if (id.startsWith('planning:modal_')) {
         const cmd = client.commands.get('planning');
         if (cmd?.handleModalSubmit) {
           await cmd.handleModalSubmit(interaction);
         } else {
-          await interaction.reply({ content: '⚠️ Handler modal planning manquant.', ephemeral: true }).catch(() => {});
+          await interaction.reply({
+            content: '⚠️ Handler modal planning manquant.',
+            ephemeral: true
+          }).catch(() => {});
         }
+        return;
       }
+
+      // autres modals non gérés
       return;
     }
 
@@ -191,7 +200,6 @@ client.on('interactionCreate', async (interaction) => {
         const disabled = disableAllComponents(interaction.message.components);
 
         try {
-          // ✅ update = ack direct + edit
           await interaction.update({
             content: `${interaction.message.content}\n\n✅ <@${userId}> a **lu et accepté le règlement officiel**.`,
             components: disabled
@@ -225,7 +233,7 @@ client.on('interactionCreate', async (interaction) => {
         if (cmd?.handleComponentInteraction) {
           await cmd.handleComponentInteraction(interaction);
         } else {
-          // au moins ack pour éviter "échec"
+          // au moins ack pour éviter "échec interaction"
           if (!interaction.deferred && !interaction.replied) {
             await interaction.reply({ content: '⚠️ Handler planning manquant.', ephemeral: true }).catch(() => {});
           }
@@ -249,7 +257,6 @@ client.on('interactionCreate', async (interaction) => {
     if (!command) return;
 
     await command.execute(interaction);
-
   } catch (err) {
     console.error('❌ interactionCreate error:', err);
 
