@@ -45,7 +45,7 @@ function buildFixedTimes() {
   }
   return out;
 }
-const FIXED_TIMES = buildFixedTimes(); // ["21:00","21:20",...,"22:40"]
+const FIXED_TIMES = buildFixedTimes();
 
 function normalizeJour(j) {
   const x = String(j || '').trim().toLowerCase();
@@ -80,17 +80,13 @@ function getTodayJourParis() {
 
 // =====================
 // STOCKAGE TEMP UI (mémoire)
-// key = `${guildId}:${userId}`
 // =====================
 const uiState = new Map();
-
-function getStateKey(guildId, userId) {
-  return `${guildId}:${userId}`;
-}
+function getStateKey(guildId, userId) { return `${guildId}:${userId}`; }
 
 function getSavedPlanning(guildConfig) {
   const p = guildConfig?.planning;
-  return (p && typeof p === 'object') ? p : {}; // ✅ vide par défaut
+  return (p && typeof p === 'object') ? p : {};
 }
 
 function readDaySaved(savedPlanning, jour) {
@@ -102,7 +98,8 @@ function readDaySaved(savedPlanning, jour) {
 }
 
 function uniqueSorted(arr) {
-  return [...new Set((arr || []).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+  return [...new Set((arr || []).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b)));
 }
 
 function clampText(t, max = 300) {
@@ -112,10 +109,9 @@ function clampText(t, max = 300) {
 }
 
 // =====================
-// RENDER TEXTE (sans titre global)
+// RENDER TEXTE
 // =====================
 function lineSep(width = 28) { return '━'.repeat(width); }
-
 function centerText(txt, width = 28) {
   const t = String(txt || '').trim();
   if (t.length >= width) return t;
@@ -143,7 +139,6 @@ function renderDayBlock(jour, dayData) {
     `Horaires : ${timesLine}`,
     `Compets  : ${compsLine}`
   ];
-
   if (note) body.push(`Note     : ${clampText(note, 220)}`);
 
   return ['```', ...header, ...body, '```'].join('\n');
@@ -182,77 +177,58 @@ function chunkMessage(str, limit = 1900) {
 // =====================
 function buildTimesMenu(state) {
   const selected = Array.isArray(state?.times) ? state.times : [];
-  const options = FIXED_TIMES.map(t => ({ label: t, value: t }));
+  const options = FIXED_TIMES.map(t => ({
+    label: t,
+    value: t,
+    default: selected.includes(t)
+  }));
 
-  // Discord limite à 25 options -> ici on en a 6 (ok)
   return new StringSelectMenuBuilder()
     .setCustomId('planning:times')
     .setPlaceholder('Horaires (21:00 → 22:40) — coche ce que tu veux')
     .setMinValues(0)
     .setMaxValues(options.length)
-    .addOptions(options)
-    .setDisabled(false);
+    .addOptions(options);
 }
 
 function buildCompsMenu(state) {
-  const options = COMPETITIONS;
+  const selected = Array.isArray(state?.comps) ? state.comps : [];
+  const options = COMPETITIONS.map(c => ({
+    label: c.label,
+    value: c.value,
+    default: selected.includes(c.value)
+  }));
+
   return new StringSelectMenuBuilder()
     .setCustomId('planning:comps')
     .setPlaceholder('Compétitions — coche ce que tu veux')
     .setMinValues(0)
     .setMaxValues(options.length)
-    .addOptions(options)
-    .setDisabled(false);
+    .addOptions(options);
 }
 
 function buildButtonsRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('planning:save_replace')
-      .setStyle(ButtonStyle.Success)
-      .setLabel('Enregistrer (REMPLACER)'),
-    new ButtonBuilder()
-      .setCustomId('planning:save_add')
-      .setStyle(ButtonStyle.Primary)
-      .setLabel('Enregistrer (AJOUTER)'),
-    new ButtonBuilder()
-      .setCustomId('planning:note')
-      .setStyle(ButtonStyle.Secondary)
-      .setLabel('✍️ Note'),
-    new ButtonBuilder()
-      .setCustomId('planning:clear')
-      .setStyle(ButtonStyle.Danger)
-      .setLabel('Tout vider'),
-    new ButtonBuilder()
-      .setCustomId('planning:cancel')
-      .setStyle(ButtonStyle.Secondary)
-      .setLabel('Fermer')
+    new ButtonBuilder().setCustomId('planning:save_replace').setStyle(ButtonStyle.Success).setLabel('Enregistrer (REMPLACER)'),
+    new ButtonBuilder().setCustomId('planning:save_add').setStyle(ButtonStyle.Primary).setLabel('Enregistrer (AJOUTER)'),
+    new ButtonBuilder().setCustomId('planning:note').setStyle(ButtonStyle.Secondary).setLabel('✍️ Note'),
+    new ButtonBuilder().setCustomId('planning:clear').setStyle(ButtonStyle.Danger).setLabel('Tout vider'),
+    new ButtonBuilder().setCustomId('planning:cancel').setStyle(ButtonStyle.Secondary).setLabel('Fermer')
   );
 }
 
 function buildUiMessageContent(guildCfg, jour, state) {
-  // Pas de titre planning global (comme demandé)
-  // On affiche juste le bloc du jour en preview
   const preview = renderDayBlock(jour, state);
-
-  const clubName =
-    guildCfg?.clubName ||
-    'CLUB';
-
-  // Petit rappel compact (hors bloc)
-  const head = [
-    `**${clubName}** — configuration du **${dayLabelFR(jour)}**`,
-    '_Coche/décoche, puis Enregistrer._'
-  ].join('\n');
-
-  return `${head}\n\n${preview}`;
+  const clubName = guildCfg?.clubName || 'CLUB';
+  return `**${clubName}** — **${dayLabelFR(jour)}**\n_Coche/décoche, puis Enregistrer._\n\n${preview}`;
 }
 
 function buildUiComponents(state) {
-  const row1 = new ActionRowBuilder().addComponents(buildTimesMenu(state));
-  const row2 = new ActionRowBuilder().addComponents(buildCompsMenu(state));
-  const row3 = buildButtonsRow();
-  return [row1, row2, row3];
+  return [
+    new ActionRowBuilder().addComponents(buildTimesMenu(state)),
+    new ActionRowBuilder().addComponents(buildCompsMenu(state)),
+    buildButtonsRow()
+  ];
 }
 
 // =====================
@@ -266,22 +242,13 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
   const inComps = uniqueSorted((incomingState?.comps || []).filter(x => COMPETITIONS.some(c => c.value === x)));
   const inNote = String(incomingState?.note || '').trim();
 
-  let nextDay;
-  if (mode === 'add') {
-    nextDay = {
-      times: uniqueSorted([...(currentDay.times || []), ...inTimes]),
-      comps: uniqueSorted([...(currentDay.comps || []), ...inComps]),
-      // note: si l'utilisateur a tapé une note (non vide) => on remplace, sinon on garde l’ancienne
-      note: inNote ? inNote : currentDay.note
-    };
-  } else {
-    // replace
-    nextDay = {
-      times: inTimes,
-      comps: inComps,
-      note: inNote
-    };
-  }
+  const nextDay = (mode === 'add')
+    ? {
+        times: uniqueSorted([...(currentDay.times || []), ...inTimes]),
+        comps: uniqueSorted([...(currentDay.comps || []), ...inComps]),
+        note: inNote ? inNote : currentDay.note
+      }
+    : { times: inTimes, comps: inComps, note: inNote };
 
   const nextPlanning = { ...savedPlanning, [jour]: nextDay };
   updateGuildConfig(guildId, { planning: nextPlanning });
@@ -318,12 +285,11 @@ function buildNoteModal(currentNote = '') {
 }
 
 // =====================
-// ROUTAGE INTERACTIONS (à appeler depuis index.js)
+// ROUTAGE INTERACTIONS
 // =====================
 async function handleComponentInteraction(interaction) {
   const customId = interaction.customId || '';
   if (!customId.startsWith('planning:')) return false;
-
   if (!interaction.guildId) return false;
 
   const guildId = interaction.guildId;
@@ -333,21 +299,11 @@ async function handleComponentInteraction(interaction) {
   const savedPlanning = getSavedPlanning(guildCfg);
 
   const key = getStateKey(guildId, userId);
-
-  // Si l’utilisateur n’a pas ouvert /planning edit, on recrée un état minimal sur "aujourd’hui"
   const fallbackJour = getTodayJourParis();
-  const st = uiState.get(key) || {
-    jour: fallbackJour,
-    times: [],
-    comps: [],
-    note: ''
-  };
 
-  // Toujours s’assurer que jour est valide
+  const st = uiState.get(key) || { jour: fallbackJour, times: [], comps: [], note: '' };
   st.jour = normalizeJour(st.jour) || fallbackJour;
 
-  // Si pas encore chargé depuis la config, on init depuis le saved du jour
-  // (utile si redémarrage / state perdu)
   if (!st.__loadedFromSaved) {
     const daySaved = readDaySaved(savedPlanning, st.jour);
     st.times = daySaved.times;
@@ -356,8 +312,10 @@ async function handleComponentInteraction(interaction) {
     st.__loadedFromSaved = true;
   }
 
-  // ========= MENUS =========
+  // ✅ MENUS : deferUpdate + editReply (anti "échec interaction")
   if (interaction.isStringSelectMenu()) {
+    await interaction.deferUpdate().catch(() => {});
+
     if (customId === 'planning:times') {
       st.times = uniqueSorted((interaction.values || []).filter(x => FIXED_TIMES.includes(x)));
     }
@@ -367,25 +325,28 @@ async function handleComponentInteraction(interaction) {
 
     uiState.set(key, st);
 
-    return interaction.update({
+    await interaction.editReply({
       content: buildUiMessageContent(guildCfg, st.jour, st),
       components: buildUiComponents(st)
-    }).then(() => true).catch(() => false);
+    }).catch(() => {});
+
+    return true;
   }
 
-  // ========= BOUTONS =========
+  // ✅ BOUTONS
   if (interaction.isButton()) {
-    if (customId === 'planning:cancel') {
-      uiState.delete(key);
-      return interaction.update({
-        content: '✅ Configuration planning fermée.',
-        components: []
-      }).then(() => true).catch(() => false);
-    }
-
+    // NOTE => showModal (pas deferUpdate)
     if (customId === 'planning:note') {
       uiState.set(key, st);
-      await interaction.showModal(buildNoteModal(st.note || ''));
+      await interaction.showModal(buildNoteModal(st.note || '')).catch(() => {});
+      return true;
+    }
+
+    await interaction.deferUpdate().catch(() => {});
+
+    if (customId === 'planning:cancel') {
+      uiState.delete(key);
+      await interaction.editReply({ content: '✅ Configuration planning fermée.', components: [] }).catch(() => {});
       return true;
     }
 
@@ -396,10 +357,12 @@ async function handleComponentInteraction(interaction) {
       st.note = cleared.note || '';
       uiState.set(key, st);
 
-      return interaction.update({
+      await interaction.editReply({
         content: buildUiMessageContent(guildCfg, st.jour, st),
         components: buildUiComponents(st)
-      }).then(() => true).catch(() => false);
+      }).catch(() => {});
+
+      return true;
     }
 
     if (customId === 'planning:save_add' || customId === 'planning:save_replace') {
@@ -411,10 +374,12 @@ async function handleComponentInteraction(interaction) {
       st.note = saved.note || '';
       uiState.set(key, st);
 
-      return interaction.update({
+      await interaction.editReply({
         content: `✅ **${dayLabelFR(st.jour)}** enregistré (${mode === 'add' ? 'AJOUT' : 'REMPLACEMENT'}).\n\n${renderDayBlock(st.jour, st)}`,
         components: buildUiComponents(st)
-      }).then(() => true).catch(() => false);
+      }).catch(() => {});
+
+      return true;
     }
   }
 
@@ -432,22 +397,16 @@ async function handleModalSubmit(interaction) {
 
   const st = uiState.get(key);
   if (!st) {
-    return interaction.reply({
-      content: '⚠️ Session planning introuvable. Relance `/planning edit`.',
-      ephemeral: true
-    }).then(() => true).catch(() => false);
+    await interaction.reply({ content: '⚠️ Session planning introuvable. Relance `/planning edit`.', ephemeral: true }).catch(() => {});
+    return true;
   }
 
   const note = interaction.fields.getTextInputValue('planning:note_input') || '';
   st.note = String(note).trim().slice(0, 400);
   uiState.set(key, st);
 
-  const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
-
-  // On répond éphemère, puis on ré-affiche l’UI (update du message initial impossible depuis un modal
-  // sans conserver messageId; on fait simple: on répond avec un aperçu)
   await interaction.reply({
-    content: `✅ Note mise à jour pour **${dayLabelFR(st.jour)}**.\n\n${renderDayBlock(st.jour, st)}`,
+    content: `✅ Note mise à jour pour **${dayLabelFR(st.jour)}**.\n\n${renderDayBlock(st.jour, st)}\n\n➡️ Reviens sur le message planning et clique **Enregistrer**.`,
     ephemeral: true
   }).catch(() => {});
 
@@ -505,7 +464,6 @@ module.exports = {
         )
     ),
 
-  // ✅ appelé par interactionCreate (chat command)
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
     const guild = interaction.guild;
@@ -513,7 +471,7 @@ module.exports = {
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const savedPlanning = getSavedPlanning(guildCfg);
 
-    // ---------- SHOW ----------
+    // SHOW
     if (sub === 'show') {
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
 
@@ -529,7 +487,7 @@ module.exports = {
       return;
     }
 
-    // ---------- POST ----------
+    // POST
     if (sub === 'post') {
       const targetChannel = interaction.options.getChannel('salon') || interaction.channel;
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
@@ -557,13 +515,11 @@ module.exports = {
       });
     }
 
-    // ---------- EDIT ----------
+    // EDIT
     if (sub === 'edit') {
       const jourOpt = normalizeJour(interaction.options.getString('jour')) || getTodayJourParis();
-
       const daySaved = readDaySaved(savedPlanning, jourOpt);
 
-      // init state (vide si rien)
       const st = {
         jour: jourOpt,
         times: daySaved.times || [],
@@ -582,8 +538,6 @@ module.exports = {
     }
   },
 
-  // ✅ à router depuis index.js pour menus/boutons
   handleComponentInteraction,
-  // ✅ à router depuis index.js pour modal
   handleModalSubmit
 };
