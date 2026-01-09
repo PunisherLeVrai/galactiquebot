@@ -1,19 +1,34 @@
-// commands/planning.js ✅ TEXTE ONLY — PLANNING VIDE PAR DÉFAUT
-// - /planning show [jour]              -> affiche (jour OU semaine)
-// - /planning init [jour] [titre] [salon] -> génère 21:00-23:00 toutes les 20min (jour OU semaine)
-// - /planning set jour heure [titre] [salon] -> met un créneau spécifique sur le jour (remplace la journée)
-// - /planning clear jour               -> vide le jour
-// - /planning post [salon] [jour]      -> poste (jour OU semaine)
+// commands/planning.js ✅ CHECKLIST (heures fixes + compétitions)
+// - /planning show [jour]            -> affiche un jour OU toute la semaine
+// - /planning edit [jour] [salon]    -> ouvre un panneau à cocher (jour OU semaine si jour absent)
+// - /planning clear [jour]           -> vide un jour (ou toute la semaine si jour absent)
+// - /planning post [salon] [jour]    -> poste un jour OU la semaine
 
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType
+  ChannelType,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require('discord.js');
 
 const { getConfigFromInteraction, updateGuildConfig } = require('../utils/config');
 
 const JOURS = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'];
+
+const FIXED_TIMES = [
+  '21:00','21:20','21:40',
+  '22:00','22:20','22:40',
+  '23:00'
+];
+
+const COMPETITIONS = [
+  'VPG BELGIQUE',
+  'VPG SUISSE',
+  'VSC'
+];
 
 function normalizeJour(j) {
   const x = String(j || '').trim().toLowerCase();
@@ -33,46 +48,6 @@ function dayLabelFR(jour) {
   return map[jour] || String(jour || '').toUpperCase();
 }
 
-// accepte: "21:00-23:00" ou "21:00 → 23:00"
-function parseTimeRange(input) {
-  const raw = String(input || '').trim();
-  const m = raw.match(/^([01]\d|2[0-3]):([0-5]\d)\s*(?:-|→|>|to)\s*([01]\d|2[0-3]):([0-5]\d)$/i);
-  if (!m) return null;
-
-  const start = `${m[1]}:${m[2]}`;
-  const end = `${m[3]}:${m[4]}`;
-  return { start, end, normalized: `${start}-${end}` };
-}
-
-/* ===== TEMPLATE 21:00 → 23:00 toutes les 20 min ===== */
-function pad2(n) { return String(n).padStart(2, '0'); }
-
-function buildSlots21to23(stepMin = 20) {
-  const slots = [];
-  const start = 21 * 60; // 21:00
-  const end = 23 * 60;   // 23:00
-
-  for (let t = start; t + stepMin <= end; t += stepMin) {
-    const sH = Math.floor(t / 60);
-    const sM = t % 60;
-    const e = t + stepMin;
-    const eH = Math.floor(e / 60);
-    const eM = e % 60;
-
-    slots.push(`${pad2(sH)}:${pad2(sM)}-${pad2(eH)}:${pad2(eM)}`);
-  }
-  return slots;
-}
-
-function dayTemplate({ titre = 'Session', salonId = null } = {}) {
-  return buildSlots21to23(20).map(h => ({
-    heure: h,
-    titre,
-    salonId
-  }));
-}
-
-/* ===== RENDER (mix des 2, clean) ===== */
 function lineSep(width = 28) { return '━'.repeat(width); }
 
 function centerText(txt, width = 28) {
@@ -83,30 +58,60 @@ function centerText(txt, width = 28) {
   return ' '.repeat(left) + t + ' '.repeat(right);
 }
 
-function formatItem(it) {
-  const heure = it?.heure || '—';
-  const titre = it?.titre || 'Session';
-  const salonId = it?.salonId || null;
-  const chan = salonId ? ` • <#${salonId}>` : '';
-  return `${heure} ▸ ${titre}${chan}`;
+function getSavedPlanning(guildConfig) {
+  const p = guildConfig?.planning;
+  return (p && typeof p === 'object') ? p : {}; // ✅ vide par défaut
 }
 
-function renderDayBlock(jour, items) {
+function normalizeDayData(dayData) {
+  // dayData: { times:[], competitions:[], salonId }
+  const times = Array.isArray(dayData?.times) ? dayData.times.filter(t => FIXED_TIMES.includes(t)) : [];
+  const competitions = Array.isArray(dayData?.competitions) ? dayData.competitions.filter(c => COMPETITIONS.includes(c)) : [];
+  const salonId = dayData?.salonId ? String(dayData.salonId) : null;
+  return { times, competitions, salonId };
+}
+
+function buildEmptyDay(salonId = null) {
+  return { times: [], competitions: [], salonId: salonId || null };
+}
+
+function setAllDays(nextPlanning, valueForAllDays) {
+  const out = { ...(nextPlanning || {}) };
+  for (const j of JOURS) out[j] = valueForAllDays;
+  return out;
+}
+
+function renderChecklistBlock(title, items, selectedSet) {
   const width = 28;
   const header = [
     lineSep(width),
-    centerText(dayLabelFR(jour), width),
+    centerText(title, width),
     lineSep(width)
   ];
 
-  const list = Array.isArray(items) ? items : [];
-  const body = list.length ? list.map(formatItem) : ['—'];
-
+  const body = items.map(x => `${selectedSet.has(x) ? '✅' : '⬜'} ${x}`);
   return ['```', ...header, ...body, '```'].join('\n');
 }
 
+function renderDay(jour, dayData) {
+  const d = normalizeDayData(dayData);
+  const timesSet = new Set(d.times);
+  const compSet = new Set(d.competitions);
+
+  const parts = [];
+  parts.push(renderChecklistBlock(dayLabelFR(jour), FIXED_TIMES, timesSet));
+  parts.push(renderChecklistBlock('COMPÉTITIONS', COMPETITIONS, compSet));
+
+  if (d.salonId) parts.push(`📍 Salon : <#${d.salonId}>`);
+  return parts.join('\n\n');
+}
+
 function renderWeek(planning) {
-  return JOURS.map(j => renderDayBlock(j, planning?.[j])).join('\n\n');
+  const blocks = [];
+  for (const j of JOURS) {
+    blocks.push(renderDay(j, planning?.[j]));
+  }
+  return blocks.join('\n\n');
 }
 
 function chunkMessage(str, limit = 1900) {
@@ -124,28 +129,48 @@ function chunkMessage(str, limit = 1900) {
   return parts;
 }
 
-/* ===== DATA ===== */
-function getSavedPlanning(guildConfig) {
-  const p = guildConfig?.planning;
-  return (p && typeof p === 'object') ? p : {}; // ✅ vide par défaut
+function makeTimeMenu(selectedTimes) {
+  return new StringSelectMenuBuilder()
+    .setCustomId('planning_times')
+    .setPlaceholder('✅ Horaires (21h→23h / 20min) — coche/décoche')
+    .setMinValues(0)
+    .setMaxValues(FIXED_TIMES.length)
+    .addOptions(
+      FIXED_TIMES.map(t => ({
+        label: t,
+        value: t,
+        default: selectedTimes.has(t)
+      }))
+    );
 }
 
-function cleanDayItems(items) {
-  if (!Array.isArray(items)) return [];
-  return items
-    .filter(x => x && typeof x === 'object')
-    .map(x => ({
-      heure: String(x.heure || '').slice(0, 11),
-      titre: String(x.titre || 'Session').slice(0, 60),
-      salonId: x.salonId ? String(x.salonId) : null
-    }))
-    .filter(x => x.heure);
+function makeCompMenu(selectedComps) {
+  return new StringSelectMenuBuilder()
+    .setCustomId('planning_comps')
+    .setPlaceholder('🏆 Compétitions — coche/décoche')
+    .setMinValues(0)
+    .setMaxValues(COMPETITIONS.length)
+    .addOptions(
+      COMPETITIONS.map(c => ({
+        label: c,
+        value: c,
+        default: selectedComps.has(c)
+      }))
+    );
+}
+
+function makeButtons() {
+  return [
+    new ButtonBuilder().setCustomId('planning_save').setLabel('Enregistrer').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('planning_clear').setLabel('Tout décocher').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('planning_cancel').setLabel('Annuler').setStyle(ButtonStyle.Danger)
+  ];
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('planning')
-    .setDescription('Planning (texte) — jour ou semaine.')
+    .setDescription('Planning (cases à cocher) — horaires + compétitions.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     .addSubcommand(sc =>
@@ -162,50 +187,17 @@ module.exports = {
 
     .addSubcommand(sc =>
       sc
-        .setName('init')
-        .setDescription('Génère le template 21:00-23:00 (toutes les 20 min) sur un jour ou semaine.')
+        .setName('edit')
+        .setDescription('Édite le planning avec des cases à cocher (jour ou semaine).')
         .addStringOption(o =>
           o.setName('jour')
-            .setDescription('Optionnel : générer un seul jour')
+            .setDescription('Optionnel : modifier un seul jour (sinon applique à toute la semaine)')
             .setRequired(false)
             .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
         )
-        .addStringOption(o =>
-          o.setName('titre')
-            .setDescription('Titre du template (ex: Session officielle)')
-            .setRequired(false)
-        )
         .addChannelOption(o =>
           o.setName('salon')
-            .setDescription('Salon (optionnel)')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
-        )
-    )
-
-    .addSubcommand(sc =>
-      sc
-        .setName('set')
-        .setDescription('Met un créneau spécifique sur un jour (remplace la journée).')
-        .addStringOption(o =>
-          o.setName('jour')
-            .setDescription('Jour')
-            .setRequired(true)
-            .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
-        )
-        .addStringOption(o =>
-          o.setName('heure')
-            .setDescription('Ex: 20:45-23:00')
-            .setRequired(true)
-        )
-        .addStringOption(o =>
-          o.setName('titre')
-            .setDescription('Ex: Match / Session officielle')
-            .setRequired(false)
-        )
-        .addChannelOption(o =>
-          o.setName('salon')
-            .setDescription('Salon (optionnel)')
+            .setDescription('Salon lié (optionnel, enregistré avec le planning)')
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
@@ -214,11 +206,11 @@ module.exports = {
     .addSubcommand(sc =>
       sc
         .setName('clear')
-        .setDescription('Vide un jour du planning.')
+        .setDescription('Vide le planning (jour ou semaine).')
         .addStringOption(o =>
           o.setName('jour')
-            .setDescription('Jour')
-            .setRequired(true)
+            .setDescription('Optionnel : vider un seul jour (sinon toute la semaine)')
+            .setRequired(false)
             .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
         )
     )
@@ -226,7 +218,7 @@ module.exports = {
     .addSubcommand(sc =>
       sc
         .setName('post')
-        .setDescription('Poste le planning (jour ou semaine) dans un salon.')
+        .setDescription('Poste le planning dans un salon (jour ou semaine).')
         .addChannelOption(o =>
           o.setName('salon')
             .setDescription('Salon cible (défaut: salon actuel)')
@@ -244,17 +236,17 @@ module.exports = {
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
     const guild = interaction.guild;
-
     const { guild: guildConfig } = getConfigFromInteraction(interaction) || {};
+
     const savedPlanning = getSavedPlanning(guildConfig);
 
-    // SHOW
+    // ---------------- SHOW ----------------
     if (sub === 'show') {
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
 
       const content = jourOpt
-        ? renderDayBlock(jourOpt, cleanDayItems(savedPlanning[jourOpt]))
-        : renderWeek(Object.fromEntries(JOURS.map(j => [j, cleanDayItems(savedPlanning[j])])));
+        ? renderDay(jourOpt, savedPlanning[jourOpt])
+        : renderWeek(savedPlanning);
 
       const chunks = chunkMessage(content);
       await interaction.reply({ content: chunks[0], ephemeral: false });
@@ -264,78 +256,30 @@ module.exports = {
       return;
     }
 
-    // INIT (template 21-23 / 20 min)
-    if (sub === 'init') {
+    // ---------------- CLEAR ----------------
+    if (sub === 'clear') {
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
-      const titre = interaction.options.getString('titre') || 'Session';
-      const salon = interaction.options.getChannel('salon');
-      const salonId = salon?.id || null;
-
       const next = { ...savedPlanning };
 
       if (jourOpt) {
-        next[jourOpt] = dayTemplate({ titre, salonId });
+        next[jourOpt] = buildEmptyDay(next[jourOpt]?.salonId || null);
       } else {
-        for (const j of JOURS) next[j] = dayTemplate({ titre, salonId });
+        const keepSalonId = null;
+        const empty = buildEmptyDay(keepSalonId);
+        for (const j of JOURS) next[j] = empty;
       }
 
       updateGuildConfig(guild.id, { planning: next });
 
       return interaction.reply({
-        content: `✅ Template **21:00 → 23:00 (toutes les 20 min)** appliqué ${jourOpt ? `sur **${dayLabelFR(jourOpt)}**` : 'sur **toute la semaine**'}.`,
+        content: jourOpt
+          ? `🗑️ **${dayLabelFR(jourOpt)}** : tout décoché.`
+          : '🗑️ **Semaine** : tout décoché.',
         ephemeral: true
       });
     }
 
-    // SET (créneau spécial -> remplace la journée)
-    if (sub === 'set') {
-      const jour = normalizeJour(interaction.options.getString('jour'));
-      const heureIn = interaction.options.getString('heure');
-      const titre = interaction.options.getString('titre') || 'Session';
-      const salon = interaction.options.getChannel('salon');
-
-      if (!jour) return interaction.reply({ content: '❌ Jour invalide.', ephemeral: true });
-
-      const parsed = parseTimeRange(heureIn);
-      if (!parsed) {
-        return interaction.reply({
-          content: '❌ Horaire invalide. Format attendu : `HH:MM-HH:MM` (ex: `20:45-23:00`).',
-          ephemeral: true
-        });
-      }
-
-      const next = { ...savedPlanning };
-      next[jour] = [{
-        heure: parsed.normalized,
-        titre: String(titre).slice(0, 60),
-        salonId: salon?.id || null
-      }];
-
-      updateGuildConfig(guild.id, { planning: next });
-
-      return interaction.reply({
-        content: `✅ **${dayLabelFR(jour)}** mis à jour.`,
-        ephemeral: true
-      });
-    }
-
-    // CLEAR (jour vide)
-    if (sub === 'clear') {
-      const jour = normalizeJour(interaction.options.getString('jour'));
-      if (!jour) return interaction.reply({ content: '❌ Jour invalide.', ephemeral: true });
-
-      const next = { ...savedPlanning };
-      delete next[jour];
-
-      updateGuildConfig(guild.id, { planning: next });
-
-      return interaction.reply({
-        content: `🗑️ **${dayLabelFR(jour)}** vidé (retour à “—”).`,
-        ephemeral: true
-      });
-    }
-
-    // POST
+    // ---------------- POST ----------------
     if (sub === 'post') {
       const targetChannel = interaction.options.getChannel('salon') || interaction.channel;
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
@@ -350,8 +294,8 @@ module.exports = {
       }
 
       const content = jourOpt
-        ? renderDayBlock(jourOpt, cleanDayItems(savedPlanning[jourOpt]))
-        : renderWeek(Object.fromEntries(JOURS.map(j => [j, cleanDayItems(savedPlanning[j])])));
+        ? renderDay(jourOpt, savedPlanning[jourOpt])
+        : renderWeek(savedPlanning);
 
       for (const part of chunkMessage(content)) {
         await targetChannel.send({ content: part }).catch(() => {});
@@ -361,6 +305,146 @@ module.exports = {
         content: `📌 Planning posté dans <#${targetChannel.id}>${jourOpt ? ` (**${dayLabelFR(jourOpt)}**)` : ''}.`,
         ephemeral: true
       });
+    }
+
+    // ---------------- EDIT (cases à cocher) ----------------
+    if (sub === 'edit') {
+      const jourOpt = normalizeJour(interaction.options.getString('jour')); // null => semaine
+      const salon = interaction.options.getChannel('salon');
+      const salonId = salon?.id || null;
+
+      // Base à éditer :
+      // - si jour => dayData existant ou vide
+      // - si semaine => on prend le jour "lundi" comme base si existe, sinon vide
+      const baseDay = jourOpt
+        ? normalizeDayData(savedPlanning[jourOpt])
+        : normalizeDayData(savedPlanning.lundi);
+
+      // si salon fourni, on l’applique dans l’éditeur (mais pas obligatoire)
+      if (salonId) baseDay.salonId = salonId;
+
+      // Sélections en mémoire pendant l’édition
+      const selectedTimes = new Set(baseDay.times);
+      const selectedComps = new Set(baseDay.competitions);
+
+      const scopeLabel = jourOpt ? dayLabelFR(jourOpt) : 'SEMAINE';
+
+      const preview = () => {
+        const temp = {
+          ...(jourOpt ? { [jourOpt]: { times: [...selectedTimes], competitions: [...selectedComps], salonId: baseDay.salonId || null } } : {})
+        };
+
+        // mini aperçu texte (pas de titre global)
+        const dayText = jourOpt
+          ? renderDay(jourOpt, temp[jourOpt])
+          : [
+              renderChecklistBlock(scopeLabel, FIXED_TIMES, selectedTimes),
+              renderChecklistBlock('COMPÉTITIONS', COMPETITIONS, selectedComps),
+              baseDay.salonId ? `📍 Salon : <#${baseDay.salonId}>` : ''
+            ].filter(Boolean).join('\n\n');
+
+        return dayText;
+      };
+
+      const row1 = new ActionRowBuilder().addComponents(makeTimeMenu(selectedTimes));
+      const row2 = new ActionRowBuilder().addComponents(makeCompMenu(selectedComps));
+      const row3 = new ActionRowBuilder().addComponents(...makeButtons());
+
+      await interaction.reply({
+        content: `📌 **Édition PLANNING — ${scopeLabel}**\n\n${preview()}`,
+        components: [row1, row2, row3],
+        ephemeral: true
+      });
+
+      const msg = await interaction.fetchReply();
+
+      const refresh = async () => {
+        const r1 = new ActionRowBuilder().addComponents(makeTimeMenu(selectedTimes));
+        const r2 = new ActionRowBuilder().addComponents(makeCompMenu(selectedComps));
+        const r3 = new ActionRowBuilder().addComponents(...makeButtons());
+
+        await interaction.editReply({
+          content: `📌 **Édition PLANNING — ${scopeLabel}**\n\n${preview()}`,
+          components: [r1, r2, r3]
+        }).catch(() => {});
+      };
+
+      const filter = (i) => i.user.id === interaction.user.id && i.message.id === msg.id;
+
+      // boucle d’édition (menus + boutons)
+      while (true) {
+        let i;
+        try {
+          i = await msg.awaitMessageComponent({ filter, time: 5 * 60 * 1000 });
+        } catch {
+          // timeout -> on ferme
+          await interaction.editReply({ content: '⏱️ Édition expirée.', components: [] }).catch(() => {});
+          return;
+        }
+
+        // Menus
+        if (i.isStringSelectMenu()) {
+          if (i.customId === 'planning_times') {
+            selectedTimes.clear();
+            for (const v of i.values) selectedTimes.add(v);
+            await i.deferUpdate().catch(() => {});
+            await refresh();
+            continue;
+          }
+
+          if (i.customId === 'planning_comps') {
+            selectedComps.clear();
+            for (const v of i.values) selectedComps.add(v);
+            await i.deferUpdate().catch(() => {});
+            await refresh();
+            continue;
+          }
+        }
+
+        // Boutons
+        if (i.isButton()) {
+          if (i.customId === 'planning_clear') {
+            selectedTimes.clear();
+            selectedComps.clear();
+            await i.deferUpdate().catch(() => {});
+            await refresh();
+            continue;
+          }
+
+          if (i.customId === 'planning_cancel') {
+            await i.update({ content: '❌ Annulé.', components: [] }).catch(() => {});
+            return;
+          }
+
+          if (i.customId === 'planning_save') {
+            const next = { ...savedPlanning };
+
+            const payload = {
+              times: [...selectedTimes],
+              competitions: [...selectedComps],
+              salonId: baseDay.salonId || null
+            };
+
+            if (jourOpt) {
+              next[jourOpt] = payload;
+            } else {
+              // applique à toute la semaine
+              for (const j of JOURS) next[j] = payload;
+            }
+
+            updateGuildConfig(guild.id, { planning: next });
+
+            await i.update({
+              content: `✅ Enregistré sur **${scopeLabel}**.\n\n${jourOpt ? renderDay(jourOpt, payload) : preview()}`,
+              components: []
+            }).catch(() => {});
+            return;
+          }
+        }
+
+        // fallback
+        await i.deferUpdate().catch(() => {});
+      }
     }
   }
 };
