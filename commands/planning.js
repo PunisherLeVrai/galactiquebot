@@ -1,12 +1,21 @@
 // commands/planning.js
-// ✅ PLANNING (menus) + NOTES PAR HORAIRE (modal) + AJOUTER / REMPLACER
+// ✅ PLANNING (menus) + LIGNE PAR HORAIRE (modal) + AJOUTER / REMPLACER
 // - /planning show [jour] -> affiche jour OU semaine
 // - /planning post [salon] [jour] -> poste jour OU semaine
-// - /planning edit [jour] -> UI (horaires + compétitions + notes par horaire)
+// - /planning edit [jour] -> UI (horaires + config ligne par horaire)
 //
 // ✅ Affichage : 1 horaire par ligne
-// ✅ Note AVANT compétitions (sur la même ligne)
-// ✅ Plusieurs notes : notes["22:20"] = "..."
+// ✅ NOTE AVANT compétition (sur la même ligne)
+// ✅ MODE B : compétition + note = PAR HORAIRE
+//
+// Structure sauvegardée :
+// planning[jour] = {
+//   times: ["21:20","22:00"],
+//   entries: {
+//     "21:20": { note: "ELEVEN SAINTS NATION", comp: "VPG BELGIQUE" },
+//     "22:00": { note: "MGT MONTROLI ES", comp: "VSC" }
+//   }
+// }
 
 const {
   SlashCommandBuilder,
@@ -31,6 +40,7 @@ const COMPETITIONS = [
   { label: 'VPG SUISSE', value: 'VPG SUISSE' },
   { label: 'VSC', value: 'VSC' }
 ];
+const COMP_VALUES = COMPETITIONS.map(c => c.value);
 
 // 21:00 → 23:00 toutes les 20 min => 21:00, 21:20, ... 22:40
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -83,38 +93,9 @@ function getTodayJourParis() {
 const uiState = new Map();
 function getStateKey(guildId, userId) { return `${guildId}:${userId}`; }
 
-/* ===================== DATA PERSIST ===================== */
-/**
- * planning[jour] = {
- *   times: ["22:20","22:40"],
- *   comps: ["VPG BELGIQUE"],
- *   notes: { "22:20": "CRIMSON ELITE", "22:40": "..." }
- * }
- */
-function getSavedPlanning(guildConfig) {
-  const p = guildConfig?.planning;
-  return (p && typeof p === 'object') ? p : {};
-}
-
-function sanitizeNotesMap(notes) {
-  const src = (notes && typeof notes === 'object') ? notes : {};
-  const out = {};
-  for (const [k, v] of Object.entries(src)) {
-    const key = String(k || '').trim();
-    if (!FIXED_TIMES.includes(key)) continue;
-    const val = String(v || '').trim();
-    if (!val) continue;
-    out[key] = val.slice(0, 200);
-  }
-  return out;
-}
-
-function readDaySaved(savedPlanning, jour) {
-  const d = savedPlanning?.[jour];
-  const times = Array.isArray(d?.times) ? d.times.filter(x => FIXED_TIMES.includes(x)) : [];
-  const comps = Array.isArray(d?.comps) ? d.comps.filter(x => COMPETITIONS.some(c => c.value === x)) : [];
-  const notes = sanitizeNotesMap(d?.notes);
-  return { times, comps, notes };
+/* ===================== HELPERS ===================== */
+function isPlainObject(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
 function uniqueSorted(arr) {
@@ -122,10 +103,51 @@ function uniqueSorted(arr) {
     .sort((a, b) => String(a).localeCompare(String(b)));
 }
 
-function clampText(t, max = 180) {
+function clampText(t, max = 220) {
   const s = String(t || '').trim();
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
+}
+
+/* ===================== DATA PERSIST ===================== */
+function getSavedPlanning(guildConfig) {
+  const p = guildConfig?.planning;
+  return isPlainObject(p) ? p : {};
+}
+
+function sanitizeEntriesMap(entries) {
+  const src = isPlainObject(entries) ? entries : {};
+  const out = {};
+
+  for (const [timeKey, val] of Object.entries(src)) {
+    const t = String(timeKey || '').trim();
+    if (!FIXED_TIMES.includes(t)) continue;
+
+    const obj = isPlainObject(val) ? val : {};
+    const note = clampText(obj.note, 200).trim();
+    const comp = String(obj.comp || '').trim();
+
+    // comp doit être dans la liste, sinon ignorée
+    const compOk = comp ? (COMP_VALUES.includes(comp) ? comp : '') : '';
+
+    if (!note && !compOk) continue;
+    out[t] = { note, comp: compOk };
+  }
+
+  return out;
+}
+
+function readDaySaved(savedPlanning, jour) {
+  const d = savedPlanning?.[jour];
+  const times = Array.isArray(d?.times) ? d.times.filter(x => FIXED_TIMES.includes(x)) : [];
+  const entries = sanitizeEntriesMap(d?.entries);
+  // prune entries aux times
+  const tset = new Set(times);
+  const cleaned = {};
+  for (const [t, v] of Object.entries(entries)) {
+    if (tset.has(t)) cleaned[t] = v;
+  }
+  return { times: uniqueSorted(times), entries: cleaned };
 }
 
 /* ===================== RENDER ===================== */
@@ -147,19 +169,19 @@ function renderDayBlock(jour, dayData) {
   ];
 
   const times = Array.isArray(dayData?.times) ? uniqueSorted(dayData.times) : [];
-  const comps = Array.isArray(dayData?.comps) ? uniqueSorted(dayData.comps) : [];
-  const notes = (dayData?.notes && typeof dayData.notes === 'object') ? dayData.notes : {};
-
-  const compsTxt = comps.length ? comps.join(' • ') : '';
+  const entries = isPlainObject(dayData?.entries) ? dayData.entries : {};
 
   const body = times.length
     ? times.map((t) => {
-        const noteForTime = String(notes?.[t] || '').trim();
-        // ✅ NOTE avant COMPETS
+        const e = isPlainObject(entries?.[t]) ? entries[t] : {};
+        const note = String(e.note || '').trim();
+        const comp = String(e.comp || '').trim();
+
+        // ✅ NOTE avant compétition (même ligne)
         const suffix =
-          (noteForTime && compsTxt) ? `${noteForTime} • ${compsTxt}` :
-          (noteForTime) ? noteForTime :
-          (compsTxt) ? compsTxt :
+          (note && comp) ? `${note} • ${comp}` :
+          (note) ? note :
+          (comp) ? comp :
           '—';
 
         return `${t} ▸ ${clampText(suffix, 220)}`;
@@ -171,7 +193,9 @@ function renderDayBlock(jour, dayData) {
 
 function renderWeekBlocks(savedPlanning) {
   const blocks = [];
-  for (const j of JOURS) blocks.push(renderDayBlock(j, readDaySaved(savedPlanning, j)));
+  for (const j of JOURS) {
+    blocks.push(renderDayBlock(j, readDaySaved(savedPlanning, j)));
+  }
   return blocks.join('\n\n');
 }
 
@@ -207,27 +231,11 @@ function buildTimesMenu(state) {
     .addOptions(options);
 }
 
-function buildCompsMenu(state) {
-  const selected = Array.isArray(state?.comps) ? state.comps : [];
-  const options = COMPETITIONS.map(c => ({
-    label: c.label,
-    value: c.value,
-    default: selected.includes(c.value)
-  }));
-
-  return new StringSelectMenuBuilder()
-    .setCustomId('planning:comps')
-    .setPlaceholder('Compétitions — coche ce que tu veux')
-    .setMinValues(0)
-    .setMaxValues(options.length)
-    .addOptions(options);
-}
-
 function buildButtonsRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('planning:save_replace').setStyle(ButtonStyle.Success).setLabel('Enregistrer (REMPLACER)'),
     new ButtonBuilder().setCustomId('planning:save_add').setStyle(ButtonStyle.Primary).setLabel('Enregistrer (AJOUTER)'),
-    new ButtonBuilder().setCustomId('planning:note_time').setStyle(ButtonStyle.Secondary).setLabel('✍️ Note horaire'),
+    new ButtonBuilder().setCustomId('planning:edit_line').setStyle(ButtonStyle.Secondary).setLabel('✍️ Ligne (note + comp)'),
     new ButtonBuilder().setCustomId('planning:clear').setStyle(ButtonStyle.Danger).setLabel('Tout vider'),
     new ButtonBuilder().setCustomId('planning:cancel').setStyle(ButtonStyle.Secondary).setLabel('Fermer')
   );
@@ -236,13 +244,16 @@ function buildButtonsRow() {
 function buildUiMessageContent(guildCfg, jour, state) {
   const preview = renderDayBlock(jour, state);
   const clubName = guildCfg?.clubName || 'CLUB';
-  return `**${clubName}** — **${dayLabelFR(jour)}**\n_Coche/décoche, puis ajoute tes notes par horaire._\n\n${preview}`;
+  return (
+    `**${clubName}** — **${dayLabelFR(jour)}**\n` +
+    `_1) Coche tes horaires  2) Clique "Ligne (note + comp)"  3) Enregistrer._\n\n` +
+    `${preview}`
+  );
 }
 
 function buildUiComponents(state) {
   return [
     new ActionRowBuilder().addComponents(buildTimesMenu(state)),
-    new ActionRowBuilder().addComponents(buildCompsMenu(state)),
     buildButtonsRow()
   ];
 }
@@ -253,24 +264,31 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
   const currentDay = readDaySaved(savedPlanning, jour);
 
   const inTimes = uniqueSorted((incomingState?.times || []).filter(x => FIXED_TIMES.includes(x)));
-  const inComps = uniqueSorted((incomingState?.comps || []).filter(x => COMPETITIONS.some(c => c.value === x)));
-  const inNotes = sanitizeNotesMap(incomingState?.notes);
+  const inEntries = sanitizeEntriesMap(incomingState?.entries);
 
   let nextDay;
 
   if (mode === 'add') {
     const mergedTimes = uniqueSorted([...(currentDay.times || []), ...inTimes]);
-    const mergedComps = uniqueSorted([...(currentDay.comps || []), ...inComps]);
 
-    const mergedNotes = { ...(currentDay.notes || {}), ...inNotes };
-    const cleanedNotes = {};
-    for (const t of mergedTimes) if (mergedNotes[t]) cleanedNotes[t] = mergedNotes[t];
+    // merge entries (incoming écrase la ligne d'une heure donnée)
+    const mergedEntries = { ...(currentDay.entries || {}), ...inEntries };
 
-    nextDay = { times: mergedTimes, comps: mergedComps, notes: cleanedNotes };
+    // prune entries aux mergedTimes
+    const cleaned = {};
+    const set = new Set(mergedTimes);
+    for (const [t, v] of Object.entries(mergedEntries)) {
+      if (set.has(t)) cleaned[t] = v;
+    }
+
+    nextDay = { times: mergedTimes, entries: cleaned };
   } else {
-    const cleanedNotes = {};
-    for (const t of inTimes) if (inNotes[t]) cleanedNotes[t] = inNotes[t];
-    nextDay = { times: inTimes, comps: inComps, notes: cleanedNotes };
+    // replace : remplace tout, prune entries hors times sélectionnés
+    const cleaned = {};
+    for (const t of inTimes) {
+      if (inEntries[t]) cleaned[t] = inEntries[t];
+    }
+    nextDay = { times: inTimes, entries: cleaned };
   }
 
   const nextPlanning = { ...savedPlanning, [jour]: nextDay };
@@ -280,21 +298,24 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
 
 function clearDay(guildId, guildCfg, jour) {
   const savedPlanning = getSavedPlanning(guildCfg);
-  const nextPlanning = { ...savedPlanning, [jour]: { times: [], comps: [], notes: {} } };
+  const nextPlanning = { ...savedPlanning, [jour]: { times: [], entries: {} } };
   updateGuildConfig(guildId, { planning: nextPlanning });
   return nextPlanning[jour];
 }
 
-/* ===================== MODAL NOTE HORAIRE (FIXED) ===================== */
-function buildNoteTimeModal(state) {
+/* ===================== MODAL LIGNE (note + comp) ===================== */
+function buildLineModal(state) {
   const modal = new ModalBuilder()
-    .setCustomId('planning:modal_note_time')
-    .setTitle('Note par horaire');
+    .setCustomId('planning:modal_line')
+    .setTitle('Ligne horaire');
 
   const suggestedTime =
     Array.isArray(state?.times) && state.times.length ? state.times[0] : '22:20';
 
-  // ✅ IMPORTANT : label <= 45 caractères (sinon modal -> erreur Discord)
+  const entry = isPlainObject(state?.entries?.[suggestedTime]) ? state.entries[suggestedTime] : {};
+  const suggestedNote = String(entry.note || '').slice(0, 200);
+  const suggestedComp = String(entry.comp || '').slice(0, 30);
+
   const inputTime = new TextInputBuilder()
     .setCustomId('planning:time_input')
     .setLabel('Heure (ex: 22:20)')
@@ -304,16 +325,27 @@ function buildNoteTimeModal(state) {
     .setPlaceholder(suggestedTime)
     .setValue(suggestedTime);
 
+  const inputComp = new TextInputBuilder()
+    .setCustomId('planning:comp_input')
+    .setLabel('Compétition (VPG BELGIQUE / VPG SUISSE / VSC)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(30)
+    .setPlaceholder('VPG BELGIQUE')
+    .setValue(suggestedComp);
+
   const inputNote = new TextInputBuilder()
     .setCustomId('planning:note_input')
-    .setLabel('Note (vide = supprimer)')
+    .setLabel('Note (optionnel)')
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(false)
     .setMaxLength(200)
-    .setPlaceholder('Ex: CRIMSON ELITE / LASPHINX FC');
+    .setPlaceholder('Ex: ELEVEN SAINTS NATION / MGT MONTROLI ES')
+    .setValue(suggestedNote);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(inputTime),
+    new ActionRowBuilder().addComponents(inputComp),
     new ActionRowBuilder().addComponents(inputNote)
   );
 
@@ -335,15 +367,14 @@ async function handleComponentInteraction(interaction) {
   const key = getStateKey(guildId, userId);
   const fallbackJour = getTodayJourParis();
 
-  const st = uiState.get(key) || { jour: fallbackJour, times: [], comps: [], notes: {} };
+  const st = uiState.get(key) || { jour: fallbackJour, times: [], entries: {} };
   st.jour = normalizeJour(st.jour) || fallbackJour;
-  st.notes = (st.notes && typeof st.notes === 'object') ? st.notes : {};
+  st.entries = isPlainObject(st.entries) ? st.entries : {};
 
   if (!st.__loadedFromSaved) {
     const daySaved = readDaySaved(savedPlanning, st.jour);
     st.times = daySaved.times;
-    st.comps = daySaved.comps;
-    st.notes = daySaved.notes || {};
+    st.entries = daySaved.entries || {};
     st.__loadedFromSaved = true;
   }
 
@@ -353,13 +384,14 @@ async function handleComponentInteraction(interaction) {
 
     if (customId === 'planning:times') {
       st.times = uniqueSorted((interaction.values || []).filter(x => FIXED_TIMES.includes(x)));
-      const pruned = {};
-      for (const t of st.times) if (st.notes?.[t]) pruned[t] = st.notes[t];
-      st.notes = pruned;
-    }
 
-    if (customId === 'planning:comps') {
-      st.comps = uniqueSorted((interaction.values || []).filter(x => COMPETITIONS.some(c => c.value === x)));
+      // prune entries si une heure n'est plus cochée
+      const pruned = {};
+      const set = new Set(st.times);
+      for (const [t, v] of Object.entries(st.entries || {})) {
+        if (set.has(t)) pruned[t] = v;
+      }
+      st.entries = pruned;
     }
 
     uiState.set(key, st);
@@ -374,9 +406,9 @@ async function handleComponentInteraction(interaction) {
 
   // BOUTONS
   if (interaction.isButton()) {
-    if (customId === 'planning:note_time') {
+    if (customId === 'planning:edit_line') {
       uiState.set(key, st);
-      await interaction.showModal(buildNoteTimeModal(st)).catch(() => {});
+      await interaction.showModal(buildLineModal(st)).catch(() => {});
       return true;
     }
 
@@ -391,8 +423,7 @@ async function handleComponentInteraction(interaction) {
     if (customId === 'planning:clear') {
       const cleared = clearDay(guildId, guildCfg, st.jour);
       st.times = cleared.times || [];
-      st.comps = cleared.comps || [];
-      st.notes = cleared.notes || {};
+      st.entries = cleared.entries || {};
       uiState.set(key, st);
 
       await interaction.editReply({
@@ -408,8 +439,7 @@ async function handleComponentInteraction(interaction) {
       const saved = saveDay(guildId, guildCfg, st.jour, mode, st);
 
       st.times = saved.times || [];
-      st.comps = saved.comps || [];
-      st.notes = saved.notes || {};
+      st.entries = saved.entries || {};
       uiState.set(key, st);
 
       await interaction.editReply({
@@ -424,10 +454,10 @@ async function handleComponentInteraction(interaction) {
   return false;
 }
 
-/* ===================== ROUTAGE MODAL (note horaire) ===================== */
+/* ===================== ROUTAGE MODAL (ligne horaire) ===================== */
 async function handleModalSubmit(interaction) {
   const customId = interaction.customId || '';
-  if (customId !== 'planning:modal_note_time') return false;
+  if (customId !== 'planning:modal_line') return false;
   if (!interaction.guildId) return false;
 
   const guildId = interaction.guildId;
@@ -436,13 +466,18 @@ async function handleModalSubmit(interaction) {
 
   const st = uiState.get(key);
   if (!st) {
-    await interaction.reply({ content: '⚠️ Session planning introuvable. Relance `/planning edit`.', ephemeral: true }).catch(() => {});
+    await interaction.reply({
+      content: '⚠️ Session planning introuvable. Relance `/planning edit`.',
+      ephemeral: true
+    }).catch(() => {});
     return true;
   }
 
   const timeRaw = (interaction.fields.getTextInputValue('planning:time_input') || '').trim();
+  const compRaw = (interaction.fields.getTextInputValue('planning:comp_input') || '').trim();
   const noteRaw = (interaction.fields.getTextInputValue('planning:note_input') || '').trim();
 
+  // ✅ Heures FIXES seulement
   if (!FIXED_TIMES.includes(timeRaw)) {
     await interaction.reply({
       content: `❌ Heure invalide. Heures possibles : ${FIXED_TIMES.join(' / ')}`,
@@ -451,6 +486,7 @@ async function handleModalSubmit(interaction) {
     return true;
   }
 
+  // ✅ l'heure doit être cochée
   const times = Array.isArray(st.times) ? st.times : [];
   if (!times.includes(timeRaw)) {
     await interaction.reply({
@@ -460,16 +496,36 @@ async function handleModalSubmit(interaction) {
     return true;
   }
 
-  st.notes = (st.notes && typeof st.notes === 'object') ? st.notes : {};
+  // ✅ comp doit être vide OU dans la liste
+  let compFinal = '';
+  if (compRaw) {
+    if (!COMP_VALUES.includes(compRaw)) {
+      await interaction.reply({
+        content: `❌ Compétition invalide. Possibles : ${COMP_VALUES.join(' / ')}`,
+        ephemeral: true
+      }).catch(() => {});
+      return true;
+    }
+    compFinal = compRaw;
+  }
 
-  if (!noteRaw) delete st.notes[timeRaw];
-  else st.notes[timeRaw] = noteRaw.slice(0, 200);
+  st.entries = isPlainObject(st.entries) ? st.entries : {};
+
+  // si tout est vide => suppression de la ligne (pour cette heure)
+  if (!noteRaw && !compFinal) {
+    delete st.entries[timeRaw];
+  } else {
+    st.entries[timeRaw] = {
+      note: clampText(noteRaw, 200),
+      comp: compFinal
+    };
+  }
 
   uiState.set(key, st);
 
   await interaction.reply({
     content:
-      `✅ Note mise à jour pour **${dayLabelFR(st.jour)}** à **${timeRaw}**.\n\n` +
+      `✅ Ligne mise à jour pour **${dayLabelFR(st.jour)}** à **${timeRaw}**.\n\n` +
       `${renderDayBlock(st.jour, st)}\n\n` +
       `➡️ Reviens sur le message planning et clique **Enregistrer**.`,
     ephemeral: true
@@ -482,7 +538,7 @@ async function handleModalSubmit(interaction) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('planning')
-    .setDescription('Planning : horaires + compétitions + notes par horaire.')
+    .setDescription('Planning : horaires + (note + compétition) par horaire.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     .addSubcommand(sc =>
@@ -518,7 +574,7 @@ module.exports = {
     .addSubcommand(sc =>
       sc
         .setName('edit')
-        .setDescription('Ouvre les cases + notes par horaire.')
+        .setDescription('Ouvre l’UI (horaires + ligne note/comp par horaire).')
         .addStringOption(o =>
           o.setName('jour')
             .setDescription('Optionnel : si vide → jour actuel')
@@ -532,6 +588,7 @@ module.exports = {
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const savedPlanning = getSavedPlanning(guildCfg);
 
+    // SHOW
     if (sub === 'show') {
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
       const content = jourOpt
@@ -540,10 +597,13 @@ module.exports = {
 
       const chunks = chunkMessage(content);
       await interaction.reply({ content: chunks[0], ephemeral: false });
-      for (const extra of chunks.slice(1)) await interaction.followUp({ content: extra, ephemeral: false }).catch(() => {});
+      for (const extra of chunks.slice(1)) {
+        await interaction.followUp({ content: extra, ephemeral: false }).catch(() => {});
+      }
       return;
     }
 
+    // POST
     if (sub === 'post') {
       const guild = interaction.guild;
       const targetChannel = interaction.options.getChannel('salon') || interaction.channel;
@@ -552,14 +612,19 @@ module.exports = {
       const me = guild.members.me;
       const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages];
       if (!targetChannel?.permissionsFor?.(me)?.has(needed)) {
-        return interaction.reply({ content: `❌ Je ne peux pas écrire dans <#${targetChannel?.id || 'inconnu'}>.`, ephemeral: true });
+        return interaction.reply({
+          content: `❌ Je ne peux pas écrire dans <#${targetChannel?.id || 'inconnu'}>.`,
+          ephemeral: true
+        });
       }
 
       const content = jourOpt
         ? renderDayBlock(jourOpt, readDaySaved(savedPlanning, jourOpt))
         : renderWeekBlocks(savedPlanning);
 
-      for (const part of chunkMessage(content)) await targetChannel.send({ content: part }).catch(() => {});
+      for (const part of chunkMessage(content)) {
+        await targetChannel.send({ content: part }).catch(() => {});
+      }
 
       return interaction.reply({
         content: `📌 Planning posté dans <#${targetChannel.id}>${jourOpt ? ` (**${dayLabelFR(jourOpt)}**)` : ''}.`,
@@ -567,6 +632,7 @@ module.exports = {
       });
     }
 
+    // EDIT
     if (sub === 'edit') {
       const jourOpt = normalizeJour(interaction.options.getString('jour')) || getTodayJourParis();
       const daySaved = readDaySaved(savedPlanning, jourOpt);
@@ -574,8 +640,7 @@ module.exports = {
       const st = {
         jour: jourOpt,
         times: daySaved.times || [],
-        comps: daySaved.comps || [],
-        notes: daySaved.notes || {},
+        entries: daySaved.entries || {},
         __loadedFromSaved: true
       };
 
