@@ -5,6 +5,7 @@
     "embedColor": "ff0000",
     "logChannelId": "1393776090086117426",
     "rapportChannelId": "1446471718943326259",
+    "logDisposChannelId": "1461036858321404015",
     "mainDispoChannelId": "1429059902852173936",
     "dispoMessages": {
       "lundi": "1429061125307105290",
@@ -62,6 +63,12 @@
         "clearReactions": true,
         "sendCloseMessage": true
       },
+      "weekly": {
+        "enabled": false,
+        "day": "jeudi",
+        "time": "22:00",
+        "windowMin": 2
+      },
       "nickSync": {
         "enabled": true,
         "minute": 10,
@@ -112,6 +119,12 @@
         "windowMin": 2,
         "clearReactions": true,
         "sendCloseMessage": true
+      },
+      "weekly": {
+        "enabled": false,
+        "day": "dimanche",
+        "time": "22:00",
+        "windowMin": 2
       },
       "nickSync": {
         "enabled": false,
