@@ -143,7 +143,7 @@ function sanitizeEntriesMap(entries) {
 
     const obj = isPlainObject(val) ? val : {};
     const opponent = clampText(obj.opponent, 60).trim();
-    const comp = clampText(obj.comp, 30).trim(); // ✅ libre (MATCH AMICAL, TOURNOI CPG, VPG SUISSE, etc.)
+    const comp = clampText(obj.comp, 30).trim();
 
     if (!opponent && !comp) continue;
     out[t] = { opponent, comp };
@@ -163,7 +163,7 @@ function readDaySaved(savedPlanning, jour) {
 
   const dateLabel = sanitizeDateLabel(d?.dateLabel);
 
-  const times = Array.isArray(d?.times) // ✅ UNIQUEMENT heures fixes
+  const times = Array.isArray(d?.times)
     ? d.times.filter(x => FIXED_TIMES.includes(x))
     : [];
 
@@ -190,12 +190,9 @@ function buildLineForTime(jour, time, entry) {
   const opponent = String(entry?.opponent || '').trim();
   const comp = String(entry?.comp || '').trim();
 
-  // Week-end : si user coche des horaires -> on reste en "VS ..."
-  // Le fallback "SESSION LIBRE" se gère au niveau du jour.
   const opponentTxt = opponent ? `**${clampText(opponent, 60)}**` : `**À DÉFINIR**`;
   const compTxt = comp ? ` *(${clampText(comp, 30)})*` : '';
 
-  // ✅ EXACT : "— VS **...** *(...)*"
   return `🔹 ${timeFR} — VS ${opponentTxt}${compTxt}`;
 }
 
@@ -209,9 +206,6 @@ function renderDayFancy(jour, dayData) {
 
   let timesToShow;
 
-  // Règles :
-  // - Lundi→Jeudi : si aucun horaire coché -> afficher toutes les heures en VS À DÉFINIR
-  // - Vendredi→Dimanche : si aucun horaire coché -> afficher "21h00 — SESSION LIBRE"
   if (DAYS_MATCH.has(jour)) {
     timesToShow = timesSelected.length ? timesSelected : FIXED_TIMES;
   } else if (DAYS_FREE.has(jour)) {
@@ -267,15 +261,24 @@ function buildTimesMenu(state) {
     .addOptions(options);
 }
 
-function buildButtonsRow() {
-  return new ActionRowBuilder().addComponents(
+/**
+ * ✅ Discord = max 5 boutons / ActionRow
+ * On split en 2 rows (row1: 5 boutons, row2: 1 bouton).
+ */
+function buildButtonsRows() {
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('planning:save_replace').setStyle(ButtonStyle.Success).setLabel('Enregistrer (REMPLACER)'),
     new ButtonBuilder().setCustomId('planning:save_add').setStyle(ButtonStyle.Primary).setLabel('Enregistrer (AJOUTER)'),
     new ButtonBuilder().setCustomId('planning:edit_line').setStyle(ButtonStyle.Secondary).setLabel('✍️ Ligne (VS + comp)'),
     new ButtonBuilder().setCustomId('planning:set_date').setStyle(ButtonStyle.Secondary).setLabel('🗓️ Date du jour'),
-    new ButtonBuilder().setCustomId('planning:clear').setStyle(ButtonStyle.Danger).setLabel('Tout vider'),
+    new ButtonBuilder().setCustomId('planning:clear').setStyle(ButtonStyle.Danger).setLabel('Tout vider')
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('planning:cancel').setStyle(ButtonStyle.Secondary).setLabel('Fermer')
   );
+
+  return [row1, row2];
 }
 
 function buildUiMessageContent(guildCfg, jour, state) {
@@ -292,7 +295,7 @@ function buildUiMessageContent(guildCfg, jour, state) {
 function buildUiComponents(state) {
   return [
     new ActionRowBuilder().addComponents(buildTimesMenu(state)),
-    buildButtonsRow()
+    ...buildButtonsRows()
   ];
 }
 
@@ -309,23 +312,17 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
 
   if (mode === 'add') {
     const mergedTimes = uniqueSorted([...(currentDay.times || []), ...inTimes]);
-
-    // merge entries (incoming écrase la ligne de l'heure)
     const mergedEntries = { ...(currentDay.entries || {}), ...inEntries };
 
-    // prune entries aux mergedTimes
     const cleaned = {};
     const set = new Set(mergedTimes);
     for (const [t, v] of Object.entries(mergedEntries)) {
       if (set.has(t)) cleaned[t] = v;
     }
 
-    // date : si l'utilisateur a modifié la date dans l'UI -> on prend inDateLabel, sinon on conserve
     const dateLabel = inDateLabel || currentDay.dateLabel || '';
-
     nextDay = { dateLabel, times: mergedTimes, entries: cleaned };
   } else {
-    // replace : remplace TOUT (times + entries), date = UI
     const cleaned = {};
     for (const t of inTimes) {
       if (inEntries[t]) cleaned[t] = inEntries[t];
@@ -416,7 +413,6 @@ function buildDateModal(state) {
 
   return modal;
 }
-
 /* ===================== ROUTAGE INTERACTIONS (menus/boutons) ===================== */
 async function handleComponentInteraction(interaction) {
   const customId = interaction.customId || '';
