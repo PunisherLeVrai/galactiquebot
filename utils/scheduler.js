@@ -1,29 +1,28 @@
-// utils/scheduler.js — SANS SNAPSHOTS (clean)
-// ✔ noon: rappel + rapport
+// utils/scheduler.js — SANS SNAPSHOTS (clean) + LOGS EN EMBED + RAPPORT SEMAINE (JEUDI) SANS SNAPSHOTS
+// ✔ noon: rappel + rapport (dispos du jour)
 // ✔ close: rapport + fermeture (lock embed + clear reactions + message)
+// ✔ weekly: rapport semaine (calculé via salon logDisposChannelId) -> JEUDI
 // ✔ nickSync: synchro pseudos
 // ✖ snapshots supprimés
-// ✖ weekly snapshots supprimé
+//
+// Requiert dans servers.json :
+// - logChannelId (où le bot log en embed)
+// - logDisposChannelId (salon "LOGIS DISPO" pour calculer la semaine)
+// - automationSchedule.weekly (enabled/day/time)
 
 const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  ChannelType
 } = require('discord.js');
 
 const { getGuildConfig } = require('./config');
 const { buildNickname } = require('./nickname');
 
 const DEFAULT_COLOR = 0xff4db8;
-
-/* ============================================================
-   LOG
-============================================================ */
-function logInfo(...args) { console.log('ℹ️ [AUTO]', ...args); }
-function logWarn(...args) { console.log('⚠️ [AUTO]', ...args); }
-function logErr(...args)  { console.error('❌ [AUTO]', ...args); }
 
 /* ============================================================
    UTILS BASIQUES
@@ -51,6 +50,12 @@ const sanitize = (t) =>
 
 function isEligibleDay(jour) {
   return ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'].includes(jour);
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+function toISODateFromParisParts(p) {
+  return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
 }
 
 /* ============================================================
@@ -119,7 +124,6 @@ function withinGraceAfter(nowH, nowM, targetH, targetM, graceMin = 10) {
 
 /* ============================================================
    SCHEDULE PAR SERVEUR (configurable dans servers.json)
-   NOTE: weekly supprimé (snapshots supprimés)
 ============================================================ */
 function getScheduleForGuild(guildId) {
   const cfg = getGuildConfig(guildId) || {};
@@ -129,10 +133,12 @@ function getScheduleForGuild(guildId) {
 
   const noon = s.noon || {};
   const close = s.close || {};
+  const weekly = s.weekly || {};
   const nickSync = s.nickSync || {};
 
   const noonTime = parseTimeHHMM(noon.time, { hour: 12, minute: 0 });
   const closeTime = parseTimeHHMM(close.time, { hour: 17, minute: 0 });
+  const weeklyTime = parseTimeHHMM(weekly.time, { hour: 22, minute: 0 });
 
   return {
     timezone,
@@ -153,6 +159,15 @@ function getScheduleForGuild(guildId) {
       graceMin: Number.isFinite(close.graceMin) ? close.graceMin : 10,
       clearReactions: close.clearReactions ?? true,
       sendCloseMessage: close.sendCloseMessage ?? true
+    },
+
+    weekly: {
+      enabled: weekly.enabled ?? false,
+      day: String(weekly.day || 'jeudi').toLowerCase(),
+      hour: weeklyTime.hour,
+      minute: weeklyTime.minute,
+      graceMin: Number.isFinite(weekly.graceMin) ? weekly.graceMin : 10,
+      lookbackDays: Number.isFinite(weekly.lookbackDays) ? weekly.lookbackDays : 7 // par défaut 7 jours
     },
 
     nickSync: {
@@ -179,6 +194,39 @@ function computeTargetGuildIds(client, opts = {}) {
   return base
     .filter(id => present.has(id))
     .filter(id => !!getGuildConfig(id));
+}
+
+/* ============================================================
+   LOGS EN EMBED (dans logChannelId)
+============================================================ */
+async function sendLogEmbed(client, guildId, level, title, lines = []) {
+  try {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return;
+
+    const cfg = getGuildConfig(guildId) || {};
+    const logChannelId = cfg.logChannelId;
+    if (!isValidId(logChannelId)) return;
+
+    const ch = await guild.channels.fetch(logChannelId).catch(() => null);
+    if (!ch || !ch.isTextBased()) return;
+
+    const color = getEmbedColorFromConfig(guildId);
+
+    const lvl = String(level || 'INFO').toUpperCase();
+    const icon = lvl === 'ERROR' ? '❌' : (lvl === 'WARN' ? '⚠️' : 'ℹ️');
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(`${icon} ${sanitize(title || 'Log')}`)
+      .setDescription(sanitize((Array.isArray(lines) ? lines : [String(lines)]).filter(Boolean).join('\n')).slice(0, 3500))
+      .setFooter({ text: `${getClubName(cfg, guild)} • Scheduler` })
+      .setTimestamp();
+
+    await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
+  } catch {
+    // silence : log embeds ne doivent jamais casser le scheduler
+  }
 }
 
 /* ============================================================
@@ -349,7 +397,7 @@ async function runNoonReminderForGuild(client, guildId, jour, schedule) {
   }
 }
 
-async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, schedule) {
+async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, schedule, extra = {}) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
 
@@ -373,11 +421,27 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
     .setFooter({ text: `${getClubName(data.cfg, guild)} ⚫ Rapport automatisé` })
     .setTimestamp();
 
+  if (extra?.description) {
+    embed.setDescription(sanitize(extra.description).slice(0, 3500));
+  }
+
   await reportChannel.send({
     embeds: [embed],
     components: [data.rowBtn],
     allowedMentions: schedule.noon.mentionInReports ? { parse: ['users'] } : { parse: [] }
   }).catch(() => {});
+
+  // Optionnel : log dans "LOGIS DISPO" si configuré (utile pour le rapport semaine live via salon)
+  if (isValidId(data.cfg.logDisposChannelId)) {
+    const logCh = await guild.channels.fetch(data.cfg.logDisposChannelId).catch(() => null);
+    if (logCh?.isTextBased()) {
+      await logCh.send({
+        embeds: [embed],
+        components: [data.rowBtn],
+        allowedMentions: { parse: [] }
+      }).catch(() => {});
+    }
+  }
 }
 
 /* ============================================================
@@ -431,6 +495,143 @@ async function closeDisposForGuild(client, guildId, jour, schedule) {
 }
 
 /* ============================================================
+   RAPPORT SEMAINE (JEUDI) — SANS SNAPSHOTS — Calcul via salon logDisposChannelId
+   Principe:
+   - On lit les embeds postés dans logDisposChannelId sur une période (lookbackDays)
+   - On parse la field "⏳ N’ont pas réagi (...)" pour récupérer les mentions
+   - On cumule par user le nombre de jours sans réaction
+============================================================ */
+function parseMentionsFromText(text) {
+  const s = String(text || '');
+  const ids = new Set();
+  const re = /<@(\d{17,20})>/g;
+  let m;
+  while ((m = re.exec(s))) ids.add(m[1]);
+  return [...ids];
+}
+
+function isDailyReportEmbed(embed) {
+  const title = String(embed?.title || '');
+  return title.startsWith('📅 RAPPORT - ');
+}
+
+async function autoWeekDispoReportForGuild(client, guildId, schedule) {
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return;
+
+  const cfg = getGuildConfig(guild.id) || {};
+  const reportChannelId = cfg.rapportChannelId;
+  const logDisposChannelId = cfg.logDisposChannelId;
+
+  if (!isValidId(reportChannelId) || !isValidId(logDisposChannelId)) {
+    await sendLogEmbed(client, guildId, 'WARN', 'Rapport semaine ignoré', [
+      !isValidId(reportChannelId) ? '• rapportChannelId manquant' : '',
+      !isValidId(logDisposChannelId) ? '• logDisposChannelId manquant (salon LOGIS DISPO)' : ''
+    ].filter(Boolean));
+    return;
+  }
+
+  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
+  const logCh = await guild.channels.fetch(logDisposChannelId).catch(() => null);
+
+  if (!reportChannel?.isTextBased() || !logCh?.isTextBased()) return;
+
+  const color = getEmbedColorFromConfig(guild.id);
+  const clubLabel = getClubName(cfg, guild);
+
+  const lookbackDays = Math.max(2, Number(schedule.weekly.lookbackDays || 7));
+  const sinceMs = Date.now() - (lookbackDays * 24 * 60 * 60 * 1000);
+
+  // On récupère un volume raisonnable et on filtre par date (Discord ne supporte pas un "after" strict partout)
+  // Si tu veux plus de profondeur, augmente limit (mais attention rate limits).
+  const fetched = await logCh.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!fetched) return;
+
+  // Filtre messages bot + embeds "rapport jour"
+  const daily = [...fetched.values()]
+    .filter(m => m.createdTimestamp >= sinceMs)
+    .filter(m => m.author?.id === client.user.id)
+    .filter(m => Array.isArray(m.embeds) && m.embeds.length)
+    .map(m => ({ msg: m, embed: m.embeds[0] }))
+    .filter(x => isDailyReportEmbed(x.embed));
+
+  if (!daily.length) {
+    const embedEmpty = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('📅 RAPPORT SEMAINE — Disponibilités')
+      .setDescription(
+        [
+          '⚠️ Aucun rapport journalier détecté dans le salon **LOGIS DISPO** sur la période.',
+          `🗓️ Fenêtre : **${lookbackDays}** jour(s)`,
+          '',
+          '➡️ Assure-toi que le scheduler envoie bien les rapports journaliers dans ce salon.'
+        ].join('\n')
+      )
+      .setFooter({ text: `${clubLabel} • Rapport semaine` })
+      .setTimestamp();
+
+    await reportChannel.send({ embeds: [embedEmpty], allowedMentions: { parse: [] } }).catch(() => {});
+    return;
+  }
+
+  // Cumul des non-répondus par user
+  const misses = new Map(); // userId -> count
+  const usedDays = new Set(); // évite doublons si plusieurs rapports du même jour
+
+  for (const { msg, embed } of daily) {
+    const createdISO = new Date(msg.createdTimestamp);
+    const keyDay = `${createdISO.getFullYear()}-${pad2(createdISO.getMonth() + 1)}-${pad2(createdISO.getDate())}`;
+    if (usedDays.has(keyDay)) continue;
+    usedDays.add(keyDay);
+
+    const fields = Array.isArray(embed.fields) ? embed.fields : [];
+    const nr = fields.find(f => String(f?.name || '').startsWith('⏳ N’ont pas réagi'));
+    if (!nr?.value) continue;
+
+    const ids = parseMentionsFromText(nr.value);
+    for (const id of ids) {
+      misses.set(id, (misses.get(id) || 0) + 1);
+    }
+  }
+
+  const entries = [...misses.entries()]
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  const headerLines = [
+    `🗓️ Fenêtre analysée : **${usedDays.size}** jour(s) (sur ${lookbackDays} demandés)`,
+    `📌 Source : <#${logDisposChannelId}>`
+  ];
+
+  if (!entries.length) {
+    const embedOK = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('✅ RAPPORT SEMAINE — Tout le monde a réagi')
+      .setDescription(headerLines.join('\n'))
+      .setFooter({ text: `${clubLabel} • Rapport semaine` })
+      .setTimestamp();
+
+    await reportChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } }).catch(() => {});
+    return;
+  }
+
+  const linesTop = entries.slice(0, 25).map(([id, n]) => `• <@${id}> — **${n}** jour(s) sans réaction`);
+
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`⏳ RAPPORT SEMAINE — Non-réagis (total : ${entries.length})`)
+    .setDescription(headerLines.join('\n'))
+    .addFields({
+      name: 'Classement (top 25)',
+      value: linesTop.join('\n').slice(0, 1024)
+    })
+    .setFooter({ text: `${clubLabel} • Rapport semaine` })
+    .setTimestamp();
+
+  await reportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
+}
+
+/* ============================================================
    SYNC PSEUDOS (auto)
 ============================================================ */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -473,9 +674,7 @@ async function autoSyncNicknamesForGuild(client, guildId, schedule) {
    INIT SCHEDULER (INRATABLE)
 ============================================================ */
 function initScheduler(client, opts = {}) {
-  logInfo('Scheduler ON (robuste) : noon / close / nickSync (snapshots OFF)');
-
-  // lastRun[guildId] = { noon, close, nick }
+  // lastRun[guildId] = { noon, close, weekly, nick }
   const lastRun = new Map();
   let tickRunning = false;
 
@@ -494,7 +693,7 @@ function initScheduler(client, opts = {}) {
         const { hour, minute, isoDate: dateKey, jour } = getParisParts(schedule.timezone);
         if (!isEligibleDay(jour)) continue;
 
-        const state = lastRun.get(gid) || { noon: null, close: null, nick: null };
+        const state = lastRun.get(gid) || { noon: null, close: null, weekly: null, nick: null };
 
         // --- NOON (rappel + rapport) ---
         if (
@@ -504,19 +703,26 @@ function initScheduler(client, opts = {}) {
           const key = `${dateKey}-noon-${schedule.noon.hour}:${schedule.noon.minute}`;
           if (state.noon !== key) {
             state.noon = key;
-            logInfo(`NOON ${gid} -> ${jour} (${schedule.noon.hour}:${String(schedule.noon.minute).padStart(2,'0')})`);
+
+            // log embed
+            await sendLogEmbed(client, gid, 'INFO', 'NOON — Rappel + Rapport', [
+              `• Jour : **${jour.toUpperCase()}**`,
+              `• Heure : **${pad2(schedule.noon.hour)}:${pad2(schedule.noon.minute)}**`
+            ]);
 
             try { await runNoonReminderForGuild(client, gid, jour, schedule); }
-            catch (e) { logErr(`noon reminder (${gid})`, e?.message || e); }
+            catch (e) {
+              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Noon reminder', [String(e?.message || e)]);
+            }
 
             try {
               await sendDetailedReportForGuild(
                 client, gid, jour,
-                `${schedule.noon.hour}h${String(schedule.noon.minute).padStart(2,'0')}`,
+                `${schedule.noon.hour}h${pad2(schedule.noon.minute)}`,
                 schedule
               );
             } catch (e) {
-              logErr(`noon report (${gid})`, e?.message || e);
+              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Noon report', [String(e?.message || e)]);
             }
           }
         }
@@ -529,20 +735,51 @@ function initScheduler(client, opts = {}) {
           const key = `${dateKey}-close-${schedule.close.hour}:${schedule.close.minute}`;
           if (state.close !== key) {
             state.close = key;
-            logInfo(`CLOSE ${gid} -> ${jour} (${schedule.close.hour}:${String(schedule.close.minute).padStart(2,'0')})`);
+
+            await sendLogEmbed(client, gid, 'INFO', 'CLOSE — Rapport + Fermeture', [
+              `• Jour : **${jour.toUpperCase()}**`,
+              `• Heure : **${pad2(schedule.close.hour)}:${pad2(schedule.close.minute)}**`,
+              `• Clear reactions : **${schedule.close.clearReactions ? 'ON' : 'OFF'}**`
+            ]);
 
             try {
               await sendDetailedReportForGuild(
                 client, gid, jour,
-                `${schedule.close.hour}h${String(schedule.close.minute).padStart(2,'0')}`,
+                `${schedule.close.hour}h${pad2(schedule.close.minute)}`,
                 schedule
               );
             } catch (e) {
-              logErr(`close report (${gid})`, e?.message || e);
+              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Close report', [String(e?.message || e)]);
             }
 
             try { await closeDisposForGuild(client, gid, jour, schedule); }
-            catch (e) { logErr(`close (${gid})`, e?.message || e); }
+            catch (e) {
+              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Close (fermeture)', [String(e?.message || e)]);
+            }
+          }
+        }
+
+        // --- WEEKLY (JEUDI) — Rapport semaine sans snapshots ---
+        const weeklyDayOk = jour === String(schedule.weekly.day || 'jeudi').toLowerCase();
+        if (
+          schedule.weekly.enabled &&
+          weeklyDayOk &&
+          withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)
+        ) {
+          const key = `${dateKey}-weekly-${schedule.weekly.hour}:${schedule.weekly.minute}`;
+          if (state.weekly !== key) {
+            state.weekly = key;
+
+            await sendLogEmbed(client, gid, 'INFO', 'WEEKLY — Rapport semaine', [
+              `• Jour : **${jour.toUpperCase()}**`,
+              `• Heure : **${pad2(schedule.weekly.hour)}:${pad2(schedule.weekly.minute)}**`,
+              `• Fenêtre : **${schedule.weekly.lookbackDays}** jour(s)`
+            ]);
+
+            try { await autoWeekDispoReportForGuild(client, gid, schedule); }
+            catch (e) {
+              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Weekly report', [String(e?.message || e)]);
+            }
           }
         }
 
@@ -551,8 +788,16 @@ function initScheduler(client, opts = {}) {
           const key = `${dateKey}-nick-${hour}`;
           if (state.nick !== key) {
             state.nick = key;
+
+            await sendLogEmbed(client, gid, 'INFO', 'NICKSYNC — Synchronisation pseudos', [
+              `• Heure : **${pad2(hour)}:${pad2(minute)}**`,
+              `• Sleep : **${schedule.nickSync.sleepMs}ms**`
+            ]);
+
             try { await autoSyncNicknamesForGuild(client, gid, schedule); }
-            catch (e) { logErr(`nick sync (${gid})`, e?.message || e); }
+            catch (e) {
+              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Nick sync', [String(e?.message || e)]);
+            }
           }
         }
 
@@ -574,5 +819,6 @@ module.exports = {
   runNoonReminderForGuild,
   sendDetailedReportForGuild,
   closeDisposForGuild,
+  autoWeekDispoReportForGuild,
   autoSyncNicknamesForGuild
 };
