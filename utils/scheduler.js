@@ -1,22 +1,25 @@
 // utils/scheduler.js — SANS SNAPSHOTS (clean) + LOGS EN EMBED + RAPPORT SEMAINE (JEUDI) SANS SNAPSHOTS
 // ✔ noon: rappel + rapport (dispos du jour)
 // ✔ close: rapport + fermeture (lock embed + clear reactions + message)
-// ✔ weekly: rapport semaine (calculé via salon logDisposChannelId) -> JEUDI
+// ✔ weekly: rapport semaine (calculé via salon logDisposChannelId) -> JEUDI (configurable)
 // ✔ nickSync: synchro pseudos
 // ✖ snapshots supprimés
 //
 // Requiert dans servers.json :
 // - logChannelId (où le bot log en embed)
 // - logDisposChannelId (salon "LOGIS DISPO" pour calculer la semaine)
-// - automationSchedule.weekly (enabled/day/time)
+// - automationSchedule.weekly (enabled/day/time/lookbackDays)
+
+// Important:
+// - Le rapport semaine est calculé à partir des embeds "📅 RAPPORT - ..." postés dans logDisposChannelId.
+// - Le scheduler poste aussi les rapports journaliers dans logDisposChannelId (si configuré) pour alimenter le calcul semaine.
 
 const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits,
-  ChannelType
+  PermissionFlagsBits
 } = require('discord.js');
 
 const { getGuildConfig } = require('./config');
@@ -44,7 +47,7 @@ function getEmbedColorFromConfig(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
-// 🔒 Anti-mentions accidentelles
+// 🔒 Anti-mentions accidentelles (everyone/here/roles). Les mentions users restent OK.
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
@@ -53,10 +56,6 @@ function isEligibleDay(jour) {
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
-
-function toISODateFromParisParts(p) {
-  return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
-}
 
 /* ============================================================
    DATE/TIME EUROPE/PARIS (ou timezone config)
@@ -87,7 +86,7 @@ function getParisParts(timezone = 'Europe/Paris') {
   if (hour === 24) hour = 0;
 
   const weekday = (get('weekday') || '').toLowerCase();
-  const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const isoDate = `${year}-${pad2(month)}-${pad2(day)}`;
 
   const mapJour = {
     dimanche: 'dimanche', lundi: 'lundi', mardi: 'mardi', mercredi: 'mercredi',
@@ -167,7 +166,7 @@ function getScheduleForGuild(guildId) {
       hour: weeklyTime.hour,
       minute: weeklyTime.minute,
       graceMin: Number.isFinite(weekly.graceMin) ? weekly.graceMin : 10,
-      lookbackDays: Number.isFinite(weekly.lookbackDays) ? weekly.lookbackDays : 7 // par défaut 7 jours
+      lookbackDays: Number.isFinite(weekly.lookbackDays) ? weekly.lookbackDays : 7
     },
 
     nickSync: {
@@ -216,16 +215,22 @@ async function sendLogEmbed(client, guildId, level, title, lines = []) {
     const lvl = String(level || 'INFO').toUpperCase();
     const icon = lvl === 'ERROR' ? '❌' : (lvl === 'WARN' ? '⚠️' : 'ℹ️');
 
+    const desc = sanitize(
+      (Array.isArray(lines) ? lines : [String(lines)])
+        .filter(Boolean)
+        .join('\n')
+    ).slice(0, 3500);
+
     const embed = new EmbedBuilder()
       .setColor(color)
       .setTitle(`${icon} ${sanitize(title || 'Log')}`)
-      .setDescription(sanitize((Array.isArray(lines) ? lines : [String(lines)]).filter(Boolean).join('\n')).slice(0, 3500))
+      .setDescription(desc || '_-_')
       .setFooter({ text: `${getClubName(cfg, guild)} • Scheduler` })
       .setTimestamp();
 
     await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
   } catch {
-    // silence : log embeds ne doivent jamais casser le scheduler
+    // ne casse jamais le scheduler
   }
 }
 
@@ -431,7 +436,7 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
     allowedMentions: schedule.noon.mentionInReports ? { parse: ['users'] } : { parse: [] }
   }).catch(() => {});
 
-  // Optionnel : log dans "LOGIS DISPO" si configuré (utile pour le rapport semaine live via salon)
+  // Alimentation du salon LOGIS DISPO (source pour le rapport semaine)
   if (isValidId(data.cfg.logDisposChannelId)) {
     const logCh = await guild.channels.fetch(data.cfg.logDisposChannelId).catch(() => null);
     if (logCh?.isTextBased()) {
@@ -445,7 +450,7 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
 }
 
 /* ============================================================
-   CLOSE : FERMETURE (heure configurable) — SANS SNAPSHOT
+   CLOSE : FERMETURE — SANS SNAPSHOT
 ============================================================ */
 async function closeDisposForGuild(client, guildId, jour, schedule) {
   const guild = client.guilds.cache.get(guildId);
@@ -495,11 +500,7 @@ async function closeDisposForGuild(client, guildId, jour, schedule) {
 }
 
 /* ============================================================
-   RAPPORT SEMAINE (JEUDI) — SANS SNAPSHOTS — Calcul via salon logDisposChannelId
-   Principe:
-   - On lit les embeds postés dans logDisposChannelId sur une période (lookbackDays)
-   - On parse la field "⏳ N’ont pas réagi (...)" pour récupérer les mentions
-   - On cumule par user le nombre de jours sans réaction
+   RAPPORT SEMAINE (SANS SNAPSHOTS) — Calcul via salon logDisposChannelId
 ============================================================ */
 function parseMentionsFromText(text) {
   const s = String(text || '');
@@ -513,6 +514,31 @@ function parseMentionsFromText(text) {
 function isDailyReportEmbed(embed) {
   const title = String(embed?.title || '');
   return title.startsWith('📅 RAPPORT - ');
+}
+
+/**
+ * Fetch messages dans un salon jusqu'à atteindre sinceMs ou un plafond.
+ * (évite le "limit=100" insuffisant quand le salon est très actif)
+ */
+async function fetchMessagesSince(channel, sinceMs, hardCap = 600) {
+  const out = [];
+  let beforeId = null;
+
+  while (out.length < hardCap) {
+    const batch = await channel.messages.fetch({ limit: 100, ...(beforeId ? { before: beforeId } : {}) }).catch(() => null);
+    if (!batch || batch.size === 0) break;
+
+    const values = [...batch.values()];
+    out.push(...values);
+
+    const oldest = values[values.length - 1];
+    beforeId = oldest.id;
+
+    // stop si on est déjà plus vieux que la fenêtre
+    if (oldest.createdTimestamp < sinceMs) break;
+  }
+
+  return out;
 }
 
 async function autoWeekDispoReportForGuild(client, guildId, schedule) {
@@ -542,13 +568,11 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
   const lookbackDays = Math.max(2, Number(schedule.weekly.lookbackDays || 7));
   const sinceMs = Date.now() - (lookbackDays * 24 * 60 * 60 * 1000);
 
-  // On récupère un volume raisonnable et on filtre par date (Discord ne supporte pas un "after" strict partout)
-  // Si tu veux plus de profondeur, augmente limit (mais attention rate limits).
-  const fetched = await logCh.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!fetched) return;
+  const messages = await fetchMessagesSince(logCh, sinceMs, 600);
+  if (!messages.length) return;
 
-  // Filtre messages bot + embeds "rapport jour"
-  const daily = [...fetched.values()]
+  // Filtre: messages du bot + embed rapport du jour
+  const daily = messages
     .filter(m => m.createdTimestamp >= sinceMs)
     .filter(m => m.author?.id === client.user.id)
     .filter(m => Array.isArray(m.embeds) && m.embeds.length)
@@ -578,9 +602,12 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
   const misses = new Map(); // userId -> count
   const usedDays = new Set(); // évite doublons si plusieurs rapports du même jour
 
+  // Trier du plus récent au plus ancien
+  daily.sort((a, b) => b.msg.createdTimestamp - a.msg.createdTimestamp);
+
   for (const { msg, embed } of daily) {
-    const createdISO = new Date(msg.createdTimestamp);
-    const keyDay = `${createdISO.getFullYear()}-${pad2(createdISO.getMonth() + 1)}-${pad2(createdISO.getDate())}`;
+    const d = new Date(msg.createdTimestamp);
+    const keyDay = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
     if (usedDays.has(keyDay)) continue;
     usedDays.add(keyDay);
 
@@ -704,7 +731,6 @@ function initScheduler(client, opts = {}) {
           if (state.noon !== key) {
             state.noon = key;
 
-            // log embed
             await sendLogEmbed(client, gid, 'INFO', 'NOON — Rappel + Rapport', [
               `• Jour : **${jour.toUpperCase()}**`,
               `• Heure : **${pad2(schedule.noon.hour)}:${pad2(schedule.noon.minute)}**`
@@ -739,7 +765,8 @@ function initScheduler(client, opts = {}) {
             await sendLogEmbed(client, gid, 'INFO', 'CLOSE — Rapport + Fermeture', [
               `• Jour : **${jour.toUpperCase()}**`,
               `• Heure : **${pad2(schedule.close.hour)}:${pad2(schedule.close.minute)}**`,
-              `• Clear reactions : **${schedule.close.clearReactions ? 'ON' : 'OFF'}**`
+              `• Clear reactions : **${schedule.close.clearReactions ? 'ON' : 'OFF'}**`,
+              `• Message fermeture : **${schedule.close.sendCloseMessage ? 'ON' : 'OFF'}**`
             ]);
 
             try {
@@ -759,7 +786,7 @@ function initScheduler(client, opts = {}) {
           }
         }
 
-        // --- WEEKLY (JEUDI) — Rapport semaine sans snapshots ---
+        // --- WEEKLY (JEUDI par défaut) — Rapport semaine sans snapshots ---
         const weeklyDayOk = jour === String(schedule.weekly.day || 'jeudi').toLowerCase();
         if (
           schedule.weekly.enabled &&
