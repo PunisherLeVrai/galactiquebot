@@ -1,20 +1,44 @@
 // utils/config.js
 const fs = require('fs');
 const path = require('path');
-const { DATA_BASE } = require('./paths');
 
-// Dossiers
-const repoDir = path.join(__dirname, '../config');
-const persistDir = path.join(DATA_BASE, 'config');
+/* ============================================================
+   ✅ RÉSOLUTION DU DOSSIER PERSISTANT (sans utils/paths.js)
 
+   Priorité :
+   1) CONFIG_DIR (env)
+   2) /mnt/storage/config  (Railway Volume)
+   3) ./config (repo)      (fallback)
+============================================================ */
+function exists(p) {
+  try { return fs.existsSync(p); } catch { return false; }
+}
+
+function resolvePersistDir() {
+  const envDir = process.env.CONFIG_DIR?.trim();
+  if (envDir) return envDir;
+
+  // Railway volume (si tu utilises /mnt/storage)
+  if (exists('/mnt/storage')) return path.join('/mnt/storage', 'config');
+
+  // fallback (pas de persistant)
+  return null;
+}
+
+/* ============================================================
+   DOSSIERS & PATHS
+============================================================ */
+const repoDir = path.join(__dirname, '../config'); // dans ton repo
 const repoGlobalPath = path.join(repoDir, 'global.json');
 const repoServersPath = path.join(repoDir, 'servers.json');
 
-const globalPath = path.join(persistDir, 'global.json');
-const serversPath = path.join(persistDir, 'servers.json');
+const persistDir = resolvePersistDir(); // null si pas dispo
+const globalPath = persistDir ? path.join(persistDir, 'global.json') : repoGlobalPath;
+const serversPath = persistDir ? path.join(persistDir, 'servers.json') : repoServersPath;
 
 function ensureDir(dir) {
   try {
+    if (!dir) return;
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   } catch (e) {
     console.error(`❌ [config] mkdir failed: ${dir}`, e);
@@ -24,12 +48,16 @@ function ensureDir(dir) {
 ensureDir(repoDir);
 ensureDir(persistDir);
 
+/* ============================================================
+   HELPERS JSON
+============================================================ */
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
 function readJson(filePath, fallback = null) {
   try {
+    if (!filePath) return fallback;
     if (!fs.existsSync(filePath)) return fallback;
     const raw = fs.readFileSync(filePath, 'utf8');
     if (!raw.trim()) return fallback;
@@ -47,6 +75,7 @@ function readJson(filePath, fallback = null) {
  */
 function writeJsonAtomic(filePath, obj) {
   try {
+    if (!filePath) return false;
     ensureDir(path.dirname(filePath));
 
     const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
@@ -63,7 +92,6 @@ function writeJsonAtomic(filePath, obj) {
         throw e2;
       }
     }
-
     return true;
   } catch (e) {
     console.error(`❌ [config] write failed: ${filePath}`, e);
@@ -71,24 +99,34 @@ function writeJsonAtomic(filePath, obj) {
   }
 }
 
-// Persistant d'abord, sinon repo, sinon défaut + copie en persistant
+/**
+ * Persistant d'abord, sinon repo, sinon défaut.
+ * Si on a un persistDir, on copie le repo vers persistant au 1er run.
+ */
 function loadWithFallback(persistPath, repoPath, defaultValue) {
+  // 1) persistant
   const persisted = readJson(persistPath, null);
   if (isPlainObject(persisted)) return persisted;
 
+  // 2) repo
   const fromRepo = readJson(repoPath, defaultValue);
   if (isPlainObject(fromRepo)) {
-    writeJsonAtomic(persistPath, fromRepo);
+    // si on a un vrai persistant différent du repo, on copie
+    if (persistDir && persistPath !== repoPath) {
+      writeJsonAtomic(persistPath, fromRepo);
+    }
     return fromRepo;
   }
 
   return defaultValue;
 }
 
+/* ============================================================
+   CHARGEMENT
+============================================================ */
 let globalConfig = loadWithFallback(globalPath, repoGlobalPath, {});
 let serversConfig = loadWithFallback(serversPath, repoServersPath, {});
 
-// ✅ Normalisation stricte
 if (!isPlainObject(globalConfig)) globalConfig = {};
 if (!isPlainObject(serversConfig)) serversConfig = {};
 
@@ -109,38 +147,29 @@ function normalizePlanningForGuild(guildObj) {
   let changed = false;
   const planning = guildObj.planning;
 
-  for (const [jour, day] of Object.entries(planning)) {
+  for (const [, day] of Object.entries(planning)) {
     if (!isPlainObject(day)) continue;
 
     // garantir structure
-    if (!Array.isArray(day.times)) day.times = Array.isArray(day.times) ? day.times : [];
-    if (!Array.isArray(day.comps)) day.comps = Array.isArray(day.comps) ? day.comps : [];
+    if (!Array.isArray(day.times)) { day.times = []; changed = true; }
+    if (!Array.isArray(day.comps)) { day.comps = []; changed = true; }
+
     if (!isPlainObject(day.notes)) {
-      if (day.notes == null) {
-        day.notes = {};
-        changed = true;
-      } else if (!isPlainObject(day.notes)) {
-        day.notes = {};
-        changed = true;
-      }
+      day.notes = {};
+      changed = true;
     }
 
     // migration note -> notes
     if (typeof day.note === 'string' && day.note.trim()) {
       const legacy = day.note.trim().slice(0, 200);
-      const times = Array.isArray(day.times) ? day.times : [];
+      const times = day.times;
 
-      // appliquer sur chaque horaire coché (si aucun horaire, on ne fait rien)
       if (times.length) {
         for (const t of times) {
-          if (!day.notes[t]) {
-            day.notes[t] = legacy;
-          }
+          if (!day.notes[t]) day.notes[t] = legacy;
         }
-        changed = true;
       }
 
-      // supprimer l'ancien champ quoi qu'il arrive (évite confusion)
       delete day.note;
       changed = true;
     }
@@ -151,20 +180,18 @@ function normalizePlanningForGuild(guildObj) {
 
 function normalizeAllServersConfig() {
   if (!isPlainObject(serversConfig)) return false;
-
   let changed = false;
-  for (const [gid, g] of Object.entries(serversConfig)) {
+
+  for (const [, g] of Object.entries(serversConfig)) {
     if (!isPlainObject(g)) continue;
-    const c = normalizePlanningForGuild(g);
-    if (c) changed = true;
+    if (normalizePlanningForGuild(g)) changed = true;
   }
   return changed;
 }
 
-// On normalise une fois au chargement
+// Normalise une fois au chargement
 try {
   const changed = normalizeAllServersConfig();
- добы
   if (changed) {
     writeJsonAtomic(serversPath, serversConfig);
     console.log('✅ [config] Migration planning effectuée (note -> notes).');
@@ -173,6 +200,9 @@ try {
   console.error('⚠️ [config] Migration planning error:', e);
 }
 
+/* ============================================================
+   API
+============================================================ */
 function saveGlobalConfig() {
   return writeJsonAtomic(globalPath, globalConfig);
 }
@@ -221,22 +251,16 @@ function updateGuildConfig(guildId, patch) {
 
     if (patch.roles) next.roles = mergeObj(existing.roles, patch.roles);
     if (patch.dispoMessages) next.dispoMessages = mergeObj(existing.dispoMessages, patch.dispoMessages);
-
-    if (patch.nickname) {
-      next.nickname = { ...(existing.nickname || {}), ...(patch.nickname || {}) };
-    }
-
+    if (patch.nickname) next.nickname = { ...(existing.nickname || {}), ...(patch.nickname || {}) };
     if (patch.compo) next.compo = mergeObj(existing.compo, patch.compo);
 
-    // ✅ planning : merge par jour (chaque jour est remplacé par l’objet fourni par la commande)
+    // planning : merge par jour
     if (patch.planning) next.planning = mergeObj(existing.planning, patch.planning);
 
     serversConfig[guildId] = next;
 
     // re-normalise le planning du guild modifié (sécurité)
-    try {
-      normalizePlanningForGuild(serversConfig[guildId]);
-    } catch {}
+    try { normalizePlanningForGuild(serversConfig[guildId]); } catch {}
 
     return saveServersConfig();
   } catch (e) {
@@ -246,6 +270,12 @@ function updateGuildConfig(guildId, patch) {
 }
 
 module.exports = {
+  // chemins utiles (debug)
+  repoDir,
+  persistDir,
+  globalPath,
+  serversPath,
+
   getGlobalConfig,
   getGuildConfig,
   getConfigFromInteraction,
