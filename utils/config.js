@@ -1,14 +1,20 @@
 // utils/config.js
+// ✅ Version complète corrigée (sans utils/paths.js)
+// - Persistance Railway (/mnt/storage/config) ou CONFIG_DIR
+// - Fallback repo /config
+// - JSON read/write robuste (atomic)
+// - Normalisation planning (compat legacy) SANS casser ton nouveau planning (dateLabel/times/entries)
+// - updateGuildConfig merge propre (planning par jour, roles, dispoMessages, nickname, etc.)
+
 const fs = require('fs');
 const path = require('path');
 
 /* ============================================================
-   ✅ RÉSOLUTION DU DOSSIER PERSISTANT (sans utils/paths.js)
-
+   ✅ RÉSOLUTION DU DOSSIER PERSISTANT
    Priorité :
    1) CONFIG_DIR (env)
    2) /mnt/storage/config  (Railway Volume)
-   3) ./config (repo)      (fallback)
+   3) null (fallback repo only)
 ============================================================ */
 function exists(p) {
   try { return fs.existsSync(p); } catch { return false; }
@@ -18,10 +24,9 @@ function resolvePersistDir() {
   const envDir = process.env.CONFIG_DIR?.trim();
   if (envDir) return envDir;
 
-  // Railway volume (si tu utilises /mnt/storage)
+  // Railway volume
   if (exists('/mnt/storage')) return path.join('/mnt/storage', 'config');
 
-  // fallback (pas de persistant)
   return null;
 }
 
@@ -111,7 +116,6 @@ function loadWithFallback(persistPath, repoPath, defaultValue) {
   // 2) repo
   const fromRepo = readJson(repoPath, defaultValue);
   if (isPlainObject(fromRepo)) {
-    // si on a un vrai persistant différent du repo, on copie
     if (persistDir && persistPath !== repoPath) {
       writeJsonAtomic(persistPath, fromRepo);
     }
@@ -133,12 +137,19 @@ if (!isPlainObject(serversConfig)) serversConfig = {};
 if (!globalConfig.botName) globalConfig.botName = 'GalactiqueBot';
 
 /* ============================================================
-   ✅ MIGRATION / NORMALISATION PLANNING
-   Ancien format: planning[jour] = { times, comps, note: "..." }
-   Nouveau format: planning[jour] = { times, comps, notes: { "22:20": "..." } }
+   ✅ NORMALISATION / MIGRATION PLANNING (SÉCURISÉE)
 
-   Règle: si "note" existe et "notes" absent -> on applique la note
-   à tous les horaires cochés, puis on supprime "note".
+   IMPORTANT :
+   - Ton nouveau planning utilise : dateLabel / times / entries
+   - Ton ancien code utilisait : times / comps / note / notes
+   - Cette normalisation NE DOIT PAS casser le nouveau format.
+
+   Donc :
+   - On garantit que planning[jour] est un objet
+   - On garantit que day.times est un array (si présent)
+   - On garantit que day.entries est un objet (si présent)
+   - On ne force PAS comps/notes si ton système ne les utilise plus
+   - On migre uniquement le legacy "note" -> "notes" si "notes" existe déjà ou si tu veux le garder
 ============================================================ */
 function normalizePlanningForGuild(guildObj) {
   if (!isPlainObject(guildObj)) return false;
@@ -147,23 +158,54 @@ function normalizePlanningForGuild(guildObj) {
   let changed = false;
   const planning = guildObj.planning;
 
-  for (const [, day] of Object.entries(planning)) {
-    if (!isPlainObject(day)) continue;
+  for (const [jour, day] of Object.entries(planning)) {
+    if (!isPlainObject(day)) {
+      planning[jour] = { dateLabel: '', times: [], entries: {} };
+      changed = true;
+      continue;
+    }
 
-    // garantir structure
-    if (!Array.isArray(day.times)) { day.times = []; changed = true; }
-    if (!Array.isArray(day.comps)) { day.comps = []; changed = true; }
-
-    if (!isPlainObject(day.notes)) {
-      day.notes = {};
+    // Nouveau format attendu (planning.js)
+    // day.dateLabel: string (optionnel)
+    if (day.dateLabel != null && typeof day.dateLabel !== 'string') {
+      day.dateLabel = String(day.dateLabel);
       changed = true;
     }
 
-    // migration note -> notes
+    // times (ton planning.js attend un array)
+    if (day.times != null && !Array.isArray(day.times)) {
+      day.times = [];
+      changed = true;
+    }
+    if (day.times == null) {
+      // ne pas forcer absolument, mais c’est plus safe pour le bot
+      day.times = [];
+      changed = true;
+    }
+
+    // entries (ton planning.js attend un objet map)
+    if (day.entries != null && !isPlainObject(day.entries)) {
+      day.entries = {};
+      changed = true;
+    }
+    if (day.entries == null) {
+      day.entries = {};
+      changed = true;
+    }
+
+    // ---- Compat legacy (optionnel) ----
+    // Si tu avais encore du legacy note/notes :
+    // On migre note -> notes[t] (sans toucher entries)
+    // MAIS on ne crée "notes" que si note existait.
     if (typeof day.note === 'string' && day.note.trim()) {
       const legacy = day.note.trim().slice(0, 200);
-      const times = day.times;
 
+      if (!isPlainObject(day.notes)) {
+        day.notes = {};
+        changed = true;
+      }
+
+      const times = Array.isArray(day.times) ? day.times : [];
       if (times.length) {
         for (const t of times) {
           if (!day.notes[t]) day.notes[t] = legacy;
@@ -173,6 +215,18 @@ function normalizePlanningForGuild(guildObj) {
       delete day.note;
       changed = true;
     }
+
+    // Si "comps" existe mais n’est pas array, on corrige sans l’imposer
+    if (day.comps != null && !Array.isArray(day.comps)) {
+      day.comps = [];
+      changed = true;
+    }
+
+    // Si notes existe mais n’est pas object, on corrige
+    if (day.notes != null && !isPlainObject(day.notes)) {
+      day.notes = {};
+      changed = true;
+    }
   }
 
   return changed;
@@ -180,8 +234,8 @@ function normalizePlanningForGuild(guildObj) {
 
 function normalizeAllServersConfig() {
   if (!isPlainObject(serversConfig)) return false;
-  let changed = false;
 
+  let changed = false;
   for (const [, g] of Object.entries(serversConfig)) {
     if (!isPlainObject(g)) continue;
     if (normalizePlanningForGuild(g)) changed = true;
@@ -194,10 +248,10 @@ try {
   const changed = normalizeAllServersConfig();
   if (changed) {
     writeJsonAtomic(serversPath, serversConfig);
-    console.log('✅ [config] Migration planning effectuée (note -> notes).');
+    console.log('✅ [config] Normalisation planning effectuée.');
   }
 } catch (e) {
-  console.error('⚠️ [config] Migration planning error:', e);
+  console.error('⚠️ [config] Normalisation planning error:', e);
 }
 
 /* ============================================================
@@ -251,7 +305,11 @@ function updateGuildConfig(guildId, patch) {
 
     if (patch.roles) next.roles = mergeObj(existing.roles, patch.roles);
     if (patch.dispoMessages) next.dispoMessages = mergeObj(existing.dispoMessages, patch.dispoMessages);
-    if (patch.nickname) next.nickname = { ...(existing.nickname || {}), ...(patch.nickname || {}) };
+
+    if (patch.nickname) {
+      next.nickname = { ...(existing.nickname || {}), ...(patch.nickname || {}) };
+    }
+
     if (patch.compo) next.compo = mergeObj(existing.compo, patch.compo);
 
     // planning : merge par jour
@@ -259,7 +317,7 @@ function updateGuildConfig(guildId, patch) {
 
     serversConfig[guildId] = next;
 
-    // re-normalise le planning du guild modifié (sécurité)
+    // re-normalise planning (sécurité)
     try { normalizePlanningForGuild(serversConfig[guildId]); } catch {}
 
     return saveServersConfig();
