@@ -1,19 +1,20 @@
 // commands/planning.js
-// ✅ PLANNING (menus) + LIGNE PAR HORAIRE (modal) + AJOUTER / REMPLACER
+// ✅ PLANNING (menus) + LIGNE PAR HORAIRE (modal) + DATE PAR JOUR (modal) + AJOUTER / REMPLACER
 // - /planning show [jour] -> affiche jour OU semaine
 // - /planning post [salon] [jour] -> poste jour OU semaine
-// - /planning edit [jour] -> UI (horaires + config ligne par horaire)
+// - /planning edit [jour] -> UI (horaires + config ligne + date)
 //
-// ✅ Affichage : 1 horaire par ligne
-// ✅ NOTE AVANT compétition (sur la même ligne)
-// ✅ MODE B : compétition + note = PAR HORAIRE
+// ✅ Mise en forme (sans résultats) :
+// 📅 **Lundi 12 Janvier**
+// 🔹 21h00 — VS **REDUS EFC** *(MATCH AMICAL)*
 //
 // Structure sauvegardée :
 // planning[jour] = {
-//   times: ["21:20","22:00"],
+//   dateLabel: "12 Janvier",            // optionnel
+//   times: ["21:00","21:20"],
 //   entries: {
-//     "21:20": { note: "ELEVEN SAINTS NATION", comp: "VPG BELGIQUE" },
-//     "22:00": { note: "MGT MONTROLI ES", comp: "VSC" }
+//     "21:00": { opponent: "REDUS EFC", comp: "MATCH AMICAL" },
+//     "21:20": { opponent: "PAC ES", comp: "MATCH AMICAL" }
 //   }
 // }
 
@@ -35,13 +36,6 @@ const { getConfigFromInteraction, updateGuildConfig } = require('../utils/config
 /* ===================== CONSTANTES ===================== */
 const JOURS = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
-const COMPETITIONS = [
-  { label: 'VPG BELGIQUE', value: 'VPG BELGIQUE' },
-  { label: 'VPG SUISSE', value: 'VPG SUISSE' },
-  { label: 'VSC', value: 'VSC' }
-];
-const COMP_VALUES = COMPETITIONS.map(c => c.value);
-
 // 21:00 → 23:00 toutes les 20 min => 21:00, 21:20, ... 22:40
 function pad2(n) { return String(n).padStart(2, '0'); }
 function buildFixedTimes() {
@@ -58,12 +52,29 @@ function buildFixedTimes() {
 }
 const FIXED_TIMES = buildFixedTimes(); // ["21:00","21:20",...,"22:40"]
 
+const DAYS_MATCH = new Set(['lundi', 'mardi', 'mercredi', 'jeudi']);
+const DAYS_FREE = new Set(['vendredi', 'samedi', 'dimanche']);
+
+/* ===================== HELPERS ===================== */
 function normalizeJour(j) {
   const x = String(j || '').trim().toLowerCase();
   return JOURS.includes(x) ? x : null;
 }
 
-function dayLabelFR(jour) {
+function dayLabelFR_Title(jour) {
+  const map = {
+    lundi: 'Lundi',
+    mardi: 'Mardi',
+    mercredi: 'Mercredi',
+    jeudi: 'Jeudi',
+    vendredi: 'Vendredi',
+    samedi: 'Samedi',
+    dimanche: 'Dimanche'
+  };
+  return map[jour] || String(jour || '');
+}
+
+function dayLabelFR_Upper(jour) {
   const map = {
     lundi: 'LUNDI',
     mardi: 'MARDI',
@@ -89,11 +100,6 @@ function getTodayJourParis() {
   return 'lundi';
 }
 
-/* ===================== UI STATE (mémoire) ===================== */
-const uiState = new Map();
-function getStateKey(guildId, userId) { return `${guildId}:${userId}`; }
-
-/* ===================== HELPERS ===================== */
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -108,6 +114,18 @@ function clampText(t, max = 220) {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
 }
+
+function hhmmToHhmmFR(hhmm) {
+  // "21:00" -> "21h00"
+  const s = String(hhmm || '').trim();
+  const m = /^(\d{2}):(\d{2})$/.exec(s);
+  if (!m) return s;
+  return `${m[1]}h${m[2]}`;
+}
+
+/* ===================== UI STATE (mémoire) ===================== */
+const uiState = new Map();
+function getStateKey(guildId, userId) { return `${guildId}:${userId}`; }
 
 /* ===================== DATA PERSIST ===================== */
 function getSavedPlanning(guildConfig) {
@@ -124,79 +142,97 @@ function sanitizeEntriesMap(entries) {
     if (!FIXED_TIMES.includes(t)) continue;
 
     const obj = isPlainObject(val) ? val : {};
-    const note = clampText(obj.note, 200).trim();
-    const comp = String(obj.comp || '').trim();
+    const opponent = clampText(obj.opponent, 60).trim();
+    const comp = clampText(obj.comp, 30).trim(); // ✅ libre (MATCH AMICAL, TOURNOI CPG, VPG SUISSE, etc.)
 
-    // comp doit être dans la liste, sinon ignorée
-    const compOk = comp ? (COMP_VALUES.includes(comp) ? comp : '') : '';
-
-    if (!note && !compOk) continue;
-    out[t] = { note, comp: compOk };
+    if (!opponent && !comp) continue;
+    out[t] = { opponent, comp };
   }
 
   return out;
 }
 
+function sanitizeDateLabel(dateLabel) {
+  const s = String(dateLabel || '').trim();
+  if (!s) return '';
+  return clampText(s, 30);
+}
+
 function readDaySaved(savedPlanning, jour) {
   const d = savedPlanning?.[jour];
-  const times = Array.isArray(d?.times) ? d.times.filter(x => FIXED_TIMES.includes(x)) : [];
+
+  const dateLabel = sanitizeDateLabel(d?.dateLabel);
+
+  const times = Array.isArray(d?.times) // ✅ UNIQUEMENT heures fixes
+    ? d.times.filter(x => FIXED_TIMES.includes(x))
+    : [];
+
   const entries = sanitizeEntriesMap(d?.entries);
+
   // prune entries aux times
   const tset = new Set(times);
   const cleaned = {};
   for (const [t, v] of Object.entries(entries)) {
     if (tset.has(t)) cleaned[t] = v;
   }
-  return { times: uniqueSorted(times), entries: cleaned };
+
+  return {
+    dateLabel,
+    times: uniqueSorted(times),
+    entries: cleaned
+  };
 }
 
-/* ===================== RENDER ===================== */
-function lineSep(width = 28) { return '━'.repeat(width); }
-function centerText(txt, width = 28) {
-  const t = String(txt || '').trim();
-  if (t.length >= width) return t;
-  const left = Math.floor((width - t.length) / 2);
-  const right = width - t.length - left;
-  return ' '.repeat(left) + t + ' '.repeat(right);
+/* ===================== RENDER (SANS RÉSULTATS) ===================== */
+function buildLineForTime(jour, time, entry) {
+  const timeFR = hhmmToHhmmFR(time);
+
+  const opponent = String(entry?.opponent || '').trim();
+  const comp = String(entry?.comp || '').trim();
+
+  // Week-end : si user coche des horaires -> on reste en "VS ..."
+  // Le fallback "SESSION LIBRE" se gère au niveau du jour.
+  const opponentTxt = opponent ? `**${clampText(opponent, 60)}**` : `**À DÉFINIR**`;
+  const compTxt = comp ? ` *(${clampText(comp, 30)})*` : '';
+
+  // ✅ EXACT : "— VS **...** *(...)*"
+  return `🔹 ${timeFR} — VS ${opponentTxt}${compTxt}`;
 }
 
-function renderDayBlock(jour, dayData) {
-  const width = 28;
-  const header = [
-    lineSep(width),
-    centerText(dayLabelFR(jour), width),
-    lineSep(width)
-  ];
+function renderDayFancy(jour, dayData) {
+  const dayName = dayLabelFR_Title(jour);
+  const dateLabel = String(dayData?.dateLabel || '').trim();
+  const title = dateLabel ? `📅 **${dayName} ${dateLabel}**` : `📅 **${dayName}**`;
 
-  const times = Array.isArray(dayData?.times) ? uniqueSorted(dayData.times) : [];
+  const timesSelected = Array.isArray(dayData?.times) ? uniqueSorted(dayData.times) : [];
   const entries = isPlainObject(dayData?.entries) ? dayData.entries : {};
 
-  const body = times.length
-    ? times.map((t) => {
-        const e = isPlainObject(entries?.[t]) ? entries[t] : {};
-        const note = String(e.note || '').trim();
-        const comp = String(e.comp || '').trim();
+  let timesToShow;
 
-        // ✅ NOTE avant compétition (même ligne)
-        const suffix =
-          (note && comp) ? `${note} • ${comp}` :
-          (note) ? note :
-          (comp) ? comp :
-          '—';
+  // Règles :
+  // - Lundi→Jeudi : si aucun horaire coché -> afficher toutes les heures en VS À DÉFINIR
+  // - Vendredi→Dimanche : si aucun horaire coché -> afficher "21h00 — SESSION LIBRE"
+  if (DAYS_MATCH.has(jour)) {
+    timesToShow = timesSelected.length ? timesSelected : FIXED_TIMES;
+  } else if (DAYS_FREE.has(jour)) {
+    if (!timesSelected.length) {
+      return `${title}\n🔹 ${hhmmToHhmmFR('21:00')} — **SESSION LIBRE**`;
+    }
+    timesToShow = timesSelected;
+  } else {
+    timesToShow = timesSelected.length ? timesSelected : FIXED_TIMES;
+  }
 
-        return `${t} ▸ ${clampText(suffix, 220)}`;
-      })
-    : ['—'];
+  const lines = timesToShow.map((t) => {
+    const e = isPlainObject(entries?.[t]) ? entries[t] : {};
+    return buildLineForTime(jour, t, e);
+  });
 
-  return ['```', ...header, ...body, '```'].join('\n');
+  return [title, ...lines].join('\n');
 }
 
-function renderWeekBlocks(savedPlanning) {
-  const blocks = [];
-  for (const j of JOURS) {
-    blocks.push(renderDayBlock(j, readDaySaved(savedPlanning, j)));
-  }
-  return blocks.join('\n\n');
+function renderWeekFancy(savedPlanning) {
+  return JOURS.map(j => renderDayFancy(j, readDaySaved(savedPlanning, j))).join('\n\n');
 }
 
 function chunkMessage(str, limit = 1900) {
@@ -218,7 +254,7 @@ function chunkMessage(str, limit = 1900) {
 function buildTimesMenu(state) {
   const selected = Array.isArray(state?.times) ? state.times : [];
   const options = FIXED_TIMES.map(t => ({
-    label: t,
+    label: hhmmToHhmmFR(t),
     value: t,
     default: selected.includes(t)
   }));
@@ -235,18 +271,20 @@ function buildButtonsRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('planning:save_replace').setStyle(ButtonStyle.Success).setLabel('Enregistrer (REMPLACER)'),
     new ButtonBuilder().setCustomId('planning:save_add').setStyle(ButtonStyle.Primary).setLabel('Enregistrer (AJOUTER)'),
-    new ButtonBuilder().setCustomId('planning:edit_line').setStyle(ButtonStyle.Secondary).setLabel('✍️ Ligne (note + comp)'),
+    new ButtonBuilder().setCustomId('planning:edit_line').setStyle(ButtonStyle.Secondary).setLabel('✍️ Ligne (VS + comp)'),
+    new ButtonBuilder().setCustomId('planning:set_date').setStyle(ButtonStyle.Secondary).setLabel('🗓️ Date du jour'),
     new ButtonBuilder().setCustomId('planning:clear').setStyle(ButtonStyle.Danger).setLabel('Tout vider'),
     new ButtonBuilder().setCustomId('planning:cancel').setStyle(ButtonStyle.Secondary).setLabel('Fermer')
   );
 }
 
 function buildUiMessageContent(guildCfg, jour, state) {
-  const preview = renderDayBlock(jour, state);
   const clubName = guildCfg?.clubName || 'CLUB';
+  const preview = renderDayFancy(jour, state);
+
   return (
-    `**${clubName}** — **${dayLabelFR(jour)}**\n` +
-    `_1) Coche tes horaires  2) Clique "Ligne (note + comp)"  3) Enregistrer._\n\n` +
+    `**${clubName}** — **${dayLabelFR_Upper(jour)}**\n` +
+    `_1) Coche tes horaires  2) "Ligne (VS + comp)"  3) "Date du jour" (optionnel)  4) Enregistrer._\n\n` +
     `${preview}`
   );
 }
@@ -265,13 +303,14 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
 
   const inTimes = uniqueSorted((incomingState?.times || []).filter(x => FIXED_TIMES.includes(x)));
   const inEntries = sanitizeEntriesMap(incomingState?.entries);
+  const inDateLabel = sanitizeDateLabel(incomingState?.dateLabel);
 
   let nextDay;
 
   if (mode === 'add') {
     const mergedTimes = uniqueSorted([...(currentDay.times || []), ...inTimes]);
 
-    // merge entries (incoming écrase la ligne d'une heure donnée)
+    // merge entries (incoming écrase la ligne de l'heure)
     const mergedEntries = { ...(currentDay.entries || {}), ...inEntries };
 
     // prune entries aux mergedTimes
@@ -281,14 +320,17 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
       if (set.has(t)) cleaned[t] = v;
     }
 
-    nextDay = { times: mergedTimes, entries: cleaned };
+    // date : si l'utilisateur a modifié la date dans l'UI -> on prend inDateLabel, sinon on conserve
+    const dateLabel = inDateLabel || currentDay.dateLabel || '';
+
+    nextDay = { dateLabel, times: mergedTimes, entries: cleaned };
   } else {
-    // replace : remplace tout, prune entries hors times sélectionnés
+    // replace : remplace TOUT (times + entries), date = UI
     const cleaned = {};
     for (const t of inTimes) {
       if (inEntries[t]) cleaned[t] = inEntries[t];
     }
-    nextDay = { times: inTimes, entries: cleaned };
+    nextDay = { dateLabel: inDateLabel || '', times: inTimes, entries: cleaned };
   }
 
   const nextPlanning = { ...savedPlanning, [jour]: nextDay };
@@ -298,55 +340,78 @@ function saveDay(guildId, guildCfg, jour, mode, incomingState) {
 
 function clearDay(guildId, guildCfg, jour) {
   const savedPlanning = getSavedPlanning(guildCfg);
-  const nextPlanning = { ...savedPlanning, [jour]: { times: [], entries: {} } };
+  const nextPlanning = { ...savedPlanning, [jour]: { dateLabel: '', times: [], entries: {} } };
   updateGuildConfig(guildId, { planning: nextPlanning });
   return nextPlanning[jour];
 }
 
-/* ===================== MODAL LIGNE (note + comp) ===================== */
+/* ===================== MODALS ===================== */
 function buildLineModal(state) {
   const modal = new ModalBuilder()
     .setCustomId('planning:modal_line')
     .setTitle('Ligne horaire');
 
   const suggestedTime =
-    Array.isArray(state?.times) && state.times.length ? state.times[0] : '22:20';
+    Array.isArray(state?.times) && state.times.length ? state.times[0] : '21:00';
 
   const entry = isPlainObject(state?.entries?.[suggestedTime]) ? state.entries[suggestedTime] : {};
-  const suggestedNote = String(entry.note || '').slice(0, 200);
+  const suggestedOpponent = String(entry.opponent || '').slice(0, 60);
   const suggestedComp = String(entry.comp || '').slice(0, 30);
 
   const inputTime = new TextInputBuilder()
     .setCustomId('planning:time_input')
-    .setLabel('Heure (ex: 22:20)')
+    .setLabel('Heure (ex: 21:00)')
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(5)
     .setPlaceholder(suggestedTime)
     .setValue(suggestedTime);
 
+  const inputOpponent = new TextInputBuilder()
+    .setCustomId('planning:opponent_input')
+    .setLabel('Adversaire (ex: REDUS EFC)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(60)
+    .setPlaceholder('À DÉFINIR')
+    .setValue(suggestedOpponent);
+
   const inputComp = new TextInputBuilder()
     .setCustomId('planning:comp_input')
-    .setLabel('Compétition (VPG BELGIQUE / VPG SUISSE / VSC)')
+    .setLabel('Compétition (ex: VPG SUISSE / MATCH AMICAL)')
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setMaxLength(30)
-    .setPlaceholder('VPG BELGIQUE')
+    .setPlaceholder('MATCH AMICAL')
     .setValue(suggestedComp);
-
-  const inputNote = new TextInputBuilder()
-    .setCustomId('planning:note_input')
-    .setLabel('Note (optionnel)')
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(false)
-    .setMaxLength(200)
-    .setPlaceholder('Ex: ELEVEN SAINTS NATION / MGT MONTROLI ES')
-    .setValue(suggestedNote);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(inputTime),
-    new ActionRowBuilder().addComponents(inputComp),
-    new ActionRowBuilder().addComponents(inputNote)
+    new ActionRowBuilder().addComponents(inputOpponent),
+    new ActionRowBuilder().addComponents(inputComp)
+  );
+
+  return modal;
+}
+
+function buildDateModal(state) {
+  const modal = new ModalBuilder()
+    .setCustomId('planning:modal_date')
+    .setTitle('Date du jour');
+
+  const current = String(state?.dateLabel || '').trim();
+
+  const inputDate = new TextInputBuilder()
+    .setCustomId('planning:date_input')
+    .setLabel('Date (ex: 12 Janvier)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(30)
+    .setPlaceholder('12 Janvier')
+    .setValue(current);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(inputDate)
   );
 
   return modal;
@@ -367,13 +432,15 @@ async function handleComponentInteraction(interaction) {
   const key = getStateKey(guildId, userId);
   const fallbackJour = getTodayJourParis();
 
-  const st = uiState.get(key) || { jour: fallbackJour, times: [], entries: {} };
+  const st = uiState.get(key) || { jour: fallbackJour, dateLabel: '', times: [], entries: {} };
   st.jour = normalizeJour(st.jour) || fallbackJour;
   st.entries = isPlainObject(st.entries) ? st.entries : {};
+  st.dateLabel = String(st.dateLabel || '').trim();
 
   if (!st.__loadedFromSaved) {
     const daySaved = readDaySaved(savedPlanning, st.jour);
-    st.times = daySaved.times;
+    st.dateLabel = daySaved.dateLabel || '';
+    st.times = daySaved.times || [];
     st.entries = daySaved.entries || {};
     st.__loadedFromSaved = true;
   }
@@ -412,6 +479,12 @@ async function handleComponentInteraction(interaction) {
       return true;
     }
 
+    if (customId === 'planning:set_date') {
+      uiState.set(key, st);
+      await interaction.showModal(buildDateModal(st)).catch(() => {});
+      return true;
+    }
+
     await interaction.deferUpdate().catch(() => {});
 
     if (customId === 'planning:cancel') {
@@ -422,6 +495,7 @@ async function handleComponentInteraction(interaction) {
 
     if (customId === 'planning:clear') {
       const cleared = clearDay(guildId, guildCfg, st.jour);
+      st.dateLabel = cleared.dateLabel || '';
       st.times = cleared.times || [];
       st.entries = cleared.entries || {};
       uiState.set(key, st);
@@ -438,12 +512,15 @@ async function handleComponentInteraction(interaction) {
       const mode = (customId === 'planning:save_add') ? 'add' : 'replace';
       const saved = saveDay(guildId, guildCfg, st.jour, mode, st);
 
+      st.dateLabel = saved.dateLabel || '';
       st.times = saved.times || [];
       st.entries = saved.entries || {};
       uiState.set(key, st);
 
       await interaction.editReply({
-        content: `✅ **${dayLabelFR(st.jour)}** enregistré (${mode === 'add' ? 'AJOUT' : 'REMPLACEMENT'}).\n\n${renderDayBlock(st.jour, st)}`,
+        content:
+          `✅ **${dayLabelFR_Upper(st.jour)}** enregistré (${mode === 'add' ? 'AJOUT' : 'REMPLACEMENT'}).\n\n` +
+          `${renderDayFancy(st.jour, st)}`,
         components: buildUiComponents(st)
       }).catch(() => {});
 
@@ -454,10 +531,9 @@ async function handleComponentInteraction(interaction) {
   return false;
 }
 
-/* ===================== ROUTAGE MODAL (ligne horaire) ===================== */
+/* ===================== ROUTAGE MODALS ===================== */
 async function handleModalSubmit(interaction) {
   const customId = interaction.customId || '';
-  if (customId !== 'planning:modal_line') return false;
   if (!interaction.guildId) return false;
 
   const guildId = interaction.guildId;
@@ -473,72 +549,82 @@ async function handleModalSubmit(interaction) {
     return true;
   }
 
-  const timeRaw = (interaction.fields.getTextInputValue('planning:time_input') || '').trim();
-  const compRaw = (interaction.fields.getTextInputValue('planning:comp_input') || '').trim();
-  const noteRaw = (interaction.fields.getTextInputValue('planning:note_input') || '').trim();
+  // MODAL : ligne horaire
+  if (customId === 'planning:modal_line') {
+    const timeRaw = (interaction.fields.getTextInputValue('planning:time_input') || '').trim();
+    const opponentRaw = (interaction.fields.getTextInputValue('planning:opponent_input') || '').trim();
+    const compRaw = (interaction.fields.getTextInputValue('planning:comp_input') || '').trim();
 
-  // ✅ Heures FIXES seulement
-  if (!FIXED_TIMES.includes(timeRaw)) {
-    await interaction.reply({
-      content: `❌ Heure invalide. Heures possibles : ${FIXED_TIMES.join(' / ')}`,
-      ephemeral: true
-    }).catch(() => {});
-    return true;
-  }
-
-  // ✅ l'heure doit être cochée
-  const times = Array.isArray(st.times) ? st.times : [];
-  if (!times.includes(timeRaw)) {
-    await interaction.reply({
-      content: `⚠️ Tu dois d’abord **cocher** l’horaire **${timeRaw}** dans le menu Horaires.`,
-      ephemeral: true
-    }).catch(() => {});
-    return true;
-  }
-
-  // ✅ comp doit être vide OU dans la liste
-  let compFinal = '';
-  if (compRaw) {
-    if (!COMP_VALUES.includes(compRaw)) {
+    if (!FIXED_TIMES.includes(timeRaw)) {
       await interaction.reply({
-        content: `❌ Compétition invalide. Possibles : ${COMP_VALUES.join(' / ')}`,
+        content: `❌ Heure invalide. Heures possibles : ${FIXED_TIMES.join(' / ')}`,
         ephemeral: true
       }).catch(() => {});
       return true;
     }
-    compFinal = compRaw;
+
+    const times = Array.isArray(st.times) ? st.times : [];
+    if (!times.includes(timeRaw)) {
+      await interaction.reply({
+        content: `⚠️ Tu dois d’abord **cocher** l’horaire **${hhmmToHhmmFR(timeRaw)}** dans le menu Horaires.`,
+        ephemeral: true
+      }).catch(() => {});
+      return true;
+    }
+
+    st.entries = isPlainObject(st.entries) ? st.entries : {};
+
+    const opponentFinal = clampText(opponentRaw, 60).trim();
+    const compFinal = clampText(compRaw, 30).trim();
+
+    // si tout est vide => suppression
+    if (!opponentFinal && !compFinal) {
+      delete st.entries[timeRaw];
+    } else {
+      st.entries[timeRaw] = {
+        opponent: opponentFinal,
+        comp: compFinal
+      };
+    }
+
+    uiState.set(key, st);
+
+    await interaction.reply({
+      content:
+        `✅ Ligne mise à jour pour **${dayLabelFR_Title(st.jour)}** à **${hhmmToHhmmFR(timeRaw)}**.\n\n` +
+        `${renderDayFancy(st.jour, st)}\n\n` +
+        `➡️ Reviens sur le message planning et clique **Enregistrer**.`,
+      ephemeral: true
+    }).catch(() => {});
+
+    return true;
   }
 
-  st.entries = isPlainObject(st.entries) ? st.entries : {};
+  // MODAL : date
+  if (customId === 'planning:modal_date') {
+    const dateRaw = (interaction.fields.getTextInputValue('planning:date_input') || '').trim();
+    st.dateLabel = sanitizeDateLabel(dateRaw);
+    uiState.set(key, st);
 
-  // si tout est vide => suppression de la ligne (pour cette heure)
-  if (!noteRaw && !compFinal) {
-    delete st.entries[timeRaw];
-  } else {
-    st.entries[timeRaw] = {
-      note: clampText(noteRaw, 200),
-      comp: compFinal
-    };
+    await interaction.reply({
+      content:
+        `✅ Date mise à jour pour **${dayLabelFR_Title(st.jour)}** : **${st.dateLabel || '(vide)'}**\n\n` +
+        `${renderDayFancy(st.jour, st)}\n\n` +
+        `➡️ Reviens sur le message planning et clique **Enregistrer**.`,
+      ephemeral: true
+    }).catch(() => {});
+
+    return true;
   }
 
-  uiState.set(key, st);
-
-  await interaction.reply({
-    content:
-      `✅ Ligne mise à jour pour **${dayLabelFR(st.jour)}** à **${timeRaw}**.\n\n` +
-      `${renderDayBlock(st.jour, st)}\n\n` +
-      `➡️ Reviens sur le message planning et clique **Enregistrer**.`,
-    ephemeral: true
-  }).catch(() => {});
-
-  return true;
+  return false;
 }
 
 /* ===================== SLASH COMMAND ===================== */
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('planning')
-    .setDescription('Planning : horaires + (note + compétition) par horaire.')
+    .setDescription('Planning : horaires + VS + compétition (sans résultats).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     .addSubcommand(sc =>
@@ -549,7 +635,7 @@ module.exports = {
           o.setName('jour')
             .setDescription('Optionnel : afficher un seul jour')
             .setRequired(false)
-            .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
+            .addChoices(...JOURS.map(j => ({ name: dayLabelFR_Upper(j), value: j })))
         )
     )
 
@@ -567,19 +653,19 @@ module.exports = {
           o.setName('jour')
             .setDescription('Optionnel : poster un seul jour')
             .setRequired(false)
-            .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
+            .addChoices(...JOURS.map(j => ({ name: dayLabelFR_Upper(j), value: j })))
         )
     )
 
     .addSubcommand(sc =>
       sc
         .setName('edit')
-        .setDescription('Ouvre l’UI (horaires + ligne note/comp par horaire).')
+        .setDescription('Ouvre l’UI (horaires + ligne VS/comp + date).')
         .addStringOption(o =>
           o.setName('jour')
             .setDescription('Optionnel : si vide → jour actuel')
             .setRequired(false)
-            .addChoices(...JOURS.map(j => ({ name: dayLabelFR(j), value: j })))
+            .addChoices(...JOURS.map(j => ({ name: dayLabelFR_Upper(j), value: j })))
         )
     ),
 
@@ -592,8 +678,8 @@ module.exports = {
     if (sub === 'show') {
       const jourOpt = normalizeJour(interaction.options.getString('jour'));
       const content = jourOpt
-        ? renderDayBlock(jourOpt, readDaySaved(savedPlanning, jourOpt))
-        : renderWeekBlocks(savedPlanning);
+        ? renderDayFancy(jourOpt, readDaySaved(savedPlanning, jourOpt))
+        : renderWeekFancy(savedPlanning);
 
       const chunks = chunkMessage(content);
       await interaction.reply({ content: chunks[0], ephemeral: false });
@@ -619,15 +705,15 @@ module.exports = {
       }
 
       const content = jourOpt
-        ? renderDayBlock(jourOpt, readDaySaved(savedPlanning, jourOpt))
-        : renderWeekBlocks(savedPlanning);
+        ? renderDayFancy(jourOpt, readDaySaved(savedPlanning, jourOpt))
+        : renderWeekFancy(savedPlanning);
 
       for (const part of chunkMessage(content)) {
         await targetChannel.send({ content: part }).catch(() => {});
       }
 
       return interaction.reply({
-        content: `📌 Planning posté dans <#${targetChannel.id}>${jourOpt ? ` (**${dayLabelFR(jourOpt)}**)` : ''}.`,
+        content: `📌 Planning posté dans <#${targetChannel.id}>${jourOpt ? ` (**${dayLabelFR_Upper(jourOpt)}**)` : ''}.`,
         ephemeral: true
       });
     }
@@ -639,6 +725,7 @@ module.exports = {
 
       const st = {
         jour: jourOpt,
+        dateLabel: daySaved.dateLabel || '',
         times: daySaved.times || [],
         entries: daySaved.entries || {},
         __loadedFromSaved: true
