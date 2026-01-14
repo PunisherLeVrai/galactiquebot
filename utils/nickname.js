@@ -1,8 +1,9 @@
 // utils/nickname.js
-// ✅ Principe conservé : PSEUDO = lettres uniquement (A-Z), sans chiffres, sans caractères spéciaux.
+// ✅ PSEUDO = lettres uniquement (A-Z ASCII), sans chiffres, sans caractères spéciaux.
 // - Tokens : {PSEUDO} {MID} {HIER} {TEAM} {POSTES} {TAG} {CLUB}
 // - MID = Hiérarchie si existe sinon Team
-// - Trim intelligent 32 chars : on réduit le pseudo en priorité, puis coupe proprement.
+// - Nettoyage separators robuste : jamais de " | " vide, jamais de trailing "|"
+// - Max 32 chars : on réduit le pseudo en priorité, puis coupe proprement.
 
 const MAX_LEN = 32;
 
@@ -27,12 +28,9 @@ function cleanPseudo(username, room = MAX_LEN) {
   // 1ère lettre majuscule, reste minuscule
   clean = clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
 
-  // Room minimale utile
   const r = clamp(Number(room) || MAX_LEN, 2, MAX_LEN);
 
-  // Trim avec ellipsis si dépasse
   if (clean.length > r) clean = clean.slice(0, Math.max(1, r - 1)) + '…';
-
   return clean;
 }
 
@@ -54,15 +52,13 @@ function getPostes(member, posteRoles = []) {
     .slice(0, 3);
 }
 
-function normalizeSep(str) {
-  return String(str || '')
-    .replace(/\s+/g, ' ')
-    .replace(/\s*\|\s*/g, ' | ')
-    .replace(/^\s*\|\s*/g, '')
-    .replace(/\s*\|\s*$/g, '')
-    .trim();
-}
-
+/**
+ * Remplace les tokens {XXX} puis reconstruit proprement les segments
+ * en supprimant tout segment vide.
+ *
+ * Important : on split sur "|" (pas " | ") pour gérer TOUS les cas,
+ * y compris "Chris | |" ou "Chris||".
+ */
 function renderFromFormat(format, tokens) {
   let out = String(format || '').trim();
 
@@ -72,16 +68,13 @@ function renderFromFormat(format, tokens) {
     return v ? String(v) : '';
   });
 
-  out = normalizeSep(out);
+  // Rebuild segments: impossible d'avoir des pipes "vides"
+  const parts = out
+    .split('|')
+    .map(s => String(s || '').trim())
+    .filter(Boolean);
 
-  // Supprime segments vides
-  out = out
-    .split(' | ')
-    .map(s => s.trim())
-    .filter(Boolean)
-    .join(' | ');
-
-  return out.trim();
+  return parts.join(' | ').trim();
 }
 
 /**
@@ -125,6 +118,7 @@ function buildNickname(member, nicknameCfg = {}, guildCfg = {}) {
   // 1) Render normal
   let out = renderFromFormat(format, tokensBase);
   if (!out) out = basePseudo;
+
   if (out.length <= MAX_LEN) return out;
 
   // 2) Trim pseudo en priorité
@@ -132,10 +126,11 @@ function buildNickname(member, nicknameCfg = {}, guildCfg = {}) {
   const withoutPseudo = renderFromFormat(format, tokensNoPseudo);
   const testOne = renderFromFormat(format, { ...tokensNoPseudo, PSEUDO: 'X' });
 
-  const overheadTotal = Math.max(0, testOne.length - withoutPseudo.length);
-  const overheadSep = Math.max(0, overheadTotal - 1);
+  // Overhead = ce que "rajoute" le format quand PSEUDO existe (séparateurs inclus)
+  const overhead = Math.max(0, testOne.length - withoutPseudo.length);
 
-  let room = MAX_LEN - (withoutPseudo.length + overheadSep);
+  // Place disponible pour le pseudo
+  let room = MAX_LEN - (withoutPseudo.length + Math.max(0, overhead - 1));
   room = clamp(room, 3, MAX_LEN);
 
   const trimmedPseudo = cleanPseudo(username, room);
