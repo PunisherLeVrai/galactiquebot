@@ -1,4 +1,19 @@
 // commands/disponibilites.js
+// ✅ Disponibilités — VERSION OPTIMISÉE + MODES SIMPLIFIÉS (UNIQUEMENT ceux demandés)
+//
+// Modes conservés :
+// - detaille                 -> ✅ Présents / ❌ Absents / ⏳ Sans réaction (filtre Joueur+Essai) / ⏳ Sans réaction (sans filtre)
+// - presents                 -> ✅ Présents
+// - absents                  -> ❌ Absents
+// - sans_reaction_filtre     -> ⏳ Sans réaction (filtre Joueur+Essai)
+// - sans_reaction_tous       -> ⏳ Sans réaction (sans filtre : tous les membres humains)
+// - rappel_absents           -> 📣 Rappel (mentions) aux "sans réaction filtrés Joueur+Essai"
+//
+// ✅ Suppression : embed_simple / snapshot / verrouiller
+// ✅ Bouton "Voir le message du jour"
+// ✅ Anti-mentions accidentelles
+// ✅ Gestion permissions minimale + messages chunkés pour le rappel
+
 const {
   SlashCommandBuilder,
   EmbedBuilder,
@@ -6,21 +21,20 @@ const {
   ChannelType,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  PermissionsBitField
 } = require('discord.js');
 
-const fs = require('fs');
-const path = require('path');
-
 const { getConfigFromInteraction } = require('../utils/config');
-const { SNAPSHOT_DIR } = require('../utils/paths');
 
-const VERSION = 'disponibilites v4.0 (clean+persistent snapshots)';
+const VERSION = 'disponibilites v5.1 (modes simplifiés)';
 const DEFAULT_COLOR = 0xff4db8;
 
-// 🧹 Anti-mentions accidentelles dans les textes
+/* ===================== Helpers généraux ===================== */
 const sanitize = (t) =>
-  String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
+  String(t || '')
+    .replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]')
+    .trim();
 
 function getEmbedColor(cfg) {
   const hex = cfg?.embedColor;
@@ -34,18 +48,34 @@ function isValidId(id) {
   return !!id && id !== '0';
 }
 
-function ensureDir(dir) {
-  try {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  } catch {}
+function dayLabelFR(jour) {
+  const map = {
+    lundi: 'LUNDI',
+    mardi: 'MARDI',
+    mercredi: 'MERCREDI',
+    jeudi: 'JEUDI',
+    vendredi: 'VENDREDI',
+    samedi: 'SAMEDI',
+    dimanche: 'DIMANCHE'
+  };
+  return map[jour] || String(jour || '').toUpperCase();
 }
 
-function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900) {
+function sortMembersByName(col) {
+  return [...col.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+function mentionsLine(col) {
+  if (!col || !col.size) return '_Aucun_';
+  return sortMembersByName(col).map(m => `<@${m.id}>`).join(' - ');
+}
+
+function chunkMentions(ids, headerText = '', sep = ' - ', limit = 1900) {
   const batches = [];
   let cur = [];
   let curLen = headerText.length;
 
-  for (const id of allIds) {
+  for (const id of ids) {
     const mention = `<@${id}>`;
     const addLen = (cur.length ? sep.length : 0) + mention.length;
 
@@ -62,10 +92,78 @@ function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900)
   return batches;
 }
 
+/* ===================== Réactions ✅/❌ ===================== */
+async function extractReactions(message) {
+  const reacted = new Set();
+  const yes = new Set();
+  const no = new Set();
+
+  for (const [, reaction] of message.reactions.cache) {
+    const e = reaction.emoji?.name;
+    if (!['✅', '❌'].includes(e)) continue;
+
+    const users = await reaction.users.fetch().catch(() => null);
+    if (!users) continue;
+
+    users.forEach(u => {
+      if (u.bot) return;
+      reacted.add(u.id);
+      if (e === '✅') yes.add(u.id);
+      else no.add(u.id);
+    });
+  }
+
+  return { reacted, yes, no };
+}
+
+function computeHumansAll(guild) {
+  return guild.members.cache.filter(m => !m.user.bot);
+}
+
+function computeEligiblesWithRoles(guild, roleJoueur, roleEssai) {
+  return guild.members.cache.filter(m => {
+    if (m.user.bot) return false;
+    const hasJ = roleJoueur ? m.roles.cache.has(roleJoueur.id) : false;
+    const hasE = roleEssai ? m.roles.cache.has(roleEssai.id) : false;
+    return hasJ || hasE;
+  });
+}
+
+/* ===================== Embeds ===================== */
+function buildBaseEmbed({ color, clubName, title }) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .setFooter({ text: `${clubName} ⚫ Disponibilités` })
+    .setTimestamp();
+}
+
+function buildDetailEmbed({
+  color,
+  clubName,
+  jour,
+  presentsAll,
+  absentsAll,
+  nonRepondusFiltre,
+  nonRepondusTous
+}) {
+  return buildBaseEmbed({
+    color,
+    clubName,
+    title: `📅 RAPPORT - ${dayLabelFR(jour)} (DÉTAILLÉ)`
+  }).addFields(
+    { name: `✅ Présents (${presentsAll.size})`, value: mentionsLine(presentsAll) },
+    { name: `❌ Absents (${absentsAll.size})`, value: mentionsLine(absentsAll) },
+    { name: `⏳ Sans réaction (Joueur/Essai) (${nonRepondusFiltre.size})`, value: mentionsLine(nonRepondusFiltre) },
+    { name: `⏳ Sans réaction (sans filtre) (${nonRepondusTous.size})`, value: mentionsLine(nonRepondusTous) }
+  );
+}
+
+/* ===================== Commande ===================== */
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('disponibilites')
-    .setDescription('Rapport, rappel, snapshot ou fermeture des disponibilités du jour.')
+    .setDescription('Rapports & rappels sur les disponibilités du jour (modes simplifiés).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     // REQUIRED en premier
@@ -85,32 +183,33 @@ module.exports = {
     )
     .addStringOption(o =>
       o.setName('mode')
-        .setDescription('Type de sortie à générer')
+        .setDescription('Sortie à générer')
         .setRequired(true)
         .addChoices(
-          { name: 'Embed simple (non-répondants)', value: 'embed_simple' },
-          { name: 'Embed détaillé (✅ / ❌ / ⏳)', value: 'embed_detaille' },
-          { name: 'Rappel aux absents (mentions)', value: 'rappel_absents' },
-          { name: 'Snapshot (JSON)', value: 'snapshot' },
-          { name: 'Verrouiller + snapshot', value: 'verrouiller' }
+          { name: 'Mode détaillé (✅/❌/⏳ filtre + ⏳ sans filtre)', value: 'detaille' },
+          { name: 'Mode présents (✅)', value: 'presents' },
+          { name: 'Mode absents (❌)', value: 'absents' },
+          { name: 'Mode sans réaction (filtre Joueur/Essai)', value: 'sans_reaction_filtre' },
+          { name: 'Mode sans réaction (sans filtre)', value: 'sans_reaction_tous' },
+          { name: 'Mode rappel aux absents (mentions)', value: 'rappel_absents' }
         )
     )
 
     // Options facultatives
     .addChannelOption(o =>
       o.setName('salon_dispos')
-        .setDescription('Salon où se trouve le message du jour (défaut : salon dispos configuré)')
+        .setDescription('Salon où se trouve le message du jour (défaut : mainDispoChannelId)')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
     .addStringOption(o =>
       o.setName('message_id')
-        .setDescription('ID du message du jour (défaut : dispoMessages[jour] en config)')
+        .setDescription('ID du message du jour (défaut : dispoMessages[jour])')
         .setRequired(false)
     )
     .addChannelOption(o =>
       o.setName('salon')
-        .setDescription('Salon où envoyer le rapport/rappel (défaut : salon rapports configuré ou salon courant)')
+        .setDescription('Salon où envoyer le rapport/rappel (défaut : rapportChannelId ou salon courant)')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
@@ -122,11 +221,6 @@ module.exports = {
     .addRoleOption(o =>
       o.setName('role_essai')
         .setDescription('Rôle Essai pris en compte (défaut : config)')
-        .setRequired(false)
-    )
-    .addBooleanOption(o =>
-      o.setName('annoncer')
-        .setDescription('Pour "verrouiller" : annoncer la fermeture dans le salon dispos (défaut : oui)')
         .setRequired(false)
     ),
 
@@ -144,20 +238,20 @@ module.exports = {
     const cfgRoles = cfg.roles || {};
     const cfgDispoMessages = cfg.dispoMessages || {};
 
-    // Salon rapport/rappel
+    /* ===== 1) Salon cible (rapport/rappel) ===== */
     const rapportChannelId = cfg.rapportChannelId || null;
     const salonOption = interaction.options.getChannel('salon') || null;
 
-    let targetChannel =
+    const targetChannel =
       salonOption ||
       (isValidId(rapportChannelId) ? await guild.channels.fetch(rapportChannelId).catch(() => null) : null) ||
       interaction.channel;
 
     if (!targetChannel || !targetChannel.isTextBased()) {
-      return interaction.reply({ content: '❌ Salon cible invalide.', ephemeral: true });
+      return interaction.reply({ content: '❌ Salon cible invalide.', ephemeral: true }).catch(() => {});
     }
 
-    // Salon dispos + messageId
+    /* ===== 2) Salon dispos ===== */
     const mainDispoChannelId = cfg.mainDispoChannelId || null;
     const dispoChannelOption = interaction.options.getChannel('salon_dispos') || null;
 
@@ -169,9 +263,10 @@ module.exports = {
       return interaction.reply({
         content: '❌ Salon de dispos introuvable. Configure `mainDispoChannelId` ou utilise `salon_dispos`.',
         ephemeral: true
-      });
+      }).catch(() => {});
     }
 
+    /* ===== 3) Message ID ===== */
     const messageId =
       interaction.options.getString('message_id') ||
       cfgDispoMessages?.[jour] ||
@@ -181,10 +276,10 @@ module.exports = {
       return interaction.reply({
         content: `❌ ID du message introuvable pour **${jour}**. Configure \`dispoMessages.${jour}\` ou donne \`message_id\`.`,
         ephemeral: true
-      });
+      }).catch(() => {});
     }
 
-    // Rôles éligibles
+    /* ===== 4) Rôles (requis pour les modes filtrés + rappel) ===== */
     const roleJoueur =
       interaction.options.getRole('role_joueur') ||
       (isValidId(cfgRoles.joueur) ? guild.roles.cache.get(cfgRoles.joueur) : null);
@@ -193,28 +288,66 @@ module.exports = {
       interaction.options.getRole('role_essai') ||
       (isValidId(cfgRoles.essai) ? guild.roles.cache.get(cfgRoles.essai) : null);
 
-    if (!roleJoueur && !roleEssai) {
+    const needsRoles =
+      mode === 'detaille' ||
+      mode === 'sans_reaction_filtre' ||
+      mode === 'rappel_absents';
+
+    if (needsRoles && !roleJoueur && !roleEssai) {
       return interaction.reply({
         content: '❌ Aucun rôle Joueur/Essai trouvé (options ou config).',
         ephemeral: true
-      });
+      }).catch(() => {});
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    /* ===== 5) Permissions minimales ===== */
+    let me = guild.members.me;
+    if (!me) me = await guild.members.fetchMe().catch(() => null);
 
-    // Fetch message
+    if (!me) {
+      return interaction.reply({
+        content: '❌ Impossible de récupérer mes permissions (fetchMe).',
+        ephemeral: true
+      }).catch(() => {});
+    }
+
+    const readPerms = new PermissionsBitField([
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.ReadMessageHistory
+    ]);
+    if (!dispoChannel.permissionsFor(me)?.has(readPerms)) {
+      return interaction.reply({
+        content: `❌ Je n’ai pas les permissions pour lire dans ${dispoChannel} (voir + historique).`,
+        ephemeral: true
+      }).catch(() => {});
+    }
+
+    const writePerms = new PermissionsBitField([
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.EmbedLinks
+    ]);
+    if (!targetChannel.permissionsFor(me)?.has(writePerms)) {
+      return interaction.reply({
+        content: `❌ Je n’ai pas les permissions pour poster dans ${targetChannel} (écrire + embeds).`,
+        ephemeral: true
+      }).catch(() => {});
+    }
+
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+    /* ===== 6) Fetch message + members ===== */
     let message;
     try {
       message = await dispoChannel.messages.fetch(messageId);
     } catch {
       return interaction.editReply({
         content: `❌ Message introuvable (ID: \`${messageId}\`) dans ${dispoChannel}.`
-      });
+      }).catch(() => {});
     }
 
     await guild.members.fetch().catch(() => {});
 
-    // Bouton vers le message du jour
     const messageURL = `https://discord.com/channels/${guild.id}/${dispoChannel.id}/${message.id}`;
     const rowBtn = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -223,107 +356,131 @@ module.exports = {
         .setURL(messageURL)
     );
 
-    // Analyse réactions
-    const reacted = new Set();
-    const yes = new Set();
-    const no = new Set();
+    /* ===== 7) Analyse réactions ===== */
+    const { reacted, yes, no } = await extractReactions(message);
 
-    for (const [, reaction] of message.reactions.cache) {
-      const e = reaction.emoji?.name;
-      if (!['✅', '❌'].includes(e)) continue;
+    const humansAll = computeHumansAll(guild);
+    const eligibles = (roleJoueur || roleEssai) ? computeEligiblesWithRoles(guild, roleJoueur, roleEssai) : null;
 
-      const users = await reaction.users.fetch().catch(() => null);
-      if (!users) continue;
-
-      users.forEach(u => {
-        if (u.bot) return;
-        reacted.add(u.id);
-        if (e === '✅') yes.add(u.id);
-        else no.add(u.id);
-      });
-    }
-
-    const eligibles = guild.members.cache.filter(m => {
-      if (m.user.bot) return false;
-      const hasJ = roleJoueur ? m.roles.cache.has(roleJoueur.id) : false;
-      const hasE = roleEssai ? m.roles.cache.has(roleEssai.id) : false;
-      return hasJ || hasE;
-    });
-
-    const nonRepondus = eligibles.filter(m => !reacted.has(m.id));
     const presentsAll = guild.members.cache.filter(m => !m.user.bot && yes.has(m.id));
     const absentsAll = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
 
-    const tri = (col) => [...col.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
-    const idsLine = (col) => col.size ? tri(col).map(m => `<@${m.id}>`).join(' - ') : '_Aucun_';
+    const nonRepondusTous = humansAll.filter(m => !reacted.has(m.id));
+    const nonRepondusFiltre = eligibles ? eligibles.filter(m => !reacted.has(m.id)) : null;
 
-    // Snapshot helper (persistant)
-    const dateStr = new Date().toISOString().split('T')[0];
-    const writeSnapshot = () => {
-      ensureDir(SNAPSHOT_DIR);
-      const snap = {
-        type: 'dispos',
-        guildId: guild.id,
+    /* ===== 8) MODES ===== */
+    if (mode === 'detaille') {
+      const embed = buildDetailEmbed({
+        color,
         clubName,
         jour,
-        date: dateStr,
-        messageId: message.id,
-        channelId: dispoChannel.id,
-        reacted: [...reacted],
-        presents: [...yes],
-        absents: [...no],
-        eligibles: [...eligibles.keys()]
-      };
-      const snapPath = path.join(SNAPSHOT_DIR, `dispos-${jour}-${dateStr}.json`);
-      try { fs.writeFileSync(snapPath, JSON.stringify(snap, null, 2), 'utf8'); } catch {}
-      return snapPath;
-    };
+        presentsAll,
+        absentsAll,
+        nonRepondusFiltre,
+        nonRepondusTous
+      });
 
-    // ===== MODES =====
+      await targetChannel.send({
+        embeds: [embed],
+        components: [rowBtn],
+        allowedMentions: { parse: [] }
+      });
 
-    if (mode === 'embed_simple') {
-      const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
-        .setDescription(
-          nonRepondus.size === 0
-            ? '✅ **Tout le monde a réagi.**'
-            : `**Membres n’ayant pas réagi (${nonRepondus.size}) :**\n${idsLine(nonRepondus)}`
-        )
-        .setFooter({ text: `${clubName} ⚫ Rapport` })
-        .setTimestamp();
-
-      await targetChannel.send({ embeds: [embed], components: [rowBtn], allowedMentions: { parse: [] } });
-      return interaction.editReply({ content: `✅ (${VERSION}) Rapport **simple** envoyé → ${targetChannel}` });
+      return interaction.editReply({
+        content: `✅ (${VERSION}) Rapport **détaillé** envoyé → ${targetChannel}`
+      }).catch(() => {});
     }
 
-    if (mode === 'embed_detaille') {
-      const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(`📅 RAPPORT - ${jour.toUpperCase()}`)
-        .addFields(
-          { name: `✅ Présents (${presentsAll.size})`, value: idsLine(presentsAll) },
-          { name: `❌ Ont dit absent (${absentsAll.size})`, value: idsLine(absentsAll) },
-          { name: `⏳ N’ont pas réagi (${nonRepondus.size})`, value: idsLine(nonRepondus) }
-        )
-        .setFooter({ text: `${clubName} ⚫ Rapport` })
-        .setTimestamp();
+    if (mode === 'presents') {
+      const embed = buildBaseEmbed({
+        color,
+        clubName,
+        title: `✅ PRÉSENTS - ${dayLabelFR(jour)}`
+      }).setDescription(mentionsLine(presentsAll));
 
-      await targetChannel.send({ embeds: [embed], components: [rowBtn], allowedMentions: { parse: [] } });
-      return interaction.editReply({ content: `✅ (${VERSION}) Rapport **détaillé** envoyé → ${targetChannel}` });
+      await targetChannel.send({
+        embeds: [embed],
+        components: [rowBtn],
+        allowedMentions: { parse: [] }
+      });
+
+      return interaction.editReply({
+        content: `✅ (${VERSION}) Liste **présents** envoyée → ${targetChannel}`
+      }).catch(() => {});
+    }
+
+    if (mode === 'absents') {
+      const embed = buildBaseEmbed({
+        color,
+        clubName,
+        title: `❌ ABSENTS - ${dayLabelFR(jour)}`
+      }).setDescription(mentionsLine(absentsAll));
+
+      await targetChannel.send({
+        embeds: [embed],
+        components: [rowBtn],
+        allowedMentions: { parse: [] }
+      });
+
+      return interaction.editReply({
+        content: `✅ (${VERSION}) Liste **absents** envoyée → ${targetChannel}`
+      }).catch(() => {});
+    }
+
+    if (mode === 'sans_reaction_filtre') {
+      const embed = buildBaseEmbed({
+        color,
+        clubName,
+        title: `⏳ SANS RÉACTION (Joueur/Essai) - ${dayLabelFR(jour)}`
+      }).setDescription(mentionsLine(nonRepondusFiltre));
+
+      await targetChannel.send({
+        embeds: [embed],
+        components: [rowBtn],
+        allowedMentions: { parse: [] }
+      });
+
+      return interaction.editReply({
+        content: `✅ (${VERSION}) Liste **sans réaction (filtre)** envoyée → ${targetChannel}`
+      }).catch(() => {});
+    }
+
+    if (mode === 'sans_reaction_tous') {
+      const embed = buildBaseEmbed({
+        color,
+        clubName,
+        title: `⏳ SANS RÉACTION (sans filtre) - ${dayLabelFR(jour)}`
+      }).setDescription(mentionsLine(nonRepondusTous));
+
+      await targetChannel.send({
+        embeds: [embed],
+        components: [rowBtn],
+        allowedMentions: { parse: [] }
+      });
+
+      return interaction.editReply({
+        content: `✅ (${VERSION}) Liste **sans réaction (sans filtre)** envoyée → ${targetChannel}`
+      }).catch(() => {});
     }
 
     if (mode === 'rappel_absents') {
-      const ids = [...nonRepondus.values()].map(m => m.id);
-      if (!ids.length) return interaction.editReply({ content: `✅ Tout le monde a réagi pour **${jour.toUpperCase()}** !` });
+      const ids = [...nonRepondusFiltre.values()].map(m => m.id);
 
-      const header = [
-        `📣 **Rappel aux absents (${jour.toUpperCase()})**`,
-        'Merci de réagir aux disponibilités du jour ✅❌',
-        `➡️ [Accéder au message du jour](${messageURL})`
-      ].join('\n');
+      if (!ids.length) {
+        return interaction.editReply({
+          content: `✅ Tout le monde a réagi (filtre Joueur/Essai) pour **${dayLabelFR(jour)}**.`
+        }).catch(() => {});
+      }
 
-      const batches = splitByMessageLimit(ids, header + '\n\n');
+      const header = sanitize(
+        [
+          `📣 **Rappel disponibilités — ${dayLabelFR(jour)}**`,
+          'Merci de réagir au message du jour ✅❌.',
+          `➡️ [Accéder au message du jour](${messageURL})`
+        ].join('\n')
+      );
+
+      const batches = chunkMentions(ids, header + '\n\n');
 
       const first = batches.shift();
       if (first?.length) {
@@ -332,6 +489,7 @@ module.exports = {
           allowedMentions: { users: first, parse: [] }
         });
       }
+
       for (const batch of batches) {
         await targetChannel.send({
           content: batch.map(id => `<@${id}>`).join(' - '),
@@ -339,75 +497,11 @@ module.exports = {
         });
       }
 
-      return interaction.editReply({ content: `✅ Rappel envoyé dans ${targetChannel} (${ids.length} membre(s)).` });
-    }
-
-    if (mode === 'snapshot') {
-      const snapPath = writeSnapshot();
       return interaction.editReply({
-        content: `✅ Snapshot dispo enregistré (persistant) : \`${path.basename(snapPath)}\` dans SNAPSHOT_DIR.`
-      });
+        content: `✅ Rappel envoyé dans ${targetChannel} (${ids.length} membre(s) concernés — filtre Joueur/Essai).`
+      }).catch(() => {});
     }
 
-    if (mode === 'verrouiller') {
-      const annoncer = interaction.options.getBoolean('annoncer') ?? true;
-
-      const snapPath = writeSnapshot();
-
-      // Lock embed (ajoute la ligne)
-      try {
-        const exist = message.embeds?.[0];
-        if (exist) {
-          const e = EmbedBuilder.from(exist);
-          const desc = sanitize(exist.description || '');
-          const lockLine = '🔒 **Disponibilités fermées** – merci de ne plus réagir.';
-          if (!desc.includes('Disponibilités fermées')) {
-            e.setDescription([desc, '', lockLine].filter(Boolean).join('\n'));
-            e.setFooter({ text: `${clubName} ⚫ Disponibilités (fermées)` });
-            e.setColor(color);
-            await message.edit({ content: '', embeds: [e] });
-          }
-        }
-      } catch {}
-
-      // Clean reactions (si tu veux pareil que le scheduler : décommente)
-      // try { await message.reactions.removeAll(); } catch {}
-
-      if (annoncer) {
-        try {
-          await dispoChannel.send({
-            content: sanitize(
-              [
-                `🔒 **Les disponibilités pour ${jour.toUpperCase()} sont désormais fermées.**`,
-                'Merci de votre compréhension.',
-                '',
-                `➡️ [Voir le message du jour](${messageURL})`
-              ].join('\n')
-            ),
-            allowedMentions: { parse: [] }
-          });
-        } catch {}
-      }
-
-      // Envoi du rapport détaillé dans le salon cible (embed + bouton)
-      const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(`🔒 FERMETURE - ${jour.toUpperCase()}`)
-        .addFields(
-          { name: `✅ Présents (${presentsAll.size})`, value: idsLine(presentsAll) },
-          { name: `❌ Absents (${absentsAll.size})`, value: idsLine(absentsAll) },
-          { name: `⏳ Sans réaction (${nonRepondus.size})`, value: idsLine(nonRepondus) }
-        )
-        .setFooter({ text: `${clubName} ⚫ Snapshot: ${path.basename(snapPath)}` })
-        .setTimestamp();
-
-      await targetChannel.send({ embeds: [embed], components: [rowBtn], allowedMentions: { parse: [] } });
-
-      return interaction.editReply({
-        content: `✅ Fermeture OK + snapshot enregistré : \`${path.basename(snapPath)}\``
-      });
-    }
-
-    return interaction.editReply({ content: '❌ Mode inconnu.' });
+    return interaction.editReply({ content: '❌ Mode inconnu.' }).catch(() => {});
   }
 };
