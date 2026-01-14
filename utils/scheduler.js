@@ -1,6 +1,10 @@
-// utils/scheduler.js
-const fs = require('fs');
-const path = require('path');
+// utils/scheduler.js — SANS SNAPSHOTS (clean)
+// ✔ noon: rappel + rapport
+// ✔ close: rapport + fermeture (lock embed + clear reactions + message)
+// ✔ nickSync: synchro pseudos
+// ✖ snapshots supprimés
+// ✖ weekly snapshots supprimé
+
 const {
   EmbedBuilder,
   ActionRowBuilder,
@@ -10,8 +14,7 @@ const {
 } = require('discord.js');
 
 const { getGuildConfig } = require('./config');
-const { SNAPSHOT_DIR, ensureSnapshotDirectory } = require('./paths');
-const { buildNickname } = require('./nickname'); // ✅ format configurable + réutilisé partout
+const { buildNickname } = require('./nickname');
 
 const DEFAULT_COLOR = 0xff4db8;
 
@@ -42,6 +45,7 @@ function getEmbedColorFromConfig(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
+// 🔒 Anti-mentions accidentelles
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
@@ -105,8 +109,7 @@ function minutesOfDay(hour, minute) {
 
 /**
  * Fenêtre "inratable":
- * - on déclenche si NOW est après l'heure cible et dans une période de grâce
- * - graceMin par défaut = 10 minutes
+ * on déclenche si NOW est après l'heure cible et dans une période de grâce
  */
 function withinGraceAfter(nowH, nowM, targetH, targetM, graceMin = 10) {
   const now = minutesOfDay(nowH, nowM);
@@ -116,6 +119,7 @@ function withinGraceAfter(nowH, nowM, targetH, targetM, graceMin = 10) {
 
 /* ============================================================
    SCHEDULE PAR SERVEUR (configurable dans servers.json)
+   NOTE: weekly supprimé (snapshots supprimés)
 ============================================================ */
 function getScheduleForGuild(guildId) {
   const cfg = getGuildConfig(guildId) || {};
@@ -125,12 +129,10 @@ function getScheduleForGuild(guildId) {
 
   const noon = s.noon || {};
   const close = s.close || {};
-  const weekly = s.weekly || {};
   const nickSync = s.nickSync || {};
 
   const noonTime = parseTimeHHMM(noon.time, { hour: 12, minute: 0 });
   const closeTime = parseTimeHHMM(close.time, { hour: 17, minute: 0 });
-  const weeklyTime = parseTimeHHMM(weekly.time, { hour: 22, minute: 0 });
 
   return {
     timezone,
@@ -139,7 +141,6 @@ function getScheduleForGuild(guildId) {
       enabled: noon.enabled ?? true,
       hour: noonTime.hour,
       minute: noonTime.minute,
-      windowMin: Number.isFinite(noon.windowMin) ? noon.windowMin : 2,
       graceMin: Number.isFinite(noon.graceMin) ? noon.graceMin : 10,
       mentionInReminder: noon.mentionInReminder ?? true,
       mentionInReports: noon.mentionInReports ?? false
@@ -149,19 +150,9 @@ function getScheduleForGuild(guildId) {
       enabled: close.enabled ?? true,
       hour: closeTime.hour,
       minute: closeTime.minute,
-      windowMin: Number.isFinite(close.windowMin) ? close.windowMin : 2,
       graceMin: Number.isFinite(close.graceMin) ? close.graceMin : 10,
       clearReactions: close.clearReactions ?? true,
       sendCloseMessage: close.sendCloseMessage ?? true
-    },
-
-    weekly: {
-      enabled: weekly.enabled ?? true,
-      day: (weekly.day || 'dimanche').toLowerCase(),
-      hour: weeklyTime.hour,
-      minute: weeklyTime.minute,
-      windowMin: Number.isFinite(weekly.windowMin) ? weekly.windowMin : 2,
-      graceMin: Number.isFinite(weekly.graceMin) ? weekly.graceMin : 10
     },
 
     nickSync: {
@@ -191,7 +182,7 @@ function computeTargetGuildIds(client, opts = {}) {
 }
 
 /* ============================================================
-   DISPOS : RÉCUP DATA
+   DISPOS : OUTILS
 ============================================================ */
 function idsLine(colOrArray) {
   const arr = Array.isArray(colOrArray) ? colOrArray : [...colOrArray.values()];
@@ -240,7 +231,6 @@ async function fetchDispoDataForDay(guild, jour) {
   const yes = new Set();
   const no = new Set();
 
-  // sécurise: refresh si besoin
   try { await message.fetch().catch(() => {}); } catch {}
 
   for (const [, reaction] of message.reactions.cache) {
@@ -304,6 +294,7 @@ function splitByMessageLimit(allIds, headerText = '', sep = ' - ', limit = 1900)
   for (const id of allIds) {
     const mention = `<@${id}>`;
     const addLen = (cur.length ? sep.length : 0) + mention.length;
+
     if (curLen + addLen > limit) {
       batches.push(cur);
       cur = [id];
@@ -390,9 +381,9 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
 }
 
 /* ============================================================
-   CLOSE : FERMETURE + SNAPSHOT (heure configurable)
+   CLOSE : FERMETURE (heure configurable) — SANS SNAPSHOT
 ============================================================ */
-async function closeDisposForGuild(client, guildId, jour, isoDate, schedule) {
+async function closeDisposForGuild(client, guildId, jour, schedule) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
 
@@ -401,31 +392,6 @@ async function closeDisposForGuild(client, guildId, jour, isoDate, schedule) {
 
   const clubName = getClubName(data.cfg, guild);
   const color = getEmbedColorFromConfig(guild.id);
-
-  // Snapshot persistant
-  try {
-    ensureSnapshotDirectory();
-
-    const snapshot = {
-      type: 'dispos',
-      guildId: guild.id,
-      clubName,
-      jour,
-      date: isoDate,
-      messageId: data.message.id,
-      channelId: data.dispoChannel.id,
-      reacted: [...data.reacted],
-      presents: [...data.yes],
-      absents: [...data.no],
-      eligibles: [...data.eligibles.keys()]
-    };
-
-    const snapPath = path.join(SNAPSHOT_DIR, `dispos-${jour}-${isoDate}.json`);
-    fs.writeFileSync(snapPath, JSON.stringify(snapshot, null, 2), 'utf8');
-    logInfo(`✅ snapshot écrit: ${snapPath}`);
-  } catch (e) {
-    logErr('snapshot dispo (écriture):', e?.message || e);
-  }
 
   // Lock embed (si embed existant)
   try {
@@ -465,156 +431,7 @@ async function closeDisposForGuild(client, guildId, jour, isoDate, schedule) {
 }
 
 /* ============================================================
-   RAPPORT SEMAINE via SNAPSHOTS
-============================================================ */
-const DISPO_SNAP_REGEX =
-  /^dispos-(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)-(\d{4}-\d{2}-\d{2})\.json$/i;
-
-function parseISODate(d) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || '');
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const da = Number(m[3]);
-  if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
-  return new Date(y, mo - 1, da, 0, 0, 0, 0);
-}
-
-function toISO(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function addDays(d, delta) {
-  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  x.setDate(x.getDate() + delta);
-  return x;
-}
-
-function readDispoSnapshotsInRange(fromDate, toDate, guildId) {
-  const snaps = [];
-  if (!fs.existsSync(SNAPSHOT_DIR)) return snaps;
-
-  const files = fs.readdirSync(SNAPSHOT_DIR).filter(f => DISPO_SNAP_REGEX.test(f));
-  for (const f of files) {
-    const m = DISPO_SNAP_REGEX.exec(f);
-    if (!m) continue;
-
-    const fileDate = parseISODate(m[2]);
-    if (!fileDate) continue;
-
-    if (fileDate >= fromDate && fileDate <= toDate) {
-      try {
-        const js = JSON.parse(fs.readFileSync(path.join(SNAPSHOT_DIR, f), 'utf8'));
-        if (guildId && String(js?.guildId || '') !== String(guildId)) continue;
-        snaps.push({ file: f, date: fileDate, data: js });
-      } catch {}
-    }
-  }
-
-  snaps.sort((a, b) => a.date - b.date);
-  return snaps;
-}
-
-async function autoWeekDispoReportForGuild(client, guildId, schedule) {
-  const guild = client.guilds.cache.get(guildId);
-  if (!guild) return;
-
-  const cfg = getGuildConfig(guild.id) || {};
-  const reportChannelId = cfg.rapportChannelId;
-  if (!isValidId(reportChannelId)) return;
-
-  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
-  if (!reportChannel || !reportChannel.isTextBased()) return;
-
-  const color = getEmbedColorFromConfig(guild.id);
-  const clubLabel = getClubName(cfg, guild);
-
-  const nowParis = getParisParts(schedule.timezone);
-  const end = new Date(nowParis.year, nowParis.month - 1, nowParis.day);
-  const start = addDays(end, -6);
-
-  const debutStr = toISO(start);
-  const finStr = toISO(end);
-
-  const fromDate = parseISODate(debutStr);
-  const toDate = parseISODate(finStr);
-
-  const snaps = readDispoSnapshotsInRange(fromDate, toDate, guild.id);
-
-  if (!snaps.length) {
-    const embedEmpty = new EmbedBuilder()
-      .setColor(color)
-      .setTitle('📅 Check semaine (snapshots)')
-      .setDescription(`⚠️ Aucun snapshot dispo sur **${debutStr} → ${finStr}**.`)
-      .setFooter({ text: `${clubLabel} • Rapport snapshots` })
-      .setTimestamp();
-
-    await reportChannel.send({ embeds: [embedEmpty], allowedMentions: { parse: [] } }).catch(() => {});
-    return;
-  }
-
-  await guild.members.fetch().catch(() => {});
-  const misses = new Map();
-  let used = 0;
-  let skipped = 0;
-
-  for (const s of snaps) {
-    const data = s.data || {};
-    const reacted = new Set(Array.isArray(data.reacted) ? data.reacted : []);
-    const eligibles = Array.isArray(data.eligibles) ? data.eligibles : null;
-
-    if (!eligibles?.length) { skipped++; continue; }
-
-    used++;
-    for (const id of eligibles) {
-      if (!reacted.has(id)) misses.set(id, (misses.get(id) || 0) + 1);
-    }
-  }
-
-  const entries = [...misses.entries()]
-    .filter(([, n]) => n > 0)
-    .sort((a, b) => b[1] - a[1]);
-
-  const headerLines = [
-    '📅 **Check semaine (Snapshots)**',
-    `🗓️ Période : **${debutStr} → ${finStr}**`,
-    `📂 Snapshots utilisés : **${used}**`,
-    skipped ? `⚠️ Ignorés : **${skipped}** (incomplets)` : ''
-  ].filter(Boolean);
-
-  if (!entries.length) {
-    const embedOK = new EmbedBuilder()
-      .setColor(color)
-      .setTitle('✅ Semaine OK — tout le monde a réagi')
-      .setDescription(headerLines.join('\n'))
-      .setFooter({ text: `${clubLabel} • Rapport snapshots` })
-      .setTimestamp();
-
-    await reportChannel.send({ embeds: [embedOK], allowedMentions: { parse: [] } }).catch(() => {});
-    return;
-  }
-
-  const asLine = (id, n) => {
-    const m = guild.members.cache.get(id);
-    return m ? `<@${id}> — **${n}** jour(s) sans réaction` : `\`${id}\` *(hors serveur)* — **${n}** jour(s)`;
-  };
-
-  const embed = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(`⏳ Semaine — non-réagis (total : ${entries.length})`)
-    .setDescription(headerLines.join('\n'))
-    .addFields({
-      name: 'Liste (top 20)',
-      value: entries.slice(0, 20).map(([id, n]) => `• ${asLine(id, n)}`).join('\n').slice(0, 1024)
-    })
-    .setFooter({ text: `${clubLabel} • Rapport snapshots` })
-    .setTimestamp();
-
-  await reportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
-}
-
-/* ============================================================
-   SYNC PSEUDOS (auto) — utilise utils/nickname.js + nickname.format
+   SYNC PSEUDOS (auto)
 ============================================================ */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -656,11 +473,9 @@ async function autoSyncNicknamesForGuild(client, guildId, schedule) {
    INIT SCHEDULER (INRATABLE)
 ============================================================ */
 function initScheduler(client, opts = {}) {
-  ensureSnapshotDirectory();
+  logInfo('Scheduler ON (robuste) : noon / close / nickSync (snapshots OFF)');
 
-  logInfo('Scheduler ON (robuste) : noon / close+snapshot / weekly / nickSync');
-
-  // lastRun[guildId] = { noon, close, weekly, nick }
+  // lastRun[guildId] = { noon, close, nick }
   const lastRun = new Map();
   let tickRunning = false;
 
@@ -679,7 +494,7 @@ function initScheduler(client, opts = {}) {
         const { hour, minute, isoDate: dateKey, jour } = getParisParts(schedule.timezone);
         if (!isEligibleDay(jour)) continue;
 
-        const state = lastRun.get(gid) || { noon: null, close: null, weekly: null, nick: null };
+        const state = lastRun.get(gid) || { noon: null, close: null, nick: null };
 
         // --- NOON (rappel + rapport) ---
         if (
@@ -706,7 +521,7 @@ function initScheduler(client, opts = {}) {
           }
         }
 
-        // --- CLOSE (rapport + fermeture + snapshot) ---
+        // --- CLOSE (rapport + fermeture) ---
         if (
           schedule.close.enabled &&
           withinGraceAfter(hour, minute, schedule.close.hour, schedule.close.minute, schedule.close.graceMin)
@@ -726,24 +541,8 @@ function initScheduler(client, opts = {}) {
               logErr(`close report (${gid})`, e?.message || e);
             }
 
-            try { await closeDisposForGuild(client, gid, jour, dateKey, schedule); }
-            catch (e) { logErr(`close + snapshot (${gid})`, e?.message || e); }
-          }
-        }
-
-        // --- WEEKLY ---
-        const weeklyDayOk = jour === String(schedule.weekly.day || 'dimanche').toLowerCase();
-        if (
-          schedule.weekly.enabled &&
-          weeklyDayOk &&
-          withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)
-        ) {
-          const key = `${dateKey}-weekly-${schedule.weekly.hour}:${schedule.weekly.minute}`;
-          if (state.weekly !== key) {
-            state.weekly = key;
-            logInfo(`WEEKLY ${gid} -> ${jour} (${schedule.weekly.hour}:${String(schedule.weekly.minute).padStart(2,'0')})`);
-            try { await autoWeekDispoReportForGuild(client, gid, schedule); }
-            catch (e) { logErr(`weekly snapshots (${gid})`, e?.message || e); }
+            try { await closeDisposForGuild(client, gid, jour, schedule); }
+            catch (e) { logErr(`close (${gid})`, e?.message || e); }
           }
         }
 
@@ -775,6 +574,5 @@ module.exports = {
   runNoonReminderForGuild,
   sendDetailedReportForGuild,
   closeDisposForGuild,
-  autoWeekDispoReportForGuild,
   autoSyncNicknamesForGuild
 };
