@@ -62,12 +62,6 @@
         "clearReactions": true,
         "sendCloseMessage": true
       },
-      "weekly": {
-        "enabled": true,
-        "day": "jeudi",
-        "time": "22:00",
-        "windowMin": 2
-      },
       "nickSync": {
         "enabled": true,
         "minute": 10,
@@ -118,12 +112,6 @@
         "windowMin": 2,
         "clearReactions": true,
         "sendCloseMessage": true
-      },
-      "weekly": {
-        "enabled": false,
-        "day": "dimanche",
-        "time": "22:00",
-        "windowMin": 2
       },
       "nickSync": {
         "enabled": false,
