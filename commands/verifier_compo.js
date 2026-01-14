@@ -1,7 +1,20 @@
 // commands/verifier_compo.js
+// ✅ Vérifier Compo — VERSION OPTIMISÉE, SIMPLE, INTUITIVE (SANS SNAPSHOT)
+//
+// Objectif : vérifier quels "convoqués" (rôle roles.convoque) ont validé la compo via ✅
+// Fonctionnalités conservées / améliorées :
+// - message : ID ou lien (optionnel) ; sinon auto-détection (50 derniers messages)
+// - salon : où se trouve la compo (option > cfg.compo.channelId > salon courant)
+// - salon_rapport : où envoyer le rapport (option > cfg.rapportChannelId > salon courant)
+// - rappel : mentionner ceux qui n'ont pas validé (désactivé par défaut)
+// - sécurité : permissions, anti-crash, allowedMentions strict, parsing lien robuste
+//
+// Supprimé : snapshot / fichier / SNAPSHOT_DIR / option enregistrer_snapshot
+
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
+  PermissionsBitField,
   EmbedBuilder,
   ChannelType,
   ActionRowBuilder,
@@ -9,14 +22,11 @@ const {
   ButtonStyle
 } = require('discord.js');
 
-const fs = require('fs');
-const path = require('path');
-
 const { getConfigFromInteraction } = require('../utils/config');
-const { SNAPSHOT_DIR } = require('../utils/paths');
 
 const DEFAULT_COLOR = 0xff4db8;
 
+/* ===================== Helpers ===================== */
 function getEmbedColor(cfg) {
   const hex = cfg?.embedColor;
   if (!hex) return DEFAULT_COLOR;
@@ -29,30 +39,67 @@ function isValidId(id) {
   return !!id && id !== '0';
 }
 
-function ensureDir(dir) {
-  try {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  } catch {}
+function parseMessageId(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+  // accepte:
+  // - ID pur
+  // - lien discord .../channels/<guild>/<channel>/<message>
+  const m = raw.match(/(\d{17,20})$/);
+  return m ? m[1] : null;
 }
 
-/**
- * Date ISO en timezone Paris
- */
-function getParisISODate() {
-  const fmt = new Intl.DateTimeFormat('fr-FR', {
-    timeZone: 'Europe/Paris',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  });
-  const parts = fmt.formatToParts(new Date());
-  const get = (t) => parts.find(p => p.type === t)?.value;
-  const y = get('year');
-  const m = get('month');
-  const d = get('day');
-  return `${y}-${m}-${d}`;
+async function fetchMeSafe(guild) {
+  return guild.members.me || (await guild.members.fetchMe().catch(() => null));
 }
 
+function chunkMentions(ids, limit = 1900, sep = ' - ') {
+  const batches = [];
+  let cur = [];
+  let curLen = 0;
+
+  for (const id of ids) {
+    const mention = `<@${id}>`;
+    const addLen = (cur.length ? sep.length : 0) + mention.length;
+
+    if (curLen + addLen > limit) {
+      batches.push(cur);
+      cur = [id];
+      curLen = mention.length;
+    } else {
+      cur.push(id);
+      curLen += addLen;
+    }
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
+
+function safeMentionsLine(ids) {
+  return ids.length ? ids.map(id => `<@${id}>`).join(' - ') : '_Aucun_';
+}
+
+/* ===================== Auto-détection ===================== */
+async function detectCompoMessage({ channel, botId, detectMode, footerContains, reactionEmoji }) {
+  const fetched = await channel.messages.fetch({ limit: 50 });
+
+  const byFooter = fetched.find(msg =>
+    msg.author?.id === botId &&
+    msg.embeds?.[0]?.footer?.text &&
+    String(msg.embeds[0].footer.text).includes(footerContains)
+  );
+
+  const byReaction = fetched.find(msg =>
+    msg.author?.id === botId &&
+    msg.reactions?.cache?.some(r => r.emoji?.name === reactionEmoji)
+  );
+
+  if (detectMode === 'footer') return byFooter || null;
+  if (detectMode === 'reaction') return byReaction || null;
+  return byFooter || byReaction || null; // footer_or_reaction
+}
+
+/* ===================== Commande ===================== */
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('verifier_compo')
@@ -80,11 +127,6 @@ module.exports = {
       o.setName('rappel')
         .setDescription('Mentionner ceux qui n’ont pas validé (défaut : non).')
         .setRequired(false)
-    )
-    .addBooleanOption(o =>
-      o.setName('enregistrer_snapshot')
-        .setDescription('Enregistrer un snapshot (persistant) du résultat (défaut : non).')
-        .setRequired(false)
     ),
 
   async execute(interaction) {
@@ -95,17 +137,25 @@ module.exports = {
     const cfg = guildConfig || {};
 
     const convoqueRoleId = cfg?.roles?.convoque || null;
-    const embedColor = getEmbedColor(cfg);
-    const clubLabel = cfg?.clubName || guild.name || 'INTER GALACTIQUE';
-
-    const rappel = interaction.options.getBoolean('rappel') ?? false;
-    const enregistrer = interaction.options.getBoolean('enregistrer_snapshot') ?? false;
-
     if (!isValidId(convoqueRoleId)) {
       return interaction.reply({
         content: '❌ Rôle **convoqué** non configuré (`roles.convoque` dans servers.json).',
         ephemeral: true
-      });
+      }).catch(() => {});
+    }
+
+    const embedColor = getEmbedColor(cfg);
+    const clubLabel = cfg?.clubName || guild.name || 'INTER GALACTIQUE';
+
+    const rappel = interaction.options.getBoolean('rappel') ?? false;
+
+    // ✅ bot member
+    const me = await fetchMeSafe(guild);
+    if (!me) {
+      return interaction.reply({
+        content: '❌ Impossible de récupérer mes permissions (fetchMe).',
+        ephemeral: true
+      }).catch(() => {});
     }
 
     // Salon compo : option > cfg.compo.channelId > salon courant
@@ -114,91 +164,93 @@ module.exports = {
       (isValidId(cfg?.compo?.channelId) ? await guild.channels.fetch(cfg.compo.channelId).catch(() => null) : null) ||
       interaction.channel;
 
-    if (!compoChannel || compoChannel.type !== ChannelType.GuildText) {
+    if (!compoChannel || compoChannel.type !== ChannelType.GuildText || !compoChannel.isTextBased?.()) {
       return interaction.reply({
         content: '❌ Salon de composition invalide.',
         ephemeral: true
-      });
+      }).catch(() => {});
     }
 
+    // Salon rapport : option > cfg.rapportChannelId > salon courant
     const rapportChannelId = cfg?.rapportChannelId || null;
     const rapportChannel =
       interaction.options.getChannel('salon_rapport') ||
-      (isValidId(rapportChannelId) ? guild.channels.cache.get(rapportChannelId) : null) ||
+      (isValidId(rapportChannelId) ? await guild.channels.fetch(rapportChannelId).catch(() => null) : null) ||
       interaction.channel;
 
-    const me = guild.members.me;
-    if (!rapportChannel?.permissionsFor(me)?.has(['ViewChannel', 'SendMessages'])) {
+    if (!rapportChannel || !rapportChannel.isTextBased?.()) {
+      return interaction.reply({
+        content: '❌ Salon rapport invalide.',
+        ephemeral: true
+      }).catch(() => {});
+    }
+
+    // Permissions d’écriture dans le salon rapport
+    const canSend = rapportChannel.permissionsFor(me)?.has([
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.SendMessages
+    ]);
+    if (!canSend) {
       return interaction.reply({
         content: `❌ Je ne peux pas écrire dans <#${rapportChannel?.id || 'inconnu'}>.`,
         ephemeral: true
-      });
+      }).catch(() => {});
     }
 
     await interaction.reply({
       content: '🔎 Vérification de la composition en cours…',
       ephemeral: true
-    });
+    }).catch(() => {});
 
-    // --- Récupération du message de compo ---
-    let messageIdInput = interaction.options.getString('message');
+    /* ===================== Récupération message compo ===================== */
     let compoMessage = null;
+    const messageInput = interaction.options.getString('message');
 
-    // config compo detection
-    const detectMode = (cfg?.compo?.detectMode || 'footer_or_reaction').toLowerCase();
+    // config détection
+    const detectMode = String(cfg?.compo?.detectMode || 'footer_or_reaction').toLowerCase(); // footer|reaction|footer_or_reaction
     const footerContains = String(cfg?.compo?.footerContains || 'Compo officielle');
     const reactionEmoji = String(cfg?.compo?.reactionEmoji || '✅');
 
-    if (messageIdInput) {
-      messageIdInput = messageIdInput.trim();
-      const linkMatch = messageIdInput.match(/\/(\d{17,20})$/);
-      if (linkMatch) messageIdInput = linkMatch[1];
-
-      try {
-        compoMessage = await compoChannel.messages.fetch(messageIdInput);
-      } catch {
+    if (messageInput) {
+      const messageId = parseMessageId(messageInput);
+      if (!messageId) {
         return interaction.editReply({
-          content: `❌ Message introuvable dans <#${compoChannel.id}> (ID: \`${messageIdInput}\`).`
-        });
+          content: '❌ `message` invalide. Donne un ID (17-20 chiffres) ou un lien Discord du message.'
+        }).catch(() => {});
+      }
+
+      compoMessage = await compoChannel.messages.fetch(messageId).catch(() => null);
+      if (!compoMessage) {
+        return interaction.editReply({
+          content: `❌ Message introuvable dans <#${compoChannel.id}> (ID: \`${messageId}\`).`
+        }).catch(() => {});
       }
     } else {
-      // Auto-détection : on regarde les 50 derniers messages du salon
       try {
-        const fetched = await compoChannel.messages.fetch({ limit: 50 });
-
-        // 1) Footer (si mode le permet)
-        const byFooter = fetched.find(msg =>
-          msg.author.id === me.id &&
-          msg.embeds?.[0]?.footer?.text &&
-          String(msg.embeds[0].footer.text).includes(footerContains)
-        );
-
-        // 2) Réaction (si mode le permet)
-        const byReaction = fetched.find(msg =>
-          msg.author.id === me.id &&
-          msg.reactions?.cache?.some(r => r.emoji?.name === reactionEmoji)
-        );
-
-        if (detectMode === 'footer') compoMessage = byFooter || null;
-        else if (detectMode === 'reaction') compoMessage = byReaction || null;
-        else compoMessage = byFooter || byReaction || null;
-
-        if (!compoMessage) {
-          return interaction.editReply(
-            '❌ Impossible de trouver automatiquement un message de composition dans ce salon.\n' +
-            '➡️ Relance avec l’option `message` (ID ou lien du message de compo).'
-          );
-        }
+        compoMessage = await detectCompoMessage({
+          channel: compoChannel,
+          botId: me.id,
+          detectMode,
+          footerContains,
+          reactionEmoji
+        });
       } catch (err) {
         console.error('Erreur recherche compo auto :', err);
         return interaction.editReply(
           '❌ Erreur lors de la recherche automatique de la composition.\n' +
-          '➡️ Relance avec l’option `message` (ID ou lien du message via Discord).'
-        );
+          '➡️ Relance avec l’option `message` (ID ou lien du message).'
+        ).catch(() => {});
+      }
+
+      if (!compoMessage) {
+        return interaction.editReply(
+          '❌ Impossible de trouver automatiquement un message de composition dans ce salon.\n' +
+          '➡️ Relance avec l’option `message` (ID ou lien du message).'
+        ).catch(() => {});
       }
     }
 
-    // --- Récup membres / convoqués ---
+    /* ===================== Membres / convoqués ===================== */
     await guild.members.fetch().catch(() => {});
 
     const convoques = guild.members.cache.filter(
@@ -206,56 +258,29 @@ module.exports = {
     );
 
     if (!convoques.size) {
-      return interaction.editReply('ℹ️ Aucun convoqué trouvé (rôle vide).');
+      return interaction.editReply('ℹ️ Aucun convoqué trouvé (rôle vide).').catch(() => {});
     }
 
-    // --- Qui a réagi ✅ ? ---
+    /* ===================== Qui a validé (✅) ? ===================== */
     const validesSet = new Set();
 
-    for (const [, reaction] of compoMessage.reactions.cache) {
-      if (reaction.emoji?.name !== '✅') continue;
+    const reaction = compoMessage.reactions.cache.find(r => r.emoji?.name === '✅');
+    if (reaction) {
       const users = await reaction.users.fetch().catch(() => null);
-      if (!users) continue;
-      users.forEach(u => { if (!u.bot) validesSet.add(u.id); });
+      if (users) {
+        users.forEach(u => { if (!u.bot) validesSet.add(u.id); });
+      }
     }
 
     const valides = [];
     const nonValides = [];
 
     for (const m of convoques.values()) {
-      if (validesSet.has(m.id)) valides.push(m);
-      else nonValides.push(m);
+      (validesSet.has(m.id) ? valides : nonValides).push(m);
     }
 
-    // --- Snapshot (optionnel) ---
-    if (enregistrer) {
-      try {
-        ensureDir(SNAPSHOT_DIR);
-        const dateStr = getParisISODate();
-
-        const snap = {
-          type: 'compo',
-          guildId: guild.id,
-          clubName: clubLabel,
-          date: dateStr,
-          channelId: compoChannel.id,
-          messageId: compoMessage.id,
-          convoques: [...convoques.values()].map(m => m.id),
-          valides: valides.map(m => m.id),
-          non_valides: nonValides.map(m => m.id)
-        };
-
-        const filePath = path.join(SNAPSHOT_DIR, `compo-${dateStr}-${compoMessage.id}.json`);
-        fs.writeFileSync(filePath, JSON.stringify(snap, null, 2), 'utf8');
-      } catch (e) {
-        console.error('Erreur snapshot compo :', e);
-      }
-    }
-
+    /* ===================== Rendu ===================== */
     const url = `https://discord.com/channels/${guild.id}/${compoChannel.id}/${compoMessage.id}`;
-
-    const formatMentions = (arr) =>
-      arr.length ? arr.map(m => `<@${m.id}>`).join(' - ') : '_Aucun_';
 
     const rowBtn = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -264,6 +289,9 @@ module.exports = {
         .setURL(url)
     );
 
+    // Mentions (rappel)
+    const nonValidesIds = nonValides.map(m => m.id);
+
     const embed = new EmbedBuilder()
       .setColor(embedColor)
       .setTitle('📋 Vérification de la composition')
@@ -271,31 +299,51 @@ module.exports = {
         `📨 Message : [Lien vers la compo](${url})`,
         `👥 Convoqués : **${convoques.size}**`,
         `✅ Validé : **${valides.length}**`,
-        `⏳ Non validé : **${nonValides.length}**`,
-        enregistrer ? '💾 Snapshot enregistré (persistant).' : ''
-      ].filter(Boolean).join('\n'))
+        `⏳ Non validé : **${nonValides.length}**`
+      ].join('\n'))
       .addFields(
-        { name: '✅ Validé', value: formatMentions(valides).slice(0, 1024) },
-        { name: '⏳ Non validé', value: formatMentions(nonValides).slice(0, 1024) }
+        { name: `✅ Validé (${valides.length})`, value: safeMentionsLine(valides.map(m => m.id)).slice(0, 1024) },
+        { name: `⏳ Non validé (${nonValides.length})`, value: safeMentionsLine(nonValidesIds).slice(0, 1024) }
       )
       .setFooter({ text: `${clubLabel} • Vérification compo` })
       .setTimestamp();
 
-    const nonValidesIds = nonValides.map(m => m.id);
-
+    // Envoi rapport
     await rapportChannel.send({
-      content: rappel && nonValidesIds.length
-        ? nonValidesIds.map(id => `<@${id}>`).join(' - ')
-        : undefined,
+      content: undefined,
       embeds: [embed],
       components: [rowBtn],
-      allowedMentions: rappel && nonValidesIds.length
-        ? { users: nonValidesIds, parse: [] }
-        : { parse: [] }
-    });
+      allowedMentions: { parse: [] }
+    }).catch(() => {});
 
-    await interaction.editReply(
+    // Rappel en messages séparés si demandé (évite dépasser 2000 chars)
+    if (rappel && nonValidesIds.length) {
+      const header = [
+        `📣 **Rappel validation compo**`,
+        `Merci de valider la composition avec ✅.`,
+        `➡️ ${url}`
+      ].join('\n');
+
+      const batches = chunkMentions(nonValidesIds, 1900, ' - ');
+      const first = batches.shift();
+
+      if (first?.length) {
+        await rapportChannel.send({
+          content: `${header}\n\n${first.map(id => `<@${id}>`).join(' - ')}`,
+          allowedMentions: { users: first, parse: [] }
+        }).catch(() => {});
+      }
+
+      for (const batch of batches) {
+        await rapportChannel.send({
+          content: batch.map(id => `<@${id}>`).join(' - '),
+          allowedMentions: { users: batch, parse: [] }
+        }).catch(() => {});
+      }
+    }
+
+    return interaction.editReply(
       `✅ Vérification terminée. Rapport envoyé dans <#${rapportChannel.id}>.`
-    );
+    ).catch(() => {});
   }
 };
