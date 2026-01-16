@@ -9,7 +9,7 @@
 // - logChannelId (où le bot log en embed)
 // - logDisposChannelId (salon "LOGIS DISPO" pour calculer la semaine)
 // - automationSchedule.weekly (enabled/day/time/lookbackDays)
-
+//
 // Important:
 // - Le rapport semaine est calculé à partir des embeds "📅 RAPPORT - ..." postés dans logDisposChannelId.
 // - Le scheduler poste aussi les rapports journaliers dans logDisposChannelId (si configuré) pour alimenter le calcul semaine.
@@ -139,6 +139,11 @@ function getScheduleForGuild(guildId) {
   const closeTime = parseTimeHHMM(close.time, { hour: 17, minute: 0 });
   const weeklyTime = parseTimeHHMM(weekly.time, { hour: 22, minute: 0 });
 
+  // ✅ Compat: si ton servers.json a encore "windowMin", on le mappe vers graceMin
+  const noonGrace = Number.isFinite(noon.graceMin) ? noon.graceMin : (Number.isFinite(noon.windowMin) ? noon.windowMin : 10);
+  const closeGrace = Number.isFinite(close.graceMin) ? close.graceMin : (Number.isFinite(close.windowMin) ? close.windowMin : 10);
+  const weeklyGrace = Number.isFinite(weekly.graceMin) ? weekly.graceMin : (Number.isFinite(weekly.windowMin) ? weekly.windowMin : 10);
+
   return {
     timezone,
 
@@ -146,7 +151,7 @@ function getScheduleForGuild(guildId) {
       enabled: noon.enabled ?? true,
       hour: noonTime.hour,
       minute: noonTime.minute,
-      graceMin: Number.isFinite(noon.graceMin) ? noon.graceMin : 10,
+      graceMin: noonGrace,
       mentionInReminder: noon.mentionInReminder ?? true,
       mentionInReports: noon.mentionInReports ?? false
     },
@@ -155,7 +160,7 @@ function getScheduleForGuild(guildId) {
       enabled: close.enabled ?? true,
       hour: closeTime.hour,
       minute: closeTime.minute,
-      graceMin: Number.isFinite(close.graceMin) ? close.graceMin : 10,
+      graceMin: closeGrace,
       clearReactions: close.clearReactions ?? true,
       sendCloseMessage: close.sendCloseMessage ?? true
     },
@@ -165,7 +170,7 @@ function getScheduleForGuild(guildId) {
       day: String(weekly.day || 'jeudi').toLowerCase(),
       hour: weeklyTime.hour,
       minute: weeklyTime.minute,
-      graceMin: Number.isFinite(weekly.graceMin) ? weekly.graceMin : 10,
+      graceMin: weeklyGrace,
       lookbackDays: Number.isFinite(weekly.lookbackDays) ? weekly.lookbackDays : 7
     },
 
