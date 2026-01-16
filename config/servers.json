@@ -52,14 +52,14 @@
       "noon": {
         "enabled": true,
         "time": "12:00",
-        "windowMin": 2,
+        "graceMin": 10,
         "mentionInReminder": true,
         "mentionInReports": false
       },
       "close": {
         "enabled": true,
         "time": "17:00",
-        "windowMin": 2,
+        "graceMin": 10,
         "clearReactions": true,
         "sendCloseMessage": true
       },
@@ -67,7 +67,8 @@
         "enabled": false,
         "day": "jeudi",
         "time": "22:00",
-        "windowMin": 2
+        "graceMin": 10,
+        "lookbackDays": 7
       },
       "nickSync": {
         "enabled": true,
@@ -109,14 +110,14 @@
       "noon": {
         "enabled": true,
         "time": "12:00",
-        "windowMin": 2,
+        "graceMin": 10,
         "mentionInReminder": true,
         "mentionInReports": false
       },
       "close": {
         "enabled": true,
         "time": "19:00",
-        "windowMin": 2,
+        "graceMin": 10,
         "clearReactions": true,
         "sendCloseMessage": true
       },
@@ -124,7 +125,8 @@
         "enabled": false,
         "day": "dimanche",
         "time": "22:00",
-        "windowMin": 2
+        "graceMin": 10,
+        "lookbackDays": 7
       },
       "nickSync": {
         "enabled": false,
