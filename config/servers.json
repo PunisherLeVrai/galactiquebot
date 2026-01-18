@@ -64,7 +64,7 @@
         "sendCloseMessage": true
       },
       "weekly": {
-        "enabled": false,
+        "enabled": true,
         "day": "jeudi",
         "time": "22:00",
         "graceMin": 10,
