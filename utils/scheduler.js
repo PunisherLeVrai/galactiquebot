@@ -1,4 +1,4 @@
-// utils/scheduler.js — SANS SNAPSHOTS (clean) + LOGS EN EMBED + RAPPORT SEMAINE (JEUDI) SANS SNAPSHOTS
+// utils/scheduler.js — SANS SNAPSHOTS (clean) + LOGS EN EMBED + RAPPORT SEMAINE (JEUDI)
 // ✔ noon: rappel + rapport (dispos du jour)
 // ✔ close: rapport + fermeture (lock embed + clear reactions + message)
 // ✔ weekly: rapport semaine (calculé via salon logDisposChannelId) -> JEUDI (configurable)
@@ -6,13 +6,12 @@
 // ✖ snapshots supprimés
 //
 // Requiert dans servers.json :
-// - logChannelId (où le bot log en embed)
-// - logDisposChannelId (salon "LOGIS DISPO" pour calculer la semaine)
-// - automationSchedule.weekly (enabled/day/time/lookbackDays)
-//
-// Important:
-// - Le rapport semaine est calculé à partir des embeds "📅 RAPPORT - ..." postés dans logDisposChannelId.
-// - Le scheduler poste aussi les rapports journaliers dans logDisposChannelId (si configuré) pour alimenter le calcul semaine.
+// - logChannelId (logs en embed)
+// - rapportChannelId
+// - mainDispoChannelId + dispoMessages[jour]
+// - roles.joueur / roles.essai
+// - logDisposChannelId (salon "LOGIS DISPO" = source du weekly)
+// - automationSchedule.weekly.enabled = true (uniquement sur IG dans ton cas)
 
 const {
   EmbedBuilder,
@@ -47,15 +46,17 @@ function getEmbedColorFromConfig(guildId) {
   return Number.isNaN(num) ? DEFAULT_COLOR : num;
 }
 
-// 🔒 Anti-mentions accidentelles (everyone/here/roles). Les mentions users restent OK.
+// 🔒 Anti-mentions accidentelles (everyone/here/roles). Mentions users OK.
 const sanitize = (t) =>
   String(t || '').replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]');
 
 function isEligibleDay(jour) {
-  return ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'].includes(jour);
+  return ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'].includes(jour);
 }
 
-function pad2(n) { return String(n).padStart(2, '0'); }
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
 
 /* ============================================================
    DATE/TIME EUROPE/PARIS (ou timezone config)
@@ -89,8 +90,13 @@ function getParisParts(timezone = 'Europe/Paris') {
   const isoDate = `${year}-${pad2(month)}-${pad2(day)}`;
 
   const mapJour = {
-    dimanche: 'dimanche', lundi: 'lundi', mardi: 'mardi', mercredi: 'mercredi',
-    jeudi: 'jeudi', vendredi: 'vendredi', samedi: 'samedi'
+    dimanche: 'dimanche',
+    lundi: 'lundi',
+    mardi: 'mardi',
+    mercredi: 'mercredi',
+    jeudi: 'jeudi',
+    vendredi: 'vendredi',
+    samedi: 'samedi'
   };
   const jour = mapJour[weekday] || 'lundi';
 
@@ -112,8 +118,7 @@ function minutesOfDay(hour, minute) {
 }
 
 /**
- * Fenêtre "inratable":
- * on déclenche si NOW est après l'heure cible et dans une période de grâce
+ * Fenêtre "inratable": déclenche si NOW est après l'heure cible et dans une période de grâce.
  */
 function withinGraceAfter(nowH, nowM, targetH, targetM, graceMin = 10) {
   const now = minutesOfDay(nowH, nowM);
@@ -139,8 +144,8 @@ function getScheduleForGuild(guildId) {
   const closeTime = parseTimeHHMM(close.time, { hour: 17, minute: 0 });
   const weeklyTime = parseTimeHHMM(weekly.time, { hour: 22, minute: 0 });
 
-  // ✅ Compat: si ton servers.json a encore "windowMin", on le mappe vers graceMin
-  const noonGrace = Number.isFinite(noon.graceMin) ? noon.graceMin : (Number.isFinite(noon.windowMin) ? noon.windowMin : 10);
+  // ✅ Compat: si ancien "windowMin" existe encore, on le mappe vers graceMin
+  const noonGrace  = Number.isFinite(noon.graceMin)  ? noon.graceMin  : (Number.isFinite(noon.windowMin)  ? noon.windowMin  : 10);
   const closeGrace = Number.isFinite(close.graceMin) ? close.graceMin : (Number.isFinite(close.windowMin) ? close.windowMin : 10);
   const weeklyGrace = Number.isFinite(weekly.graceMin) ? weekly.graceMin : (Number.isFinite(weekly.windowMin) ? weekly.windowMin : 10);
 
@@ -183,7 +188,7 @@ function getScheduleForGuild(guildId) {
 }
 
 /* ============================================================
-   CIBLAGE SERVEURS
+   CIBLAGE SERVEURS (ne change rien : weekly dépend de la config)
 ============================================================ */
 function computeTargetGuildIds(client, opts = {}) {
   const present = new Set([...client.guilds.cache.keys()]);
@@ -267,7 +272,7 @@ async function fetchDispoDataForDay(guild, jour) {
   if (!isValidId(dispoChannelId) || !isValidId(dispoMessageId)) return null;
 
   const roleJoueurId = isValidId(cfg.roles?.joueur) ? cfg.roles.joueur : null;
-  const roleEssaiId  = isValidId(cfg.roles?.essai)  ? cfg.roles.essai  : null;
+  const roleEssaiId = isValidId(cfg.roles?.essai) ? cfg.roles.essai : null;
   if (!roleJoueurId && !roleEssaiId) return null;
 
   const dispoChannel = await guild.channels.fetch(dispoChannelId).catch(() => null);
@@ -283,7 +288,7 @@ async function fetchDispoDataForDay(guild, jour) {
   await guild.members.fetch().catch(() => {});
 
   const roleJoueur = roleJoueurId ? guild.roles.cache.get(roleJoueurId) : null;
-  const roleEssai  = roleEssaiId  ? guild.roles.cache.get(roleEssaiId)  : null;
+  const roleEssai = roleEssaiId ? guild.roles.cache.get(roleEssaiId) : null;
 
   const reacted = new Set();
   const yes = new Set();
@@ -309,13 +314,13 @@ async function fetchDispoDataForDay(guild, jour) {
   const eligibles = guild.members.cache.filter(m => {
     if (m.user.bot) return false;
     const hasJoueur = roleJoueur ? m.roles.cache.has(roleJoueur.id) : false;
-    const hasEssai  = roleEssai  ? m.roles.cache.has(roleEssai.id)  : false;
+    const hasEssai = roleEssai ? m.roles.cache.has(roleEssai.id) : false;
     return hasJoueur || hasEssai;
   });
 
   const nonRepondus = eligibles.filter(m => !reacted.has(m.id));
   const presentsAll = guild.members.cache.filter(m => !m.user.bot && yes.has(m.id));
-  const absentsAll  = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
+  const absentsAll = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
 
   const messageURL = `https://discord.com/channels/${guild.id}/${dispoChannelId}/${dispoMessageId}`;
   const rowBtn = new ActionRowBuilder().addComponents(
@@ -441,7 +446,7 @@ async function sendDetailedReportForGuild(client, guildId, jour, hourLabel, sche
     allowedMentions: schedule.noon.mentionInReports ? { parse: ['users'] } : { parse: [] }
   }).catch(() => {});
 
-  // Alimentation du salon LOGIS DISPO (source pour le rapport semaine)
+  // ✅ C’est ICI que le bot envoie les LOGS DISPO (source du weekly)
   if (isValidId(data.cfg.logDisposChannelId)) {
     const logCh = await guild.channels.fetch(data.cfg.logDisposChannelId).catch(() => null);
     if (logCh?.isTextBased()) {
@@ -467,7 +472,6 @@ async function closeDisposForGuild(client, guildId, jour, schedule) {
   const clubName = getClubName(data.cfg, guild);
   const color = getEmbedColorFromConfig(guild.id);
 
-  // Lock embed (si embed existant)
   try {
     const exist = data.message.embeds?.[0];
     if (exist) {
@@ -505,7 +509,7 @@ async function closeDisposForGuild(client, guildId, jour, schedule) {
 }
 
 /* ============================================================
-   RAPPORT SEMAINE (SANS SNAPSHOTS) — Calcul via salon logDisposChannelId
+   RAPPORT SEMAINE — Calcul via salon logDisposChannelId
 ============================================================ */
 function parseMentionsFromText(text) {
   const s = String(text || '');
@@ -521,10 +525,6 @@ function isDailyReportEmbed(embed) {
   return title.startsWith('📅 RAPPORT - ');
 }
 
-/**
- * Fetch messages dans un salon jusqu'à atteindre sinceMs ou un plafond.
- * (évite le "limit=100" insuffisant quand le salon est très actif)
- */
 async function fetchMessagesSince(channel, sinceMs, hardCap = 600) {
   const out = [];
   let beforeId = null;
@@ -539,7 +539,6 @@ async function fetchMessagesSince(channel, sinceMs, hardCap = 600) {
     const oldest = values[values.length - 1];
     beforeId = oldest.id;
 
-    // stop si on est déjà plus vieux que la fenêtre
     if (oldest.createdTimestamp < sinceMs) break;
   }
 
@@ -557,14 +556,13 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
   if (!isValidId(reportChannelId) || !isValidId(logDisposChannelId)) {
     await sendLogEmbed(client, guildId, 'WARN', 'Rapport semaine ignoré', [
       !isValidId(reportChannelId) ? '• rapportChannelId manquant' : '',
-      !isValidId(logDisposChannelId) ? '• logDisposChannelId manquant (salon LOGIS DISPO)' : ''
+      !isValidId(logDisposChannelId) ? '• logDisposChannelId manquant (LOGIS DISPO)' : ''
     ].filter(Boolean));
     return;
   }
 
   const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
   const logCh = await guild.channels.fetch(logDisposChannelId).catch(() => null);
-
   if (!reportChannel?.isTextBased() || !logCh?.isTextBased()) return;
 
   const color = getEmbedColorFromConfig(guild.id);
@@ -576,7 +574,6 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
   const messages = await fetchMessagesSince(logCh, sinceMs, 600);
   if (!messages.length) return;
 
-  // Filtre: messages du bot + embed rapport du jour
   const daily = messages
     .filter(m => m.createdTimestamp >= sinceMs)
     .filter(m => m.author?.id === client.user.id)
@@ -590,10 +587,10 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
       .setTitle('📅 RAPPORT SEMAINE — Disponibilités')
       .setDescription(
         [
-          '⚠️ Aucun rapport journalier détecté dans le salon **LOGIS DISPO** sur la période.',
+          '⚠️ Aucun rapport journalier détecté dans **LOGIS DISPO** sur la période.',
           `🗓️ Fenêtre : **${lookbackDays}** jour(s)`,
           '',
-          '➡️ Assure-toi que le scheduler envoie bien les rapports journaliers dans ce salon.'
+          '➡️ Vérifie que les rapports journaliers sont bien copiés dans ce salon.'
         ].join('\n')
       )
       .setFooter({ text: `${clubLabel} • Rapport semaine` })
@@ -603,11 +600,9 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
     return;
   }
 
-  // Cumul des non-répondus par user
   const misses = new Map(); // userId -> count
-  const usedDays = new Set(); // évite doublons si plusieurs rapports du même jour
+  const usedDays = new Set();
 
-  // Trier du plus récent au plus ancien
   daily.sort((a, b) => b.msg.createdTimestamp - a.msg.createdTimestamp);
 
   for (const { msg, embed } of daily) {
@@ -621,9 +616,7 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
     if (!nr?.value) continue;
 
     const ids = parseMentionsFromText(nr.value);
-    for (const id of ids) {
-      misses.set(id, (misses.get(id) || 0) + 1);
-    }
+    for (const id of ids) misses.set(id, (misses.get(id) || 0) + 1);
   }
 
   const entries = [...misses.entries()]
@@ -649,18 +642,15 @@ async function autoWeekDispoReportForGuild(client, guildId, schedule) {
 
   const linesTop = entries.slice(0, 25).map(([id, n]) => `• <@${id}> — **${n}** jour(s) sans réaction`);
 
-  const embed = new EmbedBuilder()
+  const embedOut = new EmbedBuilder()
     .setColor(color)
     .setTitle(`⏳ RAPPORT SEMAINE — Non-réagis (total : ${entries.length})`)
     .setDescription(headerLines.join('\n'))
-    .addFields({
-      name: 'Classement (top 25)',
-      value: linesTop.join('\n').slice(0, 1024)
-    })
+    .addFields({ name: 'Classement (top 25)', value: linesTop.join('\n').slice(0, 1024) })
     .setFooter({ text: `${clubLabel} • Rapport semaine` })
     .setTimestamp();
 
-  await reportChannel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
+  await reportChannel.send({ embeds: [embedOut], allowedMentions: { parse: [] } }).catch(() => {});
 }
 
 /* ============================================================
@@ -706,7 +696,6 @@ async function autoSyncNicknamesForGuild(client, guildId, schedule) {
    INIT SCHEDULER (INRATABLE)
 ============================================================ */
 function initScheduler(client, opts = {}) {
-  // lastRun[guildId] = { noon, close, weekly, nick }
   const lastRun = new Map();
   let tickRunning = false;
 
@@ -727,11 +716,8 @@ function initScheduler(client, opts = {}) {
 
         const state = lastRun.get(gid) || { noon: null, close: null, weekly: null, nick: null };
 
-        // --- NOON (rappel + rapport) ---
-        if (
-          schedule.noon.enabled &&
-          withinGraceAfter(hour, minute, schedule.noon.hour, schedule.noon.minute, schedule.noon.graceMin)
-        ) {
+        // --- NOON ---
+        if (schedule.noon.enabled && withinGraceAfter(hour, minute, schedule.noon.hour, schedule.noon.minute, schedule.noon.graceMin)) {
           const key = `${dateKey}-noon-${schedule.noon.hour}:${schedule.noon.minute}`;
           if (state.noon !== key) {
             state.noon = key;
@@ -742,27 +728,15 @@ function initScheduler(client, opts = {}) {
             ]);
 
             try { await runNoonReminderForGuild(client, gid, jour, schedule); }
-            catch (e) {
-              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Noon reminder', [String(e?.message || e)]);
-            }
+            catch (e) { await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Noon reminder', [String(e?.message || e)]); }
 
-            try {
-              await sendDetailedReportForGuild(
-                client, gid, jour,
-                `${schedule.noon.hour}h${pad2(schedule.noon.minute)}`,
-                schedule
-              );
-            } catch (e) {
-              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Noon report', [String(e?.message || e)]);
-            }
+            try { await sendDetailedReportForGuild(client, gid, jour, `${schedule.noon.hour}h${pad2(schedule.noon.minute)}`, schedule); }
+            catch (e) { await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Noon report', [String(e?.message || e)]); }
           }
         }
 
-        // --- CLOSE (rapport + fermeture) ---
-        if (
-          schedule.close.enabled &&
-          withinGraceAfter(hour, minute, schedule.close.hour, schedule.close.minute, schedule.close.graceMin)
-        ) {
+        // --- CLOSE ---
+        if (schedule.close.enabled && withinGraceAfter(hour, minute, schedule.close.hour, schedule.close.minute, schedule.close.graceMin)) {
           const key = `${dateKey}-close-${schedule.close.hour}:${schedule.close.minute}`;
           if (state.close !== key) {
             state.close = key;
@@ -774,30 +748,17 @@ function initScheduler(client, opts = {}) {
               `• Message fermeture : **${schedule.close.sendCloseMessage ? 'ON' : 'OFF'}**`
             ]);
 
-            try {
-              await sendDetailedReportForGuild(
-                client, gid, jour,
-                `${schedule.close.hour}h${pad2(schedule.close.minute)}`,
-                schedule
-              );
-            } catch (e) {
-              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Close report', [String(e?.message || e)]);
-            }
+            try { await sendDetailedReportForGuild(client, gid, jour, `${schedule.close.hour}h${pad2(schedule.close.minute)}`, schedule); }
+            catch (e) { await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Close report', [String(e?.message || e)]); }
 
             try { await closeDisposForGuild(client, gid, jour, schedule); }
-            catch (e) {
-              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Close (fermeture)', [String(e?.message || e)]);
-            }
+            catch (e) { await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Close (fermeture)', [String(e?.message || e)]); }
           }
         }
 
-        // --- WEEKLY (JEUDI par défaut) — Rapport semaine sans snapshots ---
+        // --- WEEKLY (uniquement si enabled=true dans la config du serveur) ---
         const weeklyDayOk = jour === String(schedule.weekly.day || 'jeudi').toLowerCase();
-        if (
-          schedule.weekly.enabled &&
-          weeklyDayOk &&
-          withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)
-        ) {
+        if (schedule.weekly.enabled && weeklyDayOk && withinGraceAfter(hour, minute, schedule.weekly.hour, schedule.weekly.minute, schedule.weekly.graceMin)) {
           const key = `${dateKey}-weekly-${schedule.weekly.hour}:${schedule.weekly.minute}`;
           if (state.weekly !== key) {
             state.weekly = key;
@@ -809,13 +770,11 @@ function initScheduler(client, opts = {}) {
             ]);
 
             try { await autoWeekDispoReportForGuild(client, gid, schedule); }
-            catch (e) {
-              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Weekly report', [String(e?.message || e)]);
-            }
+            catch (e) { await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Weekly report', [String(e?.message || e)]); }
           }
         }
 
-        // --- NICK SYNC (tous les jours à minute X, 1 fois par heure) ---
+        // --- NICK SYNC ---
         if (schedule.nickSync.enabled && minute === schedule.nickSync.minute) {
           const key = `${dateKey}-nick-${hour}`;
           if (state.nick !== key) {
@@ -827,9 +786,7 @@ function initScheduler(client, opts = {}) {
             ]);
 
             try { await autoSyncNicknamesForGuild(client, gid, schedule); }
-            catch (e) {
-              await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Nick sync', [String(e?.message || e)]);
-            }
+            catch (e) { await sendLogEmbed(client, gid, 'ERROR', 'Erreur — Nick sync', [String(e?.message || e)]); }
           }
         }
 
@@ -846,8 +803,6 @@ function initScheduler(client, opts = {}) {
 
 module.exports = {
   initScheduler,
-
-  // exposés (debug/tests)
   runNoonReminderForGuild,
   sendDetailedReportForGuild,
   closeDisposForGuild,
