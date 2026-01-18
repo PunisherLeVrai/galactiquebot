@@ -1,18 +1,15 @@
 // commands/disponibilites.js
-// ✅ Disponibilités — VERSION OPTIMISÉE + MODES SIMPLIFIÉS (UNIQUEMENT ceux demandés)
+// ✅ RAPPORTS DISPOS — FILTRE Joueur + Essai UNIQUEMENT
 //
-// Modes conservés :
-// - detaille                 -> ✅ Présents / ❌ Absents / ⏳ Sans réaction (filtre Joueur+Essai) / ⏳ Sans réaction (sans filtre)
-// - presents                 -> ✅ Présents
-// - absents                  -> ❌ Absents
-// - sans_reaction_filtre     -> ⏳ Sans réaction (filtre Joueur+Essai)
-// - sans_reaction_tous       -> ⏳ Sans réaction (sans filtre : tous les membres humains)
-// - rappel_absents           -> 📣 Rappel (mentions) aux "sans réaction filtrés Joueur+Essai"
+// Modes :
+// - detaille      -> ✅ Présents / ❌ Absents / ⏳ Sans réaction (TOUT filtré Joueur+Essai)
+// - presents      -> ✅ Présents (filtré)
+// - absents       -> ❌ Absents (filtré)
+// - sans_reaction -> ⏳ Sans réaction (filtré)
 //
-// ✅ Suppression : embed_simple / snapshot / verrouiller
 // ✅ Bouton "Voir le message du jour"
 // ✅ Anti-mentions accidentelles
-// ✅ Gestion permissions minimale + messages chunkés pour le rappel
+// ✅ Sans snapshot / sans rappel (rappel déplacé dans /rappeldispos)
 
 const {
   SlashCommandBuilder,
@@ -27,10 +24,10 @@ const {
 
 const { getConfigFromInteraction } = require('../utils/config');
 
-const VERSION = 'disponibilites v5.1 (modes simplifiés)';
+const VERSION = 'disponibilites v6.0 (rapport + filtre Joueur/Essai)';
 const DEFAULT_COLOR = 0xff4db8;
 
-/* ===================== Helpers généraux ===================== */
+/* ===================== Helpers ===================== */
 const sanitize = (t) =>
   String(t || '')
     .replace(/@everyone|@here|<@&\d+>/g, '[mention bloquée 🚫]')
@@ -67,29 +64,8 @@ function sortMembersByName(col) {
 
 function mentionsLine(col) {
   if (!col || !col.size) return '_Aucun_';
-  return sortMembersByName(col).map(m => `<@${m.id}>`).join(' - ');
-}
-
-function chunkMentions(ids, headerText = '', sep = ' - ', limit = 1900) {
-  const batches = [];
-  let cur = [];
-  let curLen = headerText.length;
-
-  for (const id of ids) {
-    const mention = `<@${id}>`;
-    const addLen = (cur.length ? sep.length : 0) + mention.length;
-
-    if (curLen + addLen > limit) {
-      batches.push(cur);
-      cur = [id];
-      curLen = headerText.length + mention.length;
-    } else {
-      cur.push(id);
-      curLen += addLen;
-    }
-  }
-  if (cur.length) batches.push(cur);
-  return batches;
+  const s = sortMembersByName(col).map(m => `<@${m.id}>`).join(' - ');
+  return s.length > 1024 ? (s.slice(0, 1023) + '…') : s;
 }
 
 /* ===================== Réactions ✅/❌ ===================== */
@@ -116,10 +92,6 @@ async function extractReactions(message) {
   return { reacted, yes, no };
 }
 
-function computeHumansAll(guild) {
-  return guild.members.cache.filter(m => !m.user.bot);
-}
-
 function computeEligiblesWithRoles(guild, roleJoueur, roleEssai) {
   return guild.members.cache.filter(m => {
     if (m.user.bot) return false;
@@ -138,24 +110,15 @@ function buildBaseEmbed({ color, clubName, title }) {
     .setTimestamp();
 }
 
-function buildDetailEmbed({
-  color,
-  clubName,
-  jour,
-  presentsAll,
-  absentsAll,
-  nonRepondusFiltre,
-  nonRepondusTous
-}) {
+function buildDetailEmbed({ color, clubName, jour, presents, absents, nonRepondus }) {
   return buildBaseEmbed({
     color,
     clubName,
     title: `📅 RAPPORT - ${dayLabelFR(jour)} (DÉTAILLÉ)`
   }).addFields(
-    { name: `✅ Présents (${presentsAll.size})`, value: mentionsLine(presentsAll) },
-    { name: `❌ Absents (${absentsAll.size})`, value: mentionsLine(absentsAll) },
-    { name: `⏳ Sans réaction (Joueur/Essai) (${nonRepondusFiltre.size})`, value: mentionsLine(nonRepondusFiltre) },
-    { name: `⏳ Sans réaction (sans filtre) (${nonRepondusTous.size})`, value: mentionsLine(nonRepondusTous) }
+    { name: `✅ Présents (${presents.size})`, value: mentionsLine(presents) },
+    { name: `❌ Absents (${absents.size})`, value: mentionsLine(absents) },
+    { name: `⏳ Sans réaction (${nonRepondus.size})`, value: mentionsLine(nonRepondus) }
   );
 }
 
@@ -163,10 +126,9 @@ function buildDetailEmbed({
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('disponibilites')
-    .setDescription('Rapports & rappels sur les disponibilités du jour (modes simplifiés).')
+    .setDescription('Rapports sur les disponibilités (filtre Joueur + Essai).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
-    // REQUIRED en premier
     .addStringOption(o =>
       o.setName('jour')
         .setDescription('Jour à vérifier')
@@ -183,19 +145,16 @@ module.exports = {
     )
     .addStringOption(o =>
       o.setName('mode')
-        .setDescription('Sortie à générer')
+        .setDescription('Sortie à générer (filtrée Joueur+Essai)')
         .setRequired(true)
         .addChoices(
-          { name: 'Mode détaillé (✅/❌/⏳ filtre + ⏳ sans filtre)', value: 'detaille' },
+          { name: 'Mode détaillé (✅/❌/⏳)', value: 'detaille' },
           { name: 'Mode présents (✅)', value: 'presents' },
           { name: 'Mode absents (❌)', value: 'absents' },
-          { name: 'Mode sans réaction (filtre Joueur/Essai)', value: 'sans_reaction_filtre' },
-          { name: 'Mode sans réaction (sans filtre)', value: 'sans_reaction_tous' },
-          { name: 'Mode rappel aux absents (mentions)', value: 'rappel_absents' }
+          { name: 'Mode sans réaction (⏳)', value: 'sans_reaction' }
         )
     )
 
-    // Options facultatives
     .addChannelOption(o =>
       o.setName('salon_dispos')
         .setDescription('Salon où se trouve le message du jour (défaut : mainDispoChannelId)')
@@ -209,7 +168,7 @@ module.exports = {
     )
     .addChannelOption(o =>
       o.setName('salon')
-        .setDescription('Salon où envoyer le rapport/rappel (défaut : rapportChannelId ou salon courant)')
+        .setDescription('Salon où envoyer le rapport (défaut : rapportChannelId ou salon actuel)')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(false)
     )
@@ -225,10 +184,11 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    const jour = interaction.options.getString('jour', true);
-    const mode = interaction.options.getString('mode', true);
     const guild = interaction.guild;
     if (!guild) return;
+
+    const jour = interaction.options.getString('jour', true);
+    const mode = interaction.options.getString('mode', true);
 
     const { guild: guildCfg } = getConfigFromInteraction(interaction) || {};
     const cfg = guildCfg || {};
@@ -238,7 +198,7 @@ module.exports = {
     const cfgRoles = cfg.roles || {};
     const cfgDispoMessages = cfg.dispoMessages || {};
 
-    /* ===== 1) Salon cible (rapport/rappel) ===== */
+    /* ===== 1) Salon cible ===== */
     const rapportChannelId = cfg.rapportChannelId || null;
     const salonOption = interaction.options.getChannel('salon') || null;
 
@@ -279,7 +239,7 @@ module.exports = {
       }).catch(() => {});
     }
 
-    /* ===== 4) Rôles (requis pour les modes filtrés + rappel) ===== */
+    /* ===== 4) Rôles Joueur/Essai (obligatoires) ===== */
     const roleJoueur =
       interaction.options.getRole('role_joueur') ||
       (isValidId(cfgRoles.joueur) ? guild.roles.cache.get(cfgRoles.joueur) : null);
@@ -288,12 +248,7 @@ module.exports = {
       interaction.options.getRole('role_essai') ||
       (isValidId(cfgRoles.essai) ? guild.roles.cache.get(cfgRoles.essai) : null);
 
-    const needsRoles =
-      mode === 'detaille' ||
-      mode === 'sans_reaction_filtre' ||
-      mode === 'rappel_absents';
-
-    if (needsRoles && !roleJoueur && !roleEssai) {
+    if (!roleJoueur && !roleEssai) {
       return interaction.reply({
         content: '❌ Aucun rôle Joueur/Essai trouvé (options ou config).',
         ephemeral: true
@@ -359,32 +314,22 @@ module.exports = {
     /* ===== 7) Analyse réactions ===== */
     const { reacted, yes, no } = await extractReactions(message);
 
-    const humansAll = computeHumansAll(guild);
-    const eligibles = (roleJoueur || roleEssai) ? computeEligiblesWithRoles(guild, roleJoueur, roleEssai) : null;
+    const eligibles = computeEligiblesWithRoles(guild, roleJoueur, roleEssai);
 
-    const presentsAll = guild.members.cache.filter(m => !m.user.bot && yes.has(m.id));
-    const absentsAll = guild.members.cache.filter(m => !m.user.bot && no.has(m.id));
-
-    const nonRepondusTous = humansAll.filter(m => !reacted.has(m.id));
-    const nonRepondusFiltre = eligibles ? eligibles.filter(m => !reacted.has(m.id)) : null;
+    // ✅ Tout est filtré Joueur/Essai
+    const presents = eligibles.filter(m => yes.has(m.id));
+    const absents = eligibles.filter(m => no.has(m.id));
+    const nonRepondus = eligibles.filter(m => !reacted.has(m.id));
 
     /* ===== 8) MODES ===== */
     if (mode === 'detaille') {
-      const embed = buildDetailEmbed({
-        color,
-        clubName,
-        jour,
-        presentsAll,
-        absentsAll,
-        nonRepondusFiltre,
-        nonRepondusTous
-      });
+      const embed = buildDetailEmbed({ color, clubName, jour, presents, absents, nonRepondus });
 
       await targetChannel.send({
         embeds: [embed],
         components: [rowBtn],
         allowedMentions: { parse: [] }
-      });
+      }).catch(() => {});
 
       return interaction.editReply({
         content: `✅ (${VERSION}) Rapport **détaillé** envoyé → ${targetChannel}`
@@ -396,13 +341,13 @@ module.exports = {
         color,
         clubName,
         title: `✅ PRÉSENTS - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(presentsAll));
+      }).setDescription(mentionsLine(presents));
 
       await targetChannel.send({
         embeds: [embed],
         components: [rowBtn],
         allowedMentions: { parse: [] }
-      });
+      }).catch(() => {});
 
       return interaction.editReply({
         content: `✅ (${VERSION}) Liste **présents** envoyée → ${targetChannel}`
@@ -414,91 +359,34 @@ module.exports = {
         color,
         clubName,
         title: `❌ ABSENTS - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(absentsAll));
+      }).setDescription(mentionsLine(absents));
 
       await targetChannel.send({
         embeds: [embed],
         components: [rowBtn],
         allowedMentions: { parse: [] }
-      });
+      }).catch(() => {});
 
       return interaction.editReply({
         content: `✅ (${VERSION}) Liste **absents** envoyée → ${targetChannel}`
       }).catch(() => {});
     }
 
-    if (mode === 'sans_reaction_filtre') {
+    if (mode === 'sans_reaction') {
       const embed = buildBaseEmbed({
         color,
         clubName,
-        title: `⏳ SANS RÉACTION (Joueur/Essai) - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(nonRepondusFiltre));
+        title: `⏳ SANS RÉACTION - ${dayLabelFR(jour)}`
+      }).setDescription(mentionsLine(nonRepondus));
 
       await targetChannel.send({
         embeds: [embed],
         components: [rowBtn],
         allowedMentions: { parse: [] }
-      });
-
-      return interaction.editReply({
-        content: `✅ (${VERSION}) Liste **sans réaction (filtre)** envoyée → ${targetChannel}`
       }).catch(() => {});
-    }
-
-    if (mode === 'sans_reaction_tous') {
-      const embed = buildBaseEmbed({
-        color,
-        clubName,
-        title: `⏳ SANS RÉACTION (sans filtre) - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(nonRepondusTous));
-
-      await targetChannel.send({
-        embeds: [embed],
-        components: [rowBtn],
-        allowedMentions: { parse: [] }
-      });
 
       return interaction.editReply({
-        content: `✅ (${VERSION}) Liste **sans réaction (sans filtre)** envoyée → ${targetChannel}`
-      }).catch(() => {});
-    }
-
-    if (mode === 'rappel_absents') {
-      const ids = [...nonRepondusFiltre.values()].map(m => m.id);
-
-      if (!ids.length) {
-        return interaction.editReply({
-          content: `✅ Tout le monde a réagi (filtre Joueur/Essai) pour **${dayLabelFR(jour)}**.`
-        }).catch(() => {});
-      }
-
-      const header = sanitize(
-        [
-          `📣 **Rappel disponibilités — ${dayLabelFR(jour)}**`,
-          'Merci de réagir au message du jour ✅❌.',
-          `➡️ [Accéder au message du jour](${messageURL})`
-        ].join('\n')
-      );
-
-      const batches = chunkMentions(ids, header + '\n\n');
-
-      const first = batches.shift();
-      if (first?.length) {
-        await targetChannel.send({
-          content: `${header}\n\n${first.map(id => `<@${id}>`).join(' - ')}`,
-          allowedMentions: { users: first, parse: [] }
-        });
-      }
-
-      for (const batch of batches) {
-        await targetChannel.send({
-          content: batch.map(id => `<@${id}>`).join(' - '),
-          allowedMentions: { users: batch, parse: [] }
-        });
-      }
-
-      return interaction.editReply({
-        content: `✅ Rappel envoyé dans ${targetChannel} (${ids.length} membre(s) concernés — filtre Joueur/Essai).`
+        content: `✅ (${VERSION}) Liste **sans réaction** envoyée → ${targetChannel}`
       }).catch(() => {});
     }
 
