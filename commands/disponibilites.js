@@ -1,11 +1,11 @@
 // commands/disponibilites.js
-// ✅ RAPPORTS DISPOS — FILTRE Joueur + Essai UNIQUEMENT
+// ✅ RAPPORTS DISPOS — Présents/Absents SANS filtre + Non répondants FILTRÉS Joueur+Essai
 //
 // Modes :
-// - detaille      -> ✅ Présents / ❌ Absents / ⏳ Sans réaction (TOUT filtré Joueur+Essai)
-// - presents      -> ✅ Présents (filtré)
-// - absents       -> ❌ Absents (filtré)
-// - sans_reaction -> ⏳ Sans réaction (filtré)
+// - detaille      -> ✅ Présents (sans filtre) / ❌ Absents (sans filtre) / ⏳ Sans réaction (filtré Joueur+Essai)
+// - presents      -> ✅ Présents (sans filtre)
+// - absents       -> ❌ Absents (sans filtre)
+// - sans_reaction -> ⏳ Sans réaction (filtré Joueur+Essai)
 //
 // ✅ Bouton "Voir le message du jour"
 // ✅ Anti-mentions accidentelles
@@ -24,7 +24,7 @@ const {
 
 const { getConfigFromInteraction } = require('../utils/config');
 
-const VERSION = 'disponibilites v6.0 (rapport + filtre Joueur/Essai)';
+const VERSION = 'disponibilites v6.1 (présents/absents sans filtre + non-répondants filtrés)';
 const DEFAULT_COLOR = 0xff4db8;
 
 /* ===================== Helpers ===================== */
@@ -92,6 +92,10 @@ async function extractReactions(message) {
   return { reacted, yes, no };
 }
 
+function computeHumansAll(guild) {
+  return guild.members.cache.filter(m => !m.user.bot);
+}
+
 function computeEligiblesWithRoles(guild, roleJoueur, roleEssai) {
   return guild.members.cache.filter(m => {
     if (m.user.bot) return false;
@@ -110,15 +114,22 @@ function buildBaseEmbed({ color, clubName, title }) {
     .setTimestamp();
 }
 
-function buildDetailEmbed({ color, clubName, jour, presents, absents, nonRepondus }) {
+function buildDetailEmbed({
+  color,
+  clubName,
+  jour,
+  presentsAll,
+  absentsAll,
+  nonRepondusFiltre
+}) {
   return buildBaseEmbed({
     color,
     clubName,
     title: `📅 RAPPORT - ${dayLabelFR(jour)} (DÉTAILLÉ)`
   }).addFields(
-    { name: `✅ Présents (${presents.size})`, value: mentionsLine(presents) },
-    { name: `❌ Absents (${absents.size})`, value: mentionsLine(absents) },
-    { name: `⏳ Sans réaction (${nonRepondus.size})`, value: mentionsLine(nonRepondus) }
+    { name: `✅ Présents (sans filtre) (${presentsAll.size})`, value: mentionsLine(presentsAll) },
+    { name: `❌ Absents (sans filtre) (${absentsAll.size})`, value: mentionsLine(absentsAll) },
+    { name: `⏳ Sans réaction (Joueur/Essai) (${nonRepondusFiltre.size})`, value: mentionsLine(nonRepondusFiltre) }
   );
 }
 
@@ -126,7 +137,7 @@ function buildDetailEmbed({ color, clubName, jour, presents, absents, nonRepondu
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('disponibilites')
-    .setDescription('Rapports sur les disponibilités (filtre Joueur + Essai).')
+    .setDescription('Rapports sur les disponibilités (présents/absents sans filtre + non-répondants filtrés).')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     .addStringOption(o =>
@@ -145,13 +156,13 @@ module.exports = {
     )
     .addStringOption(o =>
       o.setName('mode')
-        .setDescription('Sortie à générer (filtrée Joueur+Essai)')
+        .setDescription('Sortie à générer')
         .setRequired(true)
         .addChoices(
-          { name: 'Mode détaillé (✅/❌/⏳)', value: 'detaille' },
-          { name: 'Mode présents (✅)', value: 'presents' },
-          { name: 'Mode absents (❌)', value: 'absents' },
-          { name: 'Mode sans réaction (⏳)', value: 'sans_reaction' }
+          { name: 'Mode détaillé (✅/❌ sans filtre + ⏳ filtre)', value: 'detaille' },
+          { name: 'Mode présents (✅ sans filtre)', value: 'presents' },
+          { name: 'Mode absents (❌ sans filtre)', value: 'absents' },
+          { name: 'Mode sans réaction (⏳ filtre Joueur/Essai)', value: 'sans_reaction' }
         )
     )
 
@@ -239,7 +250,7 @@ module.exports = {
       }).catch(() => {});
     }
 
-    /* ===== 4) Rôles Joueur/Essai (obligatoires) ===== */
+    /* ===== 4) Rôles Joueur/Essai (requis uniquement pour le filtre) ===== */
     const roleJoueur =
       interaction.options.getRole('role_joueur') ||
       (isValidId(cfgRoles.joueur) ? guild.roles.cache.get(cfgRoles.joueur) : null);
@@ -248,7 +259,9 @@ module.exports = {
       interaction.options.getRole('role_essai') ||
       (isValidId(cfgRoles.essai) ? guild.roles.cache.get(cfgRoles.essai) : null);
 
-    if (!roleJoueur && !roleEssai) {
+    // On a besoin des rôles seulement pour "sans_reaction" et pour le "detaille" (partie ⏳ filtrée)
+    const needsRoles = (mode === 'sans_reaction' || mode === 'detaille');
+    if (needsRoles && !roleJoueur && !roleEssai) {
       return interaction.reply({
         content: '❌ Aucun rôle Joueur/Essai trouvé (options ou config).',
         ephemeral: true
@@ -314,16 +327,25 @@ module.exports = {
     /* ===== 7) Analyse réactions ===== */
     const { reacted, yes, no } = await extractReactions(message);
 
-    const eligibles = computeEligiblesWithRoles(guild, roleJoueur, roleEssai);
+    // SANS FILTRE (tous humains)
+    const humansAll = computeHumansAll(guild);
+    const presentsAll = humansAll.filter(m => yes.has(m.id));
+    const absentsAll  = humansAll.filter(m => no.has(m.id));
 
-    // ✅ Tout est filtré Joueur/Essai
-    const presents = eligibles.filter(m => yes.has(m.id));
-    const absents = eligibles.filter(m => no.has(m.id));
-    const nonRepondus = eligibles.filter(m => !reacted.has(m.id));
+    // FILTRÉ (Joueur/Essai) uniquement pour non-répondants
+    const eligibles = (roleJoueur || roleEssai) ? computeEligiblesWithRoles(guild, roleJoueur, roleEssai) : null;
+    const nonRepondusFiltre = eligibles ? eligibles.filter(m => !reacted.has(m.id)) : null;
 
     /* ===== 8) MODES ===== */
     if (mode === 'detaille') {
-      const embed = buildDetailEmbed({ color, clubName, jour, presents, absents, nonRepondus });
+      const embed = buildDetailEmbed({
+        color,
+        clubName,
+        jour,
+        presentsAll,
+        absentsAll,
+        nonRepondusFiltre
+      });
 
       await targetChannel.send({
         embeds: [embed],
@@ -341,7 +363,7 @@ module.exports = {
         color,
         clubName,
         title: `✅ PRÉSENTS - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(presents));
+      }).setDescription(mentionsLine(presentsAll));
 
       await targetChannel.send({
         embeds: [embed],
@@ -359,7 +381,7 @@ module.exports = {
         color,
         clubName,
         title: `❌ ABSENTS - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(absents));
+      }).setDescription(mentionsLine(absentsAll));
 
       await targetChannel.send({
         embeds: [embed],
@@ -376,8 +398,8 @@ module.exports = {
       const embed = buildBaseEmbed({
         color,
         clubName,
-        title: `⏳ SANS RÉACTION - ${dayLabelFR(jour)}`
-      }).setDescription(mentionsLine(nonRepondus));
+        title: `⏳ SANS RÉACTION (Joueur/Essai) - ${dayLabelFR(jour)}`
+      }).setDescription(mentionsLine(nonRepondusFiltre));
 
       await targetChannel.send({
         embeds: [embed],
@@ -386,7 +408,7 @@ module.exports = {
       }).catch(() => {});
 
       return interaction.editReply({
-        content: `✅ (${VERSION}) Liste **sans réaction** envoyée → ${targetChannel}`
+        content: `✅ (${VERSION}) Liste **sans réaction (filtre)** envoyée → ${targetChannel}`
       }).catch(() => {});
     }
 
