@@ -1,23 +1,43 @@
 // src/core/disposAutomation.js
+// Automations Dispos: rappel/rapport/fermeture aux heures configurées
+// CommonJS — discord.js v14
+
 const { exportAll } = require("./configManager");
 const { getGuildConfig } = require("./guildConfig");
-const { getLastOpenSession, closeSession } = require("./disposWeekStore");
+const { getLastOpenSession, closeSession, getSession } = require("./disposWeekStore");
 const { buildStaffReportEmbed } = require("./disposWeekRenderer");
+const { buildRows } = require("./disposWeekButtons");
+const { buildDayEmbed } = require("./disposWeekRenderer");
 
-const { warn, log } = require("./logger");
+const { log, warn } = require("./logger");
 
-// Anti-double envoi par jour/heure
-const lastRun = new Map(); // key: guildId:YYYY-MM-DD:hour:type -> true
+const FLAGS_EPHEMERAL = 64;
 
-function keyRun(guildId, dateKey, hour, type) {
-  return `${guildId}:${dateKey}:${hour}:${type}`;
-}
+// anti double-run
+const ran = new Set(); // key = guildId|date|hour|type|sessionId|dayKey
 
-function getDateKey(d) {
+function dateKey(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function makeRunKey({ guildId, dateK, hour, type, sessionId, dayKey }) {
+  return `${guildId}|${dateK}|${hour}|${type}|${sessionId}|${dayKey || "-"}`;
+}
+
+async function fetchTextChannel(client, channelId) {
+  if (!channelId) return null;
+  const ch = await client.channels.fetch(channelId).catch(() => null);
+  if (!ch) return null;
+  if (typeof ch.send !== "function") return null;
+  return ch;
+}
+
+async function safeFetchMessage(channel, messageId) {
+  if (!channel || !messageId) return null;
+  return channel.messages.fetch(messageId).catch(() => null);
 }
 
 async function computeNonRespondingPlayers(guild, cfg, session, dayKey) {
@@ -26,40 +46,95 @@ async function computeNonRespondingPlayers(guild, cfg, session, dayKey) {
   const dayVotes = session.votes?.[dayKey] || { present: [], absent: [] };
   const responded = new Set([...(dayVotes.present || []), ...(dayVotes.absent || [])]);
 
-  // Récupère membres si nécessaire
   try {
     await guild.members.fetch();
   } catch {}
 
   const players = guild.members.cache.filter((m) => m.roles.cache.has(cfg.playerRoleId));
-  const non = [];
+  const nonIds = [];
   for (const m of players.values()) {
-    if (!responded.has(m.user.id)) non.push(m);
+    if (!responded.has(m.user.id)) nonIds.push(m.user.id);
   }
-  return non;
+  return nonIds;
 }
 
-async function sendDMReminders(nonRespondingMembers, dayLabel) {
-  for (const m of nonRespondingMembers) {
-    try {
-      await m.send(`Rappel disponibilité : tu n’as pas répondu pour **${dayLabel}**. Merci d’indiquer Présent/Absent sur le message dispo.`);
-    } catch {
-      // DM fermés => ignorer
-    }
+async function refreshAllMessages(client, guild, cfg, session) {
+  const channel = await fetchTextChannel(client, session.channelId);
+  if (!channel) return;
+
+  for (const day of session.days || []) {
+    if (!day.messageId) continue;
+
+    const msg = await safeFetchMessage(channel, day.messageId);
+    if (!msg) continue;
+
+    const embed = buildDayEmbed({
+      guildName: guild.name,
+      session,
+      day,
+      brandTitle: "Disponibilités",
+    });
+
+    const rows = buildRows({
+      sessionId: session.sessionId,
+      dayKey: day.key,
+      closed: session.closed,
+      automationsEnabled: cfg.automationsEnabled,
+    });
+
+    await msg.edit({ embeds: [embed], components: rows }).catch(() => {});
   }
 }
 
-async function runOnce(client) {
+async function sendReminderInDispos(client, guild, cfg, session, day) {
+  const disposChannel = await fetchTextChannel(client, cfg.disposChannelId || session.channelId);
+  if (!disposChannel) return;
+
+  const nonIds = await computeNonRespondingPlayers(guild, cfg, session, day.key);
+  const mentions = nonIds.map((id) => `<@${id}>`);
+
+  const content =
+    `🔔 **Rappel disponibilités — ${day.label}**\n` +
+    (mentions.length ? mentions.join(" ") : "Aucun non répondant (rôle Joueur).");
+
+  await disposChannel.send({ content }).catch(() => {});
+}
+
+async function sendReportInStaffChannel(client, guild, cfg, session, day) {
+  const reportChannel = await fetchTextChannel(client, cfg.reportChannelId);
+  if (!reportChannel) return;
+
+  const dayVotes = session.votes?.[day.key] || { present: [], absent: [] };
+  const presentIds = dayVotes.present || [];
+  const absentIds = dayVotes.absent || [];
+  const nonIds = await computeNonRespondingPlayers(guild, cfg, session, day.key);
+
+  const embed = buildStaffReportEmbed({
+    guildName: guild.name,
+    session,
+    day,
+    presentIds,
+    absentIds,
+    nonRespondingPlayerIds: nonIds,
+  });
+
+  await reportChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
+/**
+ * Exécute automations une fois (appelé toutes les 60s)
+ */
+async function tick(client) {
   const now = new Date();
   const hour = now.getHours();
-  const dateKey = getDateKey(now);
+  const dKey = dateKey(now);
 
-  const all = exportAll(); // servers.json
+  const all = exportAll();
   const guildIds = Object.keys(all.guilds || {});
 
   for (const guildId of guildIds) {
     const cfg = getGuildConfig(guildId);
-    if (!cfg?.automationsEnabled) continue;
+    if (!cfg || !cfg.automationsEnabled) continue;
 
     const guild = client.guilds.cache.get(guildId);
     if (!guild) continue;
@@ -67,67 +142,79 @@ async function runOnce(client) {
     const session = getLastOpenSession(guildId);
     if (!session) continue;
 
-    // Pour chaque jour de la session : tu peux choisir de n'automatiser que "aujourd'hui".
-    // Ici on automatisera TOUS les jours créés (simple et robuste).
-    for (const day of session.days) {
-      // 1) Rappel 12h
-      if ((cfg.automationReminderHours || []).includes(hour)) {
-        const k = keyRun(guildId, dateKey, hour, `remind:${day.key}`);
-        if (!lastRun.has(k)) {
-          lastRun.set(k, true);
-          try {
-            const non = await computeNonRespondingPlayers(guild, cfg, session, day.key);
-            await sendDMReminders(non, day.label);
-            log(`[AUTO] remind sent ${guildId} ${day.key} (${non.length} players)`);
-          } catch (e) {
-            warn("[AUTO] remind error:", e);
-          }
+    // RAPPEL 12h
+    if ((cfg.automationReminderHours || []).includes(hour)) {
+      for (const day of session.days || []) {
+        const k = makeRunKey({
+          guildId,
+          dateK: dKey,
+          hour,
+          type: "remind",
+          sessionId: session.sessionId,
+          dayKey: day.key,
+        });
+        if (ran.has(k)) continue;
+        ran.add(k);
+
+        try {
+          await sendReminderInDispos(client, guild, cfg, session, day);
+          log(`[AUTO] remind ${guildId} ${session.sessionId} ${day.key} @${hour}h`);
+        } catch (e) {
+          warn("[AUTO] remind error:", e);
         }
       }
+    }
 
-      // 2) Rapport 12h/17h -> salon staff reportChannelId requis
-      if ((cfg.automationReportHours || []).includes(hour)) {
-        const k = keyRun(guildId, dateKey, hour, `report:${day.key}`);
-        if (!lastRun.has(k)) {
-          lastRun.set(k, true);
-          try {
-            if (!cfg.reportChannelId) {
-              warn(`[AUTO] report skipped: reportChannelId missing for guild ${guildId}`);
-            } else {
-              const channel = await client.channels.fetch(cfg.reportChannelId).catch(() => null);
-              if (channel) {
-                const nonMembers = await computeNonRespondingPlayers(guild, cfg, session, day.key);
-                const nonMentions = nonMembers.map((m) => `<@${m.user.id}>`);
+    // RAPPORT 12h/17h
+    if ((cfg.automationReportHours || []).includes(hour)) {
+      for (const day of session.days || []) {
+        const k = makeRunKey({
+          guildId,
+          dateK: dKey,
+          hour,
+          type: "report",
+          sessionId: session.sessionId,
+          dayKey: day.key,
+        });
+        if (ran.has(k)) continue;
+        ran.add(k);
 
-                const embed = buildStaffReportEmbed({
-                  guildName: guild.name,
-                  session,
-                  day,
-                  playersNonRespondingMentions: nonMentions,
-                });
-
-                await channel.send({ embeds: [embed] });
-              }
-            }
-            log(`[AUTO] report sent ${guildId} ${day.key}`);
-          } catch (e) {
-            warn("[AUTO] report error:", e);
+        try {
+          // si pas de reportChannelId => on ne peut pas faire "staff-only"
+          if (!cfg.reportChannelId) {
+            warn(`[AUTO] report skipped (reportChannelId missing) guild=${guildId}`);
+          } else {
+            await sendReportInStaffChannel(client, guild, cfg, session, day);
+            log(`[AUTO] report ${guildId} ${session.sessionId} ${day.key} @${hour}h`);
           }
+        } catch (e) {
+          warn("[AUTO] report error:", e);
         }
       }
+    }
 
-      // 3) Fermeture 17h
-      if ((cfg.automationCloseHours || []).includes(hour)) {
-        const k = keyRun(guildId, dateKey, hour, `close:${day.key}`);
-        if (!lastRun.has(k)) {
-          lastRun.set(k, true);
-          try {
-            // ferme la session (une seule fois suffit)
-            closeSession(guildId, session.sessionId, "automation");
-            log(`[AUTO] session closed ${guildId} ${session.sessionId}`);
-          } catch (e) {
-            warn("[AUTO] close error:", e);
-          }
+    // FERMETURE 17h
+    if ((cfg.automationCloseHours || []).includes(hour)) {
+      const k = makeRunKey({
+        guildId,
+        dateK: dKey,
+        hour,
+        type: "close",
+        sessionId: session.sessionId,
+        dayKey: "ALL",
+      });
+      if (!ran.has(k)) {
+        ran.add(k);
+        try {
+          closeSession(guildId, session.sessionId, "automation");
+
+          // refresh composants pour désactiver les votes + mettre status "fermé"
+          const fresh = getSession(guildId, session.sessionId);
+          await refreshAllMessages(client, guild, cfg, fresh);
+
+          log(`[AUTO] close ${guildId} ${session.sessionId} @${hour}h`);
+        } catch (e) {
+          warn("[AUTO] close error:", e);
         }
       }
     }
@@ -135,12 +222,14 @@ async function runOnce(client) {
 }
 
 function startAutomations(client) {
-  // check toutes les 60 secondes
+  // Loop légère (RAM friendly) : un tick par minute
   setInterval(() => {
-    runOnce(client).catch(() => {});
+    tick(client).catch(() => {});
   }, 60 * 1000);
 
-  log("[AUTO] automations loop started");
+  log("[AUTO] automations started (every 60s)");
 }
 
-module.exports = { startAutomations };
+module.exports = {
+  startAutomations,
+};
