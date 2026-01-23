@@ -1,114 +1,117 @@
 // src/core/disposWeekButtons.js
-// Boutons + handler : tout le monde peut cliquer et est compté + bouton Retirer (CommonJS)
+// Gestion des clics sur boutons "Présent/Absent" et mise à jour des embeds.
 
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { getSession, updateSession } = require("./disposWeekStore");
-const { buildDayEmbed, buildPayload } = require("./disposWeekRenderer");
-const { getGuildConfig } = require("./configManager");
-const { normalizeConfig } = require("./guildConfig");
+const { EmbedBuilder } = require("discord.js");
+const { canClickDispos } = require("./guildConfig");
+const { getWeek, setVote, getCounts } = require("./disposWeekStore");
 
 const FLAGS_EPHEMERAL = 64;
 
-function buttonsRow(rootId, dayIndex, disabled = false) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`dispoW:present:${rootId}:${dayIndex}`)
-      .setLabel("Présent")
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(disabled),
+const DAY_LABELS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 
-    new ButtonBuilder()
-      .setCustomId(`dispoW:absent:${rootId}:${dayIndex}`)
-      .setLabel("Absent")
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(disabled),
-
-    new ButtonBuilder()
-      .setCustomId(`dispoW:clear:${rootId}:${dayIndex}`)
-      .setLabel("Retirer")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(disabled)
-  );
+function buildDayEmbed({ guildName, weekLabel, dayIndex, counts, imagesNote }) {
+  return new EmbedBuilder()
+    .setTitle(`Disponibilités — ${DAY_LABELS[dayIndex]}`)
+    .setDescription(
+      [
+        `Semaine : **${weekLabel}**`,
+        guildName ? `Serveur : **${guildName}**` : null,
+        "",
+        "Clique sur un bouton pour indiquer ta dispo.",
+        imagesNote ? imagesNote : null,
+      ].filter(Boolean).join("\n")
+    )
+    .addFields(
+      { name: "✅ Présents", value: `**${counts.present}**`, inline: true },
+      { name: "❌ Absents", value: `**${counts.absent}**`, inline: true }
+    )
+    .setFooter({ text: "XIG — Dispos semaine" });
 }
 
-function parseId(customId) {
-  // dispoW:<status>:<rootId>:<dayIndex>
-  const p = String(customId || "").split(":");
-  if (p.length !== 4) return null;
-  if (p[0] !== "dispoW") return null;
+/**
+ * CustomId format (simple & stable):
+ * dispo:week:<guildId>:<weekId>:<dayIndex>:<present|absent>
+ */
+function parseCustomId(customId) {
+  const parts = String(customId).split(":");
+  if (parts.length !== 6) return null;
+  if (parts[0] !== "dispo" || parts[1] !== "week") return null;
 
-  const action = p[1]; // present | absent | clear
-  const rootId = p[2];
-  const dayIndex = Number(p[3]);
+  const guildId = parts[2];
+  const weekId = parts[3];
+  const dayIndex = Number(parts[4]);
+  const action = parts[5];
 
-  if (!["present", "absent", "clear"].includes(action)) return null;
-  if (!rootId) return null;
-  if (Number.isNaN(dayIndex) || dayIndex < 0 || dayIndex > 6) return null;
+  if (!guildId || !weekId) return null;
+  if (![0, 1, 2, 3, 4, 5, 6].includes(dayIndex)) return null;
+  if (!["present", "absent"].includes(action)) return null;
 
-  return { action, rootId, dayIndex };
+  return { guildId, weekId, dayIndex, action };
 }
 
-async function handleDisposWeekButton(interaction) {
-  if (!interaction.inGuild()) return false;
-  if (!interaction.isButton()) return false;
-
-  const parsed = parseId(interaction.customId);
+async function handleDispoButton(interaction, guildCfg) {
+  const parsed = parseCustomId(interaction.customId);
   if (!parsed) return false;
 
-  const guildId = interaction.guildId;
-  const cfg = normalizeConfig(getGuildConfig(guildId) || {});
+  // Contrôle serveur
+  if (!interaction.inGuild() || interaction.guildId !== parsed.guildId) {
+    await interaction.reply({ content: "Interaction invalide.", flags: FLAGS_EPHEMERAL });
+    return true;
+  }
 
-  // Optionnel : forcer le clic dans le salon dispos configuré
-  // Si tu veux autoriser partout, supprime ce bloc.
-  if (cfg.channels?.dispos && interaction.channelId !== cfg.channels.dispos) {
+  // Autorisation clic (si tu as mis des rôles spécifiques)
+  const member = interaction.member;
+  if (!canClickDispos(member, guildCfg)) {
     await interaction.reply({
-      content: `Utilise ces boutons dans <#${cfg.channels.dispos}>.`,
+      content: "Tu n’as pas l’autorisation de répondre aux dispos sur ce serveur.",
       flags: FLAGS_EPHEMERAL,
     });
     return true;
   }
 
-  const session = getSession(guildId, parsed.rootId);
-  if (!session) {
-    await interaction.reply({ content: "Session introuvable.", flags: FLAGS_EPHEMERAL });
+  // Charger la semaine
+  const week = getWeek(parsed.guildId, parsed.weekId);
+  if (!week) {
+    await interaction.reply({
+      content: "Cette semaine de disponibilités n’existe plus ou a été supprimée.",
+      flags: FLAGS_EPHEMERAL,
+    });
     return true;
   }
 
-  const day = session.days?.[parsed.dayIndex];
-  if (!day) {
-    await interaction.reply({ content: "Jour introuvable.", flags: FLAGS_EPHEMERAL });
-    return true;
+  // Enregistrer le vote
+  setVote(parsed.guildId, parsed.weekId, parsed.dayIndex, interaction.user.id, parsed.action);
+
+  // Mettre à jour l'embed du message du jour (compteurs)
+  try {
+    const refreshedWeek = getWeek(parsed.guildId, parsed.weekId);
+    const counts = getCounts(refreshedWeek, parsed.dayIndex);
+
+    const imagesNote =
+      (refreshedWeek.attachmentsCount || 0) > 0
+        ? `Images : **${refreshedWeek.attachmentsCount}** pièce(s) jointe(s).`
+        : null;
+
+    const newEmbed = buildDayEmbed({
+      guildName: refreshedWeek.guildName,
+      weekLabel: refreshedWeek.weekLabel,
+      dayIndex: parsed.dayIndex,
+      counts,
+      imagesNote,
+    });
+
+    await interaction.update({ embeds: [newEmbed] });
+  } catch {
+    // Si update échoue (message supprimé, permissions, etc.)
+    await interaction.reply({
+      content: "Vote enregistré, mais impossible de mettre à jour l’affichage.",
+      flags: FLAGS_EPHEMERAL,
+    });
   }
-
-  const userId = interaction.user.id;
-
-  // ✅ Tout le monde est compté : aucune restriction
-  const responses = { ...(day.responses || {}) };
-
-  if (parsed.action === "clear") {
-    delete responses[userId];
-  } else {
-    // present / absent
-    responses[userId] = parsed.action;
-  }
-
-  // Sauvegarde
-  session.days[parsed.dayIndex].responses = responses;
-  const saved = updateSession(guildId, parsed.rootId, { days: session.days });
-
-  // Re-render message du jour
-  const embed = buildDayEmbed(saved, parsed.dayIndex, cfg);
-  const imageUrl = saved.days[parsed.dayIndex].imageUrl || null;
-
-  await interaction.update({
-    ...buildPayload(embed, { imageUrl }),
-    components: [buttonsRow(parsed.rootId, parsed.dayIndex, false)],
-  });
 
   return true;
 }
 
 module.exports = {
-  buttonsRow,
-  handleDisposWeekButton,
+  handleDispoButton,
 };
