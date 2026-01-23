@@ -1,5 +1,5 @@
 // src/core/disposWeekButtons.js
-// Boutons + handler : tout le monde peut cliquer et est compté (CommonJS)
+// Boutons + handler : tout le monde peut cliquer et est compté + bouton Retirer (CommonJS)
 
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { getSession, updateSession } = require("./disposWeekStore");
@@ -16,10 +16,17 @@ function buttonsRow(rootId, dayIndex, disabled = false) {
       .setLabel("Présent")
       .setStyle(ButtonStyle.Success)
       .setDisabled(disabled),
+
     new ButtonBuilder()
       .setCustomId(`dispoW:absent:${rootId}:${dayIndex}`)
       .setLabel("Absent")
       .setStyle(ButtonStyle.Danger)
+      .setDisabled(disabled),
+
+    new ButtonBuilder()
+      .setCustomId(`dispoW:clear:${rootId}:${dayIndex}`)
+      .setLabel("Retirer")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(disabled)
   );
 }
@@ -30,15 +37,15 @@ function parseId(customId) {
   if (p.length !== 4) return null;
   if (p[0] !== "dispoW") return null;
 
-  const status = p[1];
+  const action = p[1]; // present | absent | clear
   const rootId = p[2];
   const dayIndex = Number(p[3]);
 
-  if (!["present", "absent"].includes(status)) return null;
+  if (!["present", "absent", "clear"].includes(action)) return null;
   if (!rootId) return null;
   if (Number.isNaN(dayIndex) || dayIndex < 0 || dayIndex > 6) return null;
 
-  return { status, rootId, dayIndex };
+  return { action, rootId, dayIndex };
 }
 
 async function handleDisposWeekButton(interaction) {
@@ -51,7 +58,7 @@ async function handleDisposWeekButton(interaction) {
   const guildId = interaction.guildId;
   const cfg = normalizeConfig(getGuildConfig(guildId) || {});
 
-  // Optionnel (recommandé) : forcer l’usage dans le salon dispos configuré si défini.
+  // Optionnel : forcer le clic dans le salon dispos configuré
   // Si tu veux autoriser partout, supprime ce bloc.
   if (cfg.channels?.dispos && interaction.channelId !== cfg.channels.dispos) {
     await interaction.reply({
@@ -73,9 +80,17 @@ async function handleDisposWeekButton(interaction) {
     return true;
   }
 
-  // ✅ Tout le monde est compté : on enregistre directement l’utilisateur
+  const userId = interaction.user.id;
+
+  // ✅ Tout le monde est compté : aucune restriction
   const responses = { ...(day.responses || {}) };
-  responses[interaction.user.id] = parsed.status;
+
+  if (parsed.action === "clear") {
+    delete responses[userId];
+  } else {
+    // present / absent
+    responses[userId] = parsed.action;
+  }
 
   // Sauvegarde
   session.days[parsed.dayIndex].responses = responses;
@@ -85,7 +100,6 @@ async function handleDisposWeekButton(interaction) {
   const embed = buildDayEmbed(saved, parsed.dayIndex, cfg);
   const imageUrl = saved.days[parsed.dayIndex].imageUrl || null;
 
-  // Important : on "update" l’interaction pour éviter "interaction failed"
   await interaction.update({
     ...buildPayload(embed, { imageUrl }),
     components: [buttonsRow(parsed.rootId, parsed.dayIndex, false)],
