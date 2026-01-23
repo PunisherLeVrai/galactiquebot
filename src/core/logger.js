@@ -1,13 +1,17 @@
+function now() {
+  return new Date().toISOString();
+}
+
 function log(...args) {
-  console.log("[BOT]", ...args);
+  console.log(`[${now()}]`, ...args);
 }
 
 function warn(...args) {
-  console.warn("[BOT_WARN]", ...args);
+  console.warn(`[${now()}]`, ...args);
 }
 
 function error(...args) {
-  console.error("[BOT_ERROR]", ...args);
+  console.error(`[${now()}]`, ...args);
 }
 
 module.exports = { log, warn, error };
