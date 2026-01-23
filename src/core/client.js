@@ -1,11 +1,11 @@
-const { Client, GatewayIntentBits, Partials, Collection } = require("discord.js");
+const { Client, GatewayIntentBits, Collection } = require("discord.js");
 
 function createClient() {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds
+      // Intents minimum pour slash commands (RAM-friendly)
     ],
-    partials: [Partials.Channel]
   });
 
   client.commands = new Collection();
@@ -13,4 +13,4 @@ function createClient() {
   return client;
 }
 
-module.exports = { createClient };
+module.exports = { createClient }
