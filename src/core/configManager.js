@@ -1,10 +1,7 @@
-// src/core/configManager.js
-// Gestion config multi-serveur (fichier unique) — CommonJS
-
 const fs = require("fs");
 const path = require("path");
 
-// IMPORTANT: toujours depuis la racine du projet (Railway: /app)
+// Toujours depuis la racine du projet (/app sur Railway)
 const CONFIG_PATH = path.join(process.cwd(), "config", "servers.json");
 
 function ensureConfigFile() {
@@ -23,15 +20,7 @@ function ensureConfigFile() {
 function readAll() {
   ensureConfigFile();
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-
-    // normalisation minimale
-    if (!parsed || typeof parsed !== "object") return { version: 1, guilds: {} };
-    if (!parsed.guilds || typeof parsed.guilds !== "object") parsed.guilds = {};
-    if (!parsed.version) parsed.version = 1;
-
-    return parsed;
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
   } catch {
     return { version: 1, guilds: {} };
   }
@@ -44,7 +33,7 @@ function writeAll(data) {
 
 function getGuildConfig(guildId) {
   const data = readAll();
-  return data.guilds?.[guildId] || null;
+  return data.guilds[guildId] || null;
 }
 
 function upsertGuildConfig(guildId, patch) {
