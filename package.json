@@ -8,11 +8,8 @@
     "deploy:commands": "node deploy-commands.js",
     "deploy:nuke": "node deploy-nuke.js"
   },
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "dependencies": {
-    "discord.js": "^14.15.3",
+    "discord.js": "^14.19.3",
     "dotenv": "^16.4.5"
   }
 }
