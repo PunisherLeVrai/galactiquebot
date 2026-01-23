@@ -1,13 +1,47 @@
+// src/commands/dispos/dispo.js
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 const { getGuildConfig } = require("../../core/configManager");
 const { normalizeConfig } = require("../../core/guildConfig");
 const { createSession } = require("../../core/disposWeekStore");
-const { buildDayEmbed, buildPayloadWithOptionalImage } = require("../../core/disposWeekRenderer");
+const { buildDayEmbed, buildPayload } = require("../../core/disposWeekRenderer");
 const { buttonsRow } = require("../../core/disposWeekButtons");
 
 const FLAGS_EPHEMERAL = 64;
-
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+
+function uniq(arr) {
+  return [...new Set(arr)];
+}
+
+/**
+ * Construit la liste des "attendus" depuis un ou plusieurs rôles.
+ * Note: pour être RAM-friendly, on utilise role.members (cache) ; si le serveur est petit,
+ * on peut forcer un fetch complet une fois.
+ */
+async function buildExpectedUserIds(guild, roleIds) {
+  const clean = Array.isArray(roleIds) ? roleIds.filter(Boolean) : [];
+  if (clean.length === 0) return [];
+
+  // Option : si serveur raisonnable, on fetch une fois pour remplir role.members correctement
+  // (évite "sans réponse" faux si cache incomplet).
+  // Ajuste le seuil si besoin.
+  if (guild.memberCount && guild.memberCount <= 800) {
+    try {
+      await guild.members.fetch();
+    } catch {
+      // on continue sur cache
+    }
+  }
+
+  const ids = [];
+  for (const rid of clean) {
+    const role = await guild.roles.fetch(rid).catch(() => null);
+    if (!role) continue;
+    for (const [memberId] of role.members) ids.push(memberId);
+  }
+
+  return uniq(ids);
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -27,7 +61,6 @@ module.exports = {
           { name: "7 images (une par jour)", value: "multi" }
         )
     )
-    // Images upload depuis ton tel/PC
     .addAttachmentOption((o) => o.setName("image").setDescription("Image unique (si mode = 1 image)").setRequired(false))
     .addAttachmentOption((o) => o.setName("image1").setDescription("Lundi").setRequired(false))
     .addAttachmentOption((o) => o.setName("image2").setDescription("Mardi").setRequired(false))
@@ -53,15 +86,12 @@ module.exports = {
     }
 
     const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
-    if (!channel) {
-      return interaction.reply({ content: "Salon dispos introuvable.", flags: FLAGS_EPHEMERAL });
-    }
+    if (!channel) return interaction.reply({ content: "Salon dispos introuvable.", flags: FLAGS_EPHEMERAL });
 
     const title = interaction.options.getString("titre", true);
     const note = interaction.options.getString("note") || null;
     const imageMode = interaction.options.getString("images") || "none";
 
-    // Récup des attachments (upload tel/PC)
     const one = interaction.options.getAttachment("image");
     const multi = [
       interaction.options.getAttachment("image1"),
@@ -73,22 +103,20 @@ module.exports = {
       interaction.options.getAttachment("image7"),
     ];
 
-    // Validation simple
     if (imageMode === "one" && !one) {
       return interaction.reply({ content: "Mode **1 image** choisi, mais aucune image fournie.", flags: FLAGS_EPHEMERAL });
     }
-    if (imageMode === "multi") {
-      // autorisé: tu peux fournir 1..7, celles manquantes = pas d’image
-      const any = multi.some(Boolean);
-      if (!any) {
-        return interaction.reply({
-          content: "Mode **7 images** choisi, mais aucune image n’a été fournie (image1..image7).",
-          flags: FLAGS_EPHEMERAL,
-        });
-      }
+    if (imageMode === "multi" && !multi.some(Boolean)) {
+      return interaction.reply({
+        content: "Mode **7 images** choisi, mais aucune image fournie (image1..image7).",
+        flags: FLAGS_EPHEMERAL,
+      });
     }
 
-    // On crée la session avec un rootId (provisoire), puis on l’écrit après création des messages.
+    // ✅ rôle(s) “attendus” pour calcul Sans réponse
+    const scopeRoleIds = Array.isArray(cfg.disposScopeRoleIds) ? cfg.disposScopeRoleIds : [];
+    const expectedUserIds = await buildExpectedUserIds(interaction.guild, scopeRoleIds);
+
     const rootId = `${Date.now()}-${interaction.user.id}`;
 
     const session = {
@@ -99,6 +127,11 @@ module.exports = {
       note,
       createdBy: interaction.user.id,
       createdAt: new Date().toISOString(),
+
+      // ✅ utilisé par le renderer
+      scopeRoleIds,
+      expectedUserIds, // peut être [] si aucun rôle configuré
+
       days: DAYS.map((label, idx) => ({
         index: idx,
         label,
@@ -109,9 +142,7 @@ module.exports = {
     };
 
     // Création des 7 messages
-    const messageIds = [];
     for (let i = 0; i < 7; i++) {
-      // image URL (Discord) = attachment.url, donc aucun stockage local nécessaire
       let imageUrl = null;
       if (imageMode === "one") imageUrl = one.url;
       else if (imageMode === "multi" && multi[i]) imageUrl = multi[i].url;
@@ -119,21 +150,22 @@ module.exports = {
       session.days[i].imageUrl = imageUrl;
 
       const embed = buildDayEmbed(session, i, cfg);
-
       const msg = await channel.send({
-        ...buildPayloadWithOptionalImage(embed, imageUrl),
+        ...buildPayload(embed, { imageUrl }),
         components: [buttonsRow(rootId, i, false)],
       });
 
       session.days[i].messageId = msg.id;
-      messageIds.push(msg.id);
     }
 
-    // Sauvegarde
     createSession(interaction.guildId, session);
 
     await interaction.reply({
-      content: `Dispos semaine créées dans <#${disposChannelId}> (7 messages : Lundi → Dimanche).`,
+      content:
+        `Dispos semaine créées dans <#${disposChannelId}> (Lundi → Dimanche).\n` +
+        (scopeRoleIds.length
+          ? `Base “Sans réponse” : ${scopeRoleIds.map((id) => `<@&${id}>`).join(", ")}`
+          : "Base “Sans réponse” : non définie (configure-la dans /setup)."),
       flags: FLAGS_EPHEMERAL,
     });
   },
