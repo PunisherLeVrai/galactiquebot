@@ -10,14 +10,14 @@ const {
   StringSelectMenuBuilder,
   ChannelType,
   ComponentType,
+  Events
 } = require("discord.js");
 
 const { upsertGuildConfig, getGuildConfig } = require("../../core/configManager");
 
-// Draft en mémoire (10 min) — léger, RAM-friendly
 const drafts = new Map(); // key = `${guildId}:${userId}`
 
-function k(guildId, userId) {
+function key(guildId, userId) {
   return `${guildId}:${userId}`;
 }
 
@@ -39,9 +39,9 @@ function buildEmbed(d) {
     .setDescription(
       [
         "Configure ce serveur via les menus ci-dessous.",
-        "Aucun ID à copier/coller : tu sélectionnes, le bot enregistre.",
+        "Tu ne tapes aucun ID : tu sélectionnes, et le bot enregistre.",
         "",
-        "À la fin : clique **Enregistrer**, puis utilise **/export_config** pour récupérer `servers.json`.",
+        "Après **Enregistrer** : utilise **/export_config** pour récupérer `servers.json` et l’uploader sur GitHub."
       ].join("\n")
     )
     .addFields(
@@ -50,9 +50,9 @@ function buildEmbed(d) {
         value: [
           `Staff: ${mentionRole(d.roles.staff)}`,
           `Joueurs: ${mentionRole(d.roles.player)}`,
-          `Tests: ${mentionRole(d.roles.test)}`,
+          `Tests: ${mentionRole(d.roles.test)}`
         ].join("\n"),
-        inline: true,
+        inline: true
       },
       {
         name: "Salons",
@@ -60,9 +60,9 @@ function buildEmbed(d) {
           `Logs: ${mentionChannel(d.channels.logs)}`,
           `Dispos: ${mentionChannel(d.channels.dispos)}`,
           `Planning: ${mentionChannel(d.channels.planning)}`,
-          `Effectif: ${mentionChannel(d.channels.effectif)}`,
+          `Effectif: ${mentionChannel(d.channels.effectif)}`
         ].join("\n"),
-        inline: true,
+        inline: true
       },
       {
         name: "Modules",
@@ -70,9 +70,9 @@ function buildEmbed(d) {
           `Dispos: ${bool(d.features.dispos)}`,
           `Pseudos: ${bool(d.features.pseudos)}`,
           `Effectif: ${bool(d.features.effectif)}`,
-          `Planning: ${bool(d.features.planning)}`,
+          `Planning: ${bool(d.features.planning)}`
         ].join("\n"),
-        inline: true,
+        inline: true
       }
     );
 
@@ -81,21 +81,19 @@ function buildEmbed(d) {
     if (!Number.isNaN(colorInt)) embed.setColor(colorInt);
   }
 
-  // Champs requis (minimum)
   const missing = [];
   if (!d.roles.staff) missing.push("Rôle Staff");
   if (!d.channels.logs) missing.push("Salon Logs");
 
   embed.addFields({
     name: "Requis",
-    value: missing.length ? `Manque : ${missing.join(", ")}` : "OK (prêt à enregistrer)",
+    value: missing.length ? `Manque : ${missing.join(", ")}` : "OK (prêt à enregistrer)"
   });
 
   return embed;
 }
 
-function components(locked = false) {
-  // Rôles (Staff/Joueurs/Tests) : 1 à 3 rôles
+function buildComponents(locked = false) {
   const rolesRow = new ActionRowBuilder().addComponents(
     new RoleSelectMenuBuilder()
       .setCustomId("setup:roles")
@@ -105,7 +103,6 @@ function components(locked = false) {
       .setDisabled(locked)
   );
 
-  // Salons Logs (1)
   const logsRow = new ActionRowBuilder().addComponents(
     new ChannelSelectMenuBuilder()
       .setCustomId("setup:logs")
@@ -116,7 +113,6 @@ function components(locked = false) {
       .setDisabled(locked)
   );
 
-  // Salons Dispos/Planning/Effectif (0..3)
   const channelsRow = new ActionRowBuilder().addComponents(
     new ChannelSelectMenuBuilder()
       .setCustomId("setup:channels")
@@ -127,7 +123,6 @@ function components(locked = false) {
       .setDisabled(locked)
   );
 
-  // Modules (0..4)
   const featuresRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("setup:features")
@@ -143,7 +138,6 @@ function components(locked = false) {
       .setDisabled(locked)
   );
 
-  // Couleur (0..1)
   const colorRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("setup:color")
@@ -158,7 +152,6 @@ function components(locked = false) {
       .setDisabled(locked)
   );
 
-  // Boutons
   const buttonsRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("setup:save")
@@ -186,116 +179,102 @@ module.exports = {
       return interaction.reply({ content: "Commande utilisable uniquement dans un serveur.", ephemeral: true });
     }
 
-    const key = k(interaction.guildId, interaction.user.id);
+    const k = key(interaction.guildId, interaction.user.id);
 
-    // Draft initial (prérempli si config existante)
     const existing = getGuildConfig(interaction.guildId) || {};
+
     const draft = {
       guildId: interaction.guildId,
       guildName: interaction.guild?.name || null,
       roles: {
-        staff: existing.staffRoleId || existing.roles?.staff || null,
-        player: existing.playerRoleId || existing.roles?.player || null,
-        test: existing.testRoleId || existing.roles?.test || null,
+        staff: existing.roles?.staff ?? existing.staffRoleId ?? null,
+        player: existing.roles?.player ?? existing.playerRoleId ?? null,
+        test: existing.roles?.test ?? existing.testRoleId ?? null
       },
       channels: {
-        logs: existing.logChannelId || existing.channels?.logs || null,
-        dispos: existing.channels?.dispos || null,
-        planning: existing.channels?.planning || null,
-        effectif: existing.channels?.effectif || null,
+        logs: existing.channels?.logs ?? existing.logChannelId ?? null,
+        dispos: existing.channels?.dispos ?? null,
+        planning: existing.channels?.planning ?? null,
+        effectif: existing.channels?.effectif ?? null
       },
       features: {
         dispos: existing.features?.dispos ?? false,
         pseudos: existing.features?.pseudos ?? false,
         effectif: existing.features?.effectif ?? false,
-        planning: existing.features?.planning ?? false,
+        planning: existing.features?.planning ?? false
       },
       colors: {
-        primary: existing.colors?.primary ?? null,
-      },
+        primary: existing.colors?.primary ?? null
+      }
     };
 
-    drafts.set(key, draft);
+    drafts.set(k, draft);
 
     const msg = await interaction.reply({
       embeds: [buildEmbed(draft)],
-      components: components(false),
+      components: buildComponents(false),
       ephemeral: true,
-      fetchReply: true,
+      fetchReply: true
     });
 
     const collector = msg.createMessageComponentCollector({
-      time: 10 * 60 * 1000,
+      time: 10 * 60 * 1000
     });
 
     collector.on("collect", async (i) => {
       if (i.user.id !== interaction.user.id) {
-        return i.reply({ content: "Seul l’admin qui a lancé /setup peut utiliser ces menus.", ephemeral: true });
+        return i.reply({ content: "Seul l’admin qui a lancé /setup peut interagir.", ephemeral: true });
       }
 
-      const d = drafts.get(key);
-      if (!d) {
-        return i.reply({ content: "Setup expiré. Relance /setup.", ephemeral: true });
-      }
+      const d = drafts.get(k);
+      if (!d) return i.reply({ content: "Setup expiré. Relance /setup.", ephemeral: true });
 
       try {
-        // --- ROLES ---
-        if (i.customId === "setup:roles") {
-          // Règle simple : 1er = staff, 2e = player, 3e = test
+        if (i.isRoleSelectMenu() && i.customId === "setup:roles") {
           const vals = i.values || [];
           d.roles.staff = vals[0] || null;
           d.roles.player = vals[1] || null;
           d.roles.test = vals[2] || null;
 
-          return i.update({ embeds: [buildEmbed(d)], components: components(false) });
+          return i.update({ embeds: [buildEmbed(d)], components: buildComponents(false) });
         }
 
-        // --- LOGS CHANNEL ---
-        if (i.customId === "setup:logs") {
-          const vals = i.values || [];
-          d.channels.logs = vals[0] || null;
-
-          return i.update({ embeds: [buildEmbed(d)], components: components(false) });
+        if (i.isChannelSelectMenu() && i.customId === "setup:logs") {
+          d.channels.logs = (i.values && i.values[0]) ? i.values[0] : null;
+          return i.update({ embeds: [buildEmbed(d)], components: buildComponents(false) });
         }
 
-        // --- OTHER CHANNELS ---
-        if (i.customId === "setup:channels") {
-          // Règle simple : 1er = dispos, 2e = planning, 3e = effectif
+        if (i.isChannelSelectMenu() && i.customId === "setup:channels") {
           const vals = i.values || [];
           d.channels.dispos = vals[0] || null;
           d.channels.planning = vals[1] || null;
           d.channels.effectif = vals[2] || null;
 
-          return i.update({ embeds: [buildEmbed(d)], components: components(false) });
+          return i.update({ embeds: [buildEmbed(d)], components: buildComponents(false) });
         }
 
-        // --- FEATURES ---
-        if (i.customId === "setup:features") {
+        if (i.isStringSelectMenu() && i.customId === "setup:features") {
           const set = new Set(i.values || []);
           d.features.dispos = set.has("dispos");
           d.features.pseudos = set.has("pseudos");
           d.features.effectif = set.has("effectif");
           d.features.planning = set.has("planning");
 
-          return i.update({ embeds: [buildEmbed(d)], components: components(false) });
+          return i.update({ embeds: [buildEmbed(d)], components: buildComponents(false) });
         }
 
-        // --- COLOR ---
-        if (i.customId === "setup:color") {
+        if (i.isStringSelectMenu() && i.customId === "setup:color") {
           d.colors.primary = (i.values && i.values[0]) ? i.values[0] : null;
-          return i.update({ embeds: [buildEmbed(d)], components: components(false) });
+          return i.update({ embeds: [buildEmbed(d)], components: buildComponents(false) });
         }
 
-        // --- CANCEL ---
-        if (i.customId === "setup:cancel") {
-          drafts.delete(key);
+        if (i.isButton() && i.customId === "setup:cancel") {
+          drafts.delete(k);
           collector.stop("cancel");
           return i.update({ content: "Setup annulé.", embeds: [], components: [] });
         }
 
-        // --- SAVE ---
-        if (i.customId === "setup:save") {
-          // Champs requis minimum
+        if (i.isButton() && i.customId === "setup:save") {
           const missing = [];
           if (!d.roles.staff) missing.push("Rôle Staff");
           if (!d.channels.logs) missing.push("Salon Logs");
@@ -304,49 +283,47 @@ module.exports = {
             return i.reply({ content: `Impossible d’enregistrer. Manque : ${missing.join(", ")}.`, ephemeral: true });
           }
 
-          // On sauvegarde dans la config (format robuste)
           upsertGuildConfig(interaction.guildId, {
             guildName: interaction.guild?.name || null,
 
-            // compat + lisible
             roles: { ...d.roles },
             channels: { ...d.channels },
             features: { ...d.features },
             colors: { ...d.colors },
 
-            // alias simples (si tu préfères des champs plats)
+            // alias plats (pratique si tu veux des champs simples)
             staffRoleId: d.roles.staff,
             playerRoleId: d.roles.player,
             testRoleId: d.roles.test,
-            logChannelId: d.channels.logs,
+            logChannelId: d.channels.logs
           });
 
-          drafts.delete(key);
+          drafts.delete(k);
           collector.stop("saved");
 
           return i.update({
             content: "Setup enregistré ✅\nUtilise maintenant **/export_config** pour récupérer `servers.json`.",
             embeds: [],
-            components: [],
+            components: []
           });
         }
 
-        return i.reply({ content: "Interaction inconnue.", ephemeral: true });
-      } catch (e) {
+        return i.reply({ content: "Interaction non gérée.", ephemeral: true });
+      } catch {
         return i.reply({ content: "Erreur pendant le setup.", ephemeral: true });
       }
     });
 
     collector.on("end", async (_c, reason) => {
       if (reason === "saved" || reason === "cancel") return;
-      // Timeout : on verrouille l’UI
+
       try {
         await interaction.editReply({
           content: "Setup expiré (10 min). Relance **/setup** si nécessaire.",
-          embeds: [buildEmbed(drafts.get(key) || draft)],
-          components: components(true),
+          embeds: [buildEmbed(drafts.get(k) || draft)],
+          components: buildComponents(true)
         });
       } catch {}
     });
-  },
+  }
 };
