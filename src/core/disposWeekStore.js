@@ -1,66 +1,113 @@
+// src/core/disposWeekStore.js
+// Stockage JSON simple (local) des semaines + votes.
+// Compatible Railway (si volume/persist) sinon ça reset au redéploiement.
+
 const fs = require("fs");
 const path = require("path");
 
-function filePath(guildId) {
-  return path.join(process.cwd(), "data", "dispos", `${guildId}.json`);
-}
+const STORE_PATH = path.join(__dirname, "..", "..", "config", "disposWeekStore.json");
 
-function ensureDir(guildId) {
-  fs.mkdirSync(path.dirname(filePath(guildId)), { recursive: true });
-}
-
-function readGuild(guildId) {
-  ensureDir(guildId);
-  const fp = filePath(guildId);
-
-  if (!fs.existsSync(fp)) {
-    return { version: 1, guildId, activeRootId: null, sessions: {} };
+function ensureStore() {
+  const dir = path.dirname(STORE_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(STORE_PATH)) {
+    fs.writeFileSync(STORE_PATH, JSON.stringify({ version: 1, guilds: {} }, null, 2), "utf8");
   }
+}
 
+function readStore() {
+  ensureStore();
   try {
-    const parsed = JSON.parse(fs.readFileSync(fp, "utf8"));
-    if (!parsed || typeof parsed !== "object") throw new Error("bad json");
-    if (!parsed.sessions || typeof parsed.sessions !== "object") parsed.sessions = {};
-    if (!("activeRootId" in parsed)) parsed.activeRootId = null;
-    if (!parsed.version) parsed.version = 1;
-    parsed.guildId = guildId;
-    return parsed;
+    return JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
   } catch {
-    return { version: 1, guildId, activeRootId: null, sessions: {} };
+    return { version: 1, guilds: {} };
   }
 }
 
-function writeGuild(guildId, data) {
-  ensureDir(guildId);
-  fs.writeFileSync(filePath(guildId), JSON.stringify(data, null, 2), "utf8");
+function writeStore(data) {
+  ensureStore();
+  fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2), "utf8");
 }
 
-function createSession(guildId, session) {
-  const data = readGuild(guildId);
-  data.sessions[session.rootId] = session;
-  data.activeRootId = session.rootId;
-  writeGuild(guildId, data);
-  return session;
+function getGuildData(guildId) {
+  const db = readStore();
+  if (!db.guilds[guildId]) db.guilds[guildId] = { weeks: {} };
+  return { db, guild: db.guilds[guildId] };
 }
 
-function getSession(guildId, rootId) {
-  const data = readGuild(guildId);
-  return data.sessions[rootId] || null;
+/**
+ * Crée une nouvelle semaine (weekId) et enregistre les messageIds par jour.
+ */
+function createWeek(guildId, weekId, payload) {
+  const { db, guild } = getGuildData(guildId);
+  guild.weeks[weekId] = {
+    createdAt: new Date().toISOString(),
+    ...payload,
+  };
+  writeStore(db);
+  return guild.weeks[weekId];
 }
 
-function updateSession(guildId, rootId, patch) {
-  const data = readGuild(guildId);
-  if (!data.sessions[rootId]) return null;
+function getWeek(guildId, weekId) {
+  const db = readStore();
+  return db.guilds?.[guildId]?.weeks?.[weekId] || null;
+}
 
-  data.sessions[rootId] = {
-    ...data.sessions[rootId],
+function updateWeek(guildId, weekId, patch) {
+  const { db, guild } = getGuildData(guildId);
+  if (!guild.weeks[weekId]) return null;
+
+  guild.weeks[weekId] = {
+    ...guild.weeks[weekId],
     ...patch,
     updatedAt: new Date().toISOString(),
   };
 
-  data.activeRootId = rootId;
-  writeGuild(guildId, data);
-  return data.sessions[rootId];
+  writeStore(db);
+  return guild.weeks[weekId];
 }
 
-module.exports = { createSession, getSession, updateSession };
+/**
+ * Enregistre un vote.
+ * dayIndex: 0..6
+ * status: "present" | "absent"
+ */
+function setVote(guildId, weekId, dayIndex, userId, status) {
+  const { db, guild } = getGuildData(guildId);
+  const week = guild.weeks[weekId];
+  if (!week) return null;
+
+  if (!week.votes) week.votes = {};
+  if (!week.votes[dayIndex]) week.votes[dayIndex] = { present: [], absent: [] };
+
+  // retirer de l'autre liste si existant
+  const day = week.votes[dayIndex];
+  day.present = (day.present || []).filter((id) => id !== userId);
+  day.absent = (day.absent || []).filter((id) => id !== userId);
+
+  // ajouter dans la bonne liste
+  if (status === "present") day.present.push(userId);
+  else day.absent.push(userId);
+
+  week.votes[dayIndex] = day;
+  week.updatedAt = new Date().toISOString();
+
+  writeStore(db);
+  return week;
+}
+
+function getCounts(week, dayIndex) {
+  const day = week?.votes?.[dayIndex];
+  const present = day?.present?.length || 0;
+  const absent = day?.absent?.length || 0;
+  return { present, absent };
+}
+
+module.exports = {
+  STORE_PATH,
+  createWeek,
+  getWeek,
+  updateWeek,
+  setVote,
+  getCounts,
+};
