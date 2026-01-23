@@ -2,55 +2,55 @@ const fs = require("fs");
 const path = require("path");
 const { log, warn } = require("./logger");
 
-function walkJsFiles(dir, cb) {
+function walkJsFiles(dir, onFile) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walkJsFiles(full, cb);
-    else if (entry.isFile() && entry.name.endsWith(".js")) cb(full);
+    if (entry.isDirectory()) walkJsFiles(full, onFile);
+    else if (entry.isFile() && entry.name.endsWith(".js")) onFile(full);
   }
 }
 
 function loadCommands(client) {
-  const commandsPath = path.join(__dirname, "..", "commands"); // => src/commands
+  const commandsPath = path.join(__dirname, "..", "commands");
 
   if (!fs.existsSync(commandsPath)) {
-    warn("Dossier commands introuvable :", commandsPath);
+    warn("Dossier commands introuvable:", commandsPath);
     return;
   }
 
   walkJsFiles(commandsPath, (file) => {
     const cmd = require(file);
-
     if (!cmd?.data?.name || typeof cmd.execute !== "function") {
-      warn("Commande ignorée (invalide) :", file);
+      warn("Commande ignorée:", file);
       return;
     }
-
     client.commands.set(cmd.data.name, cmd);
-    log("Commande chargée :", cmd.data.name);
+    log("Commande chargée:", cmd.data.name);
   });
 }
 
 function loadEvents(client) {
-  const eventsPath = path.join(__dirname, "..", "events"); // => src/events
+  const eventsPath = path.join(__dirname, "..", "events");
 
   if (!fs.existsSync(eventsPath)) {
-    warn("Dossier events introuvable :", eventsPath);
+    warn("Dossier events introuvable:", eventsPath);
     return;
   }
 
   walkJsFiles(eventsPath, (file) => {
     const evt = require(file);
-
     if (!evt?.name || typeof evt.execute !== "function") {
-      warn("Event ignoré (invalide) :", file);
+      warn("Event ignoré:", file);
       return;
     }
 
-    if (evt.once) client.once(evt.name, (...args) => evt.execute(...args, client));
-    else client.on(evt.name, (...args) => evt.execute(...args, client));
+    if (evt.once) {
+      client.once(evt.name, (...args) => evt.execute(...args, client));
+    } else {
+      client.on(evt.name, (...args) => evt.execute(...args, client));
+    }
 
-    log("Event chargé :", evt.name);
+    log("Event chargé:", evt.name);
   });
 }
 
