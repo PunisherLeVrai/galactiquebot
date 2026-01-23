@@ -1,166 +1,69 @@
 // src/core/guildConfig.js
-// Core multi-serveur : normalisation + helpers (CommonJS)
+// Couche "core" multi-serveur : lecture/normalisation de la config par serveur
+// Source: config/servers.json via src/core/configManager.js
 
 const { getGuildConfig } = require("./configManager");
 
-const FLAGS_EPHEMERAL = 64; // MessageFlags.Ephemeral
-
-function isSnowflake(v) {
-  return typeof v === "string" && /^[0-9]{15,20}$/.test(v);
+function normalizeArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  return [value].filter(Boolean);
 }
 
 /**
- * Normalise la config pour avoir une structure stable:
- * cfg.channels.dispos, cfg.channels.commands, cfg.channels.logs, cfg.roles.staff, etc.
- * Cela évite de dépendre de noms différents selon les commandes.
+ * Retourne la config normalisée d'une guild.
+ * - Retourne null si pas configuré (pas de setup)
+ * - Applique des defaults sûrs
  */
-function normalizeConfig(cfg) {
-  const safe = cfg && typeof cfg === "object" ? cfg : {};
+function getGuildConfigSafe(guildId) {
+  const raw = getGuildConfig(guildId);
+  if (!raw) return null;
 
-  const roles = {
-    staff: safe.roles?.staff || safe.staffRoleId || null,
-    player: safe.roles?.player || safe.playerRoleId || null,
-    trial: safe.roles?.trial || safe.trialRoleId || safe.testRoleId || null,
-  };
-
-  const channels = {
-    dispos: safe.channels?.dispos || safe.disposChannelId || null,
-    commands: safe.channels?.commands || safe.commandsChannelId || null,
-    logs: safe.channels?.logs || safe.logChannelId || safe.logsChannelId || null,
-    planning: safe.channels?.planning || safe.planningChannelId || null,
-    annonces: safe.channels?.annonces || safe.annoncesChannelId || null,
-    effectif: safe.channels?.effectif || safe.effectifChannelId || null,
-  };
-
-  const colors = {
-    primary: safe.colors?.primary ?? null,
-  };
-
-  const features = {
-    dispos: safe.features?.dispos ?? false,
-    planning: safe.features?.planning ?? false,
-    pseudos: safe.features?.pseudos ?? false,
-    effectif: safe.features?.effectif ?? false,
-  };
+  // Rôles autorisés pour cliquer sur les dispos :
+  // - si vide => tout le monde peut cliquer
+  // - si rempli => seuls ces rôles peuvent cliquer
+  const allowedRoleIds = normalizeArray(raw.disposAllowedRoleIds);
 
   return {
-    ...safe,
-    roles,
-    channels,
-    colors,
-    features,
+    // salons
+    commandsChannelId: raw.commandsChannelId || null,
+    disposChannelId: raw.disposChannelId || null,
+    planningChannelId: raw.planningChannelId || null,
+    annoncesChannelId: raw.annoncesChannelId || null,
+
+    // rôles
+    staffRoleId: raw.staffRoleId || null,
+    playerRoleId: raw.playerRoleId || null,
+    trialRoleId: raw.trialRoleId || null,
+
+    // dispo semaine
+    disposAllowedRoleIds: allowedRoleIds, // [] => tout le monde
+    disposPingRoleIds: normalizeArray(raw.disposPingRoleIds), // optionnel: rôles à mentionner à la création
+
+    // meta
+    guildName: raw.guildName || null,
+    botLabel: raw.botLabel || null,
+    updatedAt: raw.updatedAt || null,
   };
 }
 
 /**
- * Récupère la config du serveur courant.
- * - Retourne null hors serveur
- * - Retourne config normalisée si existe
+ * Vérifie si un membre est autorisé à cliquer selon la config.
+ * Règle demandée:
+ * - Les réponses DOIVENT être comptées même si aucun rôle Joueur/Essai.
+ * => Donc on ne filtre PAS Joueur/Essai.
+ * - MAIS tu m'as dit vouloir "un ou des rôles spécifiques" :
+ *   => Si disposAllowedRoleIds est défini, on restreint aux rôles listés.
+ *   => Sinon tout le monde clique.
  */
-function getConfig(interaction) {
-  if (!interaction?.guildId) return null;
-  const cfg = getGuildConfig(interaction.guildId);
-  if (!cfg) return null;
-  return normalizeConfig(cfg);
-}
-
-/**
- * Critère "config présente".
- * On considère configuré si au moins un champ utile existe.
- * (Tu peux durcir plus tard)
- */
-function isConfigured(cfg) {
-  if (!cfg || typeof cfg !== "object") return false;
-  return !!(
-    cfg.channels?.dispos ||
-    cfg.channels?.commands ||
-    cfg.roles?.staff ||
-    cfg.roles?.player ||
-    cfg.roles?.trial ||
-    cfg.channels?.logs
-  );
-}
-
-async function replyEphemeral(interaction, content) {
-  const payload = { content, flags: FLAGS_EPHEMERAL };
-  try {
-    if (interaction.deferred || interaction.replied) return await interaction.followUp(payload);
-    return await interaction.reply(payload);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Exige une config serveur, sinon répond et retourne null.
- */
-async function requireGuildConfig(interaction) {
-  if (!interaction?.guildId) {
-    await replyEphemeral(interaction, "Cette commande doit être utilisée dans un serveur.");
-    return null;
-  }
-
-  const cfg = getConfig(interaction);
-  if (!cfg || !isConfigured(cfg)) {
-    await replyEphemeral(
-      interaction,
-      "Ce serveur n’est pas encore configuré.\n" +
-        "Lance **/setup** (admin) puis réessaie.\n" +
-        "Astuce : utilise **/export_config** pour sauvegarder `servers.json`."
-    );
-    return null;
-  }
-
-  return cfg;
-}
-
-/**
- * Optionnel : exiger que la commande soit utilisée dans un salon configuré.
- * key: "dispos" | "commands" | "logs" | ...
- */
-async function requireInChannel(interaction, key) {
-  const cfg = await requireGuildConfig(interaction);
-  if (!cfg) return null;
-
-  const expectedId = cfg.channels?.[key] || null;
-  if (!isSnowflake(expectedId)) return cfg; // si pas configuré, on ne bloque pas
-
-  if (interaction.channelId !== expectedId) {
-    await replyEphemeral(interaction, `Cette commande doit être utilisée dans <#${expectedId}>.`);
-    return null;
-  }
-
-  return cfg;
-}
-
-/**
- * Optionnel : restreindre au rôle staff configuré.
- * (Tu peux l’utiliser pour /setup /dispo admin etc. si tu veux)
- */
-async function requireStaff(interaction) {
-  const cfg = await requireGuildConfig(interaction);
-  if (!cfg) return null;
-
-  const staffRoleId = cfg.roles?.staff;
-  if (!isSnowflake(staffRoleId)) return cfg; // si pas configuré, on ne bloque pas
-
-  const member = interaction.member;
-  const has = member?.roles?.cache?.has?.(staffRoleId);
-
-  if (!has) {
-    await replyEphemeral(interaction, "Accès refusé : réservé au **Staff**.");
-    return null;
-  }
-
-  return cfg;
+function canClickDispos(member, guildCfg) {
+  if (!member || !guildCfg) return false;
+  const allowed = guildCfg.disposAllowedRoleIds || [];
+  if (allowed.length === 0) return true; // tout le monde
+  return member.roles?.cache?.some((r) => allowed.includes(r.id)) ?? false;
 }
 
 module.exports = {
-  FLAGS_EPHEMERAL,
-  normalizeConfig,
-  getConfig,
-  requireGuildConfig,
-  requireInChannel,
-  requireStaff,
-  isConfigured,
+  getGuildConfigSafe,
+  canClickDispos,
 };
