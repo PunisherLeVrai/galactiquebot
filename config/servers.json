@@ -1,1 +1,19 @@
-{}
+{
+  "guilds": {
+    "1392639720491581551": {
+      "botLabel": "XIG BLAUGRANA FC Staff",
+      "guildName": "XIG INTER GALACTIQUE",
+      "commandsChannelId": "1393775984423211138",
+      "disposChannelId": "1429059902852173936",
+      "planningChannelId": "1457341736773877886",
+      "annoncesChannelId": "1393771922709286932",
+      "staffRoleId": "1393892611382575185",
+      "playerRoleId": "1464318392931713088",
+      "trialRoleId": "1393784904809975850",
+      "setupBy": "448539638420733963",
+      "setupAt": "2026-01-23T21:00:16.667Z",
+      "updatedAt": "2026-01-23T21:00:16.667Z"
+    }
+  },
+  "version": 1
+}
