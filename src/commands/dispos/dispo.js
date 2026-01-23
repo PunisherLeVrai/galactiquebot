@@ -1,83 +1,157 @@
 // src/commands/dispos/dispo.js
-// /dispo => crée la semaine (7 messages) + boutons présent/absent + images optionnelles
+const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  ChannelType,
+} = require("discord.js");
 
-const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { getGuildConfigSafe } = require("../../core/guildConfig");
-const { renderDisposWeek } = require("../../core/disposWeekRenderer");
+const { getGuildConfig, isStaff } = require("../../core/guildConfig");
+const { createSession, updateSessionDayMessage } = require("../../core/disposWeekStore");
+const { buildDayEmbed } = require("../../core/disposWeekRenderer");
+const { buildRows } = require("../../core/disposWeekButtons");
 
 const FLAGS_EPHEMERAL = 64;
+
+const DAYS = [
+  { key: "lun", label: "Lundi" },
+  { key: "mar", label: "Mardi" },
+  { key: "mer", label: "Mercredi" },
+  { key: "jeu", label: "Jeudi" },
+  { key: "ven", label: "Vendredi" },
+  { key: "sam", label: "Samedi" },
+  { key: "dim", label: "Dimanche" },
+];
+
+function parseDays(input) {
+  if (!input || input === "all") return DAYS;
+  const parts = input.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const selected = DAYS.filter((d) => parts.includes(d.key));
+  return selected.length ? selected : null;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("dispo")
-    .setDescription("Créer les disponibilités de la semaine (7 jours).")
-    // tu peux enlever cette permission si tu veux laisser tout le monde créer les 7 messages
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setDescription("Créer les messages de disponibilités (1 à 7 jours).")
     .addStringOption((opt) =>
       opt
-        .setName("semaine")
-        .setDescription("Label semaine (ex: 22/01 → 28/01)")
+        .setName("jours")
+        .setDescription("Ex: lun,mar,mer ou all")
         .setRequired(true)
     )
-    // Images depuis téléphone/PC : tu uploades direct dans la commande
-    .addAttachmentOption((opt) => opt.setName("image1").setDescription("Image 1 (optionnelle)").setRequired(false))
-    .addAttachmentOption((opt) => opt.setName("image2").setDescription("Image 2 (optionnelle)").setRequired(false))
-    .addAttachmentOption((opt) => opt.setName("image3").setDescription("Image 3 (optionnelle)").setRequired(false))
-    .addAttachmentOption((opt) => opt.setName("image4").setDescription("Image 4 (optionnelle)").setRequired(false)),
+    .addStringOption((opt) =>
+      opt
+        .setName("mode")
+        .setDescription("Affichage")
+        .addChoices(
+          { name: "Embed", value: "embed" },
+          { name: "Image", value: "image" },
+          { name: "Embed + Image", value: "both" }
+        )
+        .setRequired(true)
+    )
+    // 7 attachments max (1 par option)
+    .addAttachmentOption((o) => o.setName("img1").setDescription("Image 1").setRequired(false))
+    .addAttachmentOption((o) => o.setName("img2").setDescription("Image 2").setRequired(false))
+    .addAttachmentOption((o) => o.setName("img3").setDescription("Image 3").setRequired(false))
+    .addAttachmentOption((o) => o.setName("img4").setDescription("Image 4").setRequired(false))
+    .addAttachmentOption((o) => o.setName("img5").setDescription("Image 5").setRequired(false))
+    .addAttachmentOption((o) => o.setName("img6").setDescription("Image 6").setRequired(false))
+    .addAttachmentOption((o) => o.setName("img7").setDescription("Image 7").setRequired(false))
+    // staff-only conseillé (sinon n'importe qui crée 7 messages)
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   async execute(interaction) {
-    if (!interaction.inGuild()) {
-      return interaction.reply({ content: "Commande utilisable uniquement dans un serveur.", flags: FLAGS_EPHEMERAL });
-    }
-
-    const guildCfg = getGuildConfigSafe(interaction.guildId);
-    if (!guildCfg || !guildCfg.disposChannelId) {
+    const cfg = getGuildConfig(interaction.guildId);
+    if (!cfg) {
       return interaction.reply({
-        content: "Ce serveur n’est pas configuré. Lance `/setup` (admin) puis réessaie.",
+        content: "Ce serveur n’est pas configuré. Lance `/setup` d’abord.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    const channel = interaction.guild.channels.cache.get(guildCfg.disposChannelId);
-    if (!channel) {
+    // Restriction : staff (ou ManageGuild)
+    if (!isStaff(interaction.member, cfg) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      return interaction.reply({ content: "Commande réservée au staff.", flags: FLAGS_EPHEMERAL });
+    }
+
+    const disposChannelId = cfg.disposChannelId;
+    if (!disposChannelId) {
       return interaction.reply({
-        content: "Salon dispos introuvable. Refais `/setup` et sélectionne un salon valide.",
+        content: "Salon dispos non configuré. Fais `/setup` et définis le salon dispos.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    // Récupère les attachments
-    const weekLabel = interaction.options.getString("semaine", true);
-    const atts = ["image1", "image2", "image3", "image4"]
-      .map((k) => interaction.options.getAttachment(k))
-      .filter(Boolean)
-      .map((a) => ({ url: a.url, name: a.name }));
+    const channel = await interaction.client.channels.fetch(disposChannelId).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      return interaction.reply({
+        content: "Le salon dispos configuré est invalide (doit être un salon texte).",
+        flags: FLAGS_EPHEMERAL,
+      });
+    }
+
+    const joursInput = interaction.options.getString("jours", true);
+    const mode = interaction.options.getString("mode", true);
+
+    const daysSelected = parseDays(joursInput);
+    if (!daysSelected) {
+      return interaction.reply({
+        content: "Format jours invalide. Exemple: `lun,mar,mer` ou `all`.",
+        flags: FLAGS_EPHEMERAL,
+      });
+    }
+
+    // Récup images uploadées
+    const imgs = [];
+    for (let i = 1; i <= 7; i++) {
+      const att = interaction.options.getAttachment(`img${i}`);
+      if (att?.url) imgs.push(att.url);
+    }
+
+    // Mapping images -> jour (si 1 image => répétée)
+    const days = daysSelected.map((d, idx) => ({
+      key: d.key,
+      label: d.label,
+      mode,
+      imageUrl: imgs.length ? (imgs[idx] || imgs[0]) : null,
+    }));
+
+    // création session
+    const session = createSession(interaction.guildId, interaction.user.id, disposChannelId, days, {
+      title: "Disponibilités",
+    });
 
     await interaction.reply({
-      content: `Création des dispos semaine: **${weekLabel}**…`,
+      content: `Création des dispos : ${days.length} jour(s) dans ${channel}.`,
       flags: FLAGS_EPHEMERAL,
     });
 
-    try {
-      const res = await renderDisposWeek({
-        client: interaction.client,
-        guild: interaction.guild,
-        channel,
-        guildCfg,
-        weekLabel,
-        attachments: atts,
+    // Envoi messages
+    for (const day of session.days) {
+      const embed = buildDayEmbed({
+        guildName: interaction.guild.name,
+        session,
+        day,
+        brandTitle: "Disponibilités",
       });
 
-      await interaction.followUp({
-        content: `OK. Dispos créées dans ${channel} (weekId: \`${res.weekId}\`).`,
-        flags: FLAGS_EPHEMERAL,
+      const rows = buildRows({
+        sessionId: session.sessionId,
+        dayKey: day.key,
+        closed: session.closed,
+        automationsEnabled: cfg.automationsEnabled,
       });
-    } catch (err) {
-      await interaction.followUp({
-        content: `Erreur pendant la création des dispos. Vérifie les permissions du bot dans ${channel}.`,
-        flags: FLAGS_EPHEMERAL,
+
+      const msg = await channel.send({
+        embeds: [embed],
+        components: rows,
       });
-      throw err;
+
+      updateSessionDayMessage(interaction.guildId, session.sessionId, day.key, {
+        messageId: msg.id,
+        // si tu veux récupérer l’URL réelle d’une image postée en attachment plus tard, on peut l’ajouter ici
+      });
     }
   },
 };
