@@ -1,69 +1,63 @@
 // src/core/guildConfig.js
-// Couche "core" multi-serveur : lecture/normalisation de la config par serveur
-// Source: config/servers.json via src/core/configManager.js
+const { getGuildConfig: getRawGuildConfig, upsertGuildConfig } = require("./configManager");
 
-const { getGuildConfig } = require("./configManager");
-
-function normalizeArray(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.filter(Boolean);
-  return [value].filter(Boolean);
-}
-
-/**
- * Retourne la config normalisée d'une guild.
- * - Retourne null si pas configuré (pas de setup)
- * - Applique des defaults sûrs
- */
-function getGuildConfigSafe(guildId) {
-  const raw = getGuildConfig(guildId);
-  if (!raw) return null;
-
-  // Rôles autorisés pour cliquer sur les dispos :
-  // - si vide => tout le monde peut cliquer
-  // - si rempli => seuls ces rôles peuvent cliquer
-  const allowedRoleIds = normalizeArray(raw.disposAllowedRoleIds);
-
+function withDefaults(cfg = {}) {
   return {
     // salons
-    commandsChannelId: raw.commandsChannelId || null,
-    disposChannelId: raw.disposChannelId || null,
-    planningChannelId: raw.planningChannelId || null,
-    annoncesChannelId: raw.annoncesChannelId || null,
+    disposChannelId: cfg.disposChannelId || null,        // où les messages de dispo sont postés
+    reportChannelId: cfg.reportChannelId || null,        // salon staff pour rapports/rappels auto (recommandé)
 
     // rôles
-    staffRoleId: raw.staffRoleId || null,
-    playerRoleId: raw.playerRoleId || null,
-    trialRoleId: raw.trialRoleId || null,
+    staffRoleId: cfg.staffRoleId || null,
+    playerRoleId: cfg.playerRoleId || null,
 
-    // dispo semaine
-    disposAllowedRoleIds: allowedRoleIds, // [] => tout le monde
-    disposPingRoleIds: normalizeArray(raw.disposPingRoleIds), // optionnel: rôles à mentionner à la création
+    // automations
+    automationsEnabled: cfg.automationsEnabled ?? false,
 
-    // meta
-    guildName: raw.guildName || null,
-    botLabel: raw.botLabel || null,
-    updatedAt: raw.updatedAt || null,
+    // heures (heure locale du conteneur -> mets TZ=Europe/Paris sur Railway)
+    automationReminderHours: Array.isArray(cfg.automationReminderHours) ? cfg.automationReminderHours : [12],
+    automationReportHours: Array.isArray(cfg.automationReportHours) ? cfg.automationReportHours : [12, 17],
+    automationCloseHours: Array.isArray(cfg.automationCloseHours) ? cfg.automationCloseHours : [17],
   };
 }
 
-/**
- * Vérifie si un membre est autorisé à cliquer selon la config.
- * Règle demandée:
- * - Les réponses DOIVENT être comptées même si aucun rôle Joueur/Essai.
- * => Donc on ne filtre PAS Joueur/Essai.
- * - MAIS tu m'as dit vouloir "un ou des rôles spécifiques" :
- *   => Si disposAllowedRoleIds est défini, on restreint aux rôles listés.
- *   => Sinon tout le monde clique.
- */
-function canClickDispos(member, guildCfg) {
-  if (!member || !guildCfg) return false;
-  const allowed = guildCfg.disposAllowedRoleIds || [];
-  if (allowed.length === 0) return true; // tout le monde
-  return member.roles?.cache?.some((r) => allowed.includes(r.id)) ?? false;
+function getGuildConfig(guildId) {
+  const raw = getRawGuildConfig(guildId);
+  if (!raw) return null;
+  return withDefaults(raw);
+}
+
+function ensureGuildConfig(guildId) {
+  const raw = getRawGuildConfig(guildId) || {};
+  const cfg = withDefaults(raw);
+  upsertGuildConfig(guildId, cfg);
+  return cfg;
+}
+
+function setGuildConfig(guildId, patch) {
+  return upsertGuildConfig(guildId, patch);
+}
+
+function hasRole(member, roleId) {
+  if (!roleId) return false;
+  return member?.roles?.cache?.has(roleId) || false;
+}
+
+function isStaff(member, cfg) {
+  if (cfg?.staffRoleId) return hasRole(member, cfg.staffRoleId);
+  // fallback si pas de rôle staff configuré
+  return member?.permissions?.has?.("Administrator") || false;
+}
+
+function isPlayer(member, cfg) {
+  if (!cfg?.playerRoleId) return false;
+  return hasRole(member, cfg.playerRoleId);
 }
 
 module.exports = {
-  getGuildConfigSafe,
-  canClickDispos,
+  getGuildConfig,
+  ensureGuildConfig,
+  setGuildConfig,
+  isStaff,
+  isPlayer,
 };
