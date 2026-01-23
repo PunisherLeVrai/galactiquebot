@@ -1,17 +1,17 @@
-function now() {
+function ts() {
   return new Date().toISOString();
 }
 
 function log(...args) {
-  console.log(`[${now()}]`, ...args);
+  console.log(`[${ts()}]`, ...args);
 }
 
 function warn(...args) {
-  console.warn(`[${now()}]`, ...args);
+  console.warn(`[${ts()}]`, ...args);
 }
 
 function error(...args) {
-  console.error(`[${now()}]`, ...args);
+  console.error(`[${ts()}]`, ...args);
 }
 
 module.exports = { log, warn, error };
