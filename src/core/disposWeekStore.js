@@ -1,11 +1,8 @@
 // src/core/disposWeekStore.js
-// Stockage JSON simple (local) des semaines + votes.
-// Compatible Railway (si volume/persist) sinon ça reset au redéploiement.
-
 const fs = require("fs");
 const path = require("path");
 
-const STORE_PATH = path.join(__dirname, "..", "..", "config", "disposWeekStore.json");
+const STORE_PATH = path.join(__dirname, "..", "..", "config", "disposWeek.json");
 
 function ensureStore() {
   const dir = path.dirname(STORE_PATH);
@@ -24,90 +21,140 @@ function readStore() {
   }
 }
 
-function writeStore(data) {
+function writeStore(db) {
   ensureStore();
-  fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2), "utf8");
+  fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2), "utf8");
 }
 
-function getGuildData(guildId) {
-  const db = readStore();
-  if (!db.guilds[guildId]) db.guilds[guildId] = { weeks: {} };
-  return { db, guild: db.guilds[guildId] };
+function ensureGuild(db, guildId) {
+  if (!db.guilds[guildId]) db.guilds[guildId] = { sessions: {}, lastSessionId: null };
+  return db.guilds[guildId];
+}
+
+function newSessionId() {
+  // court, stable, < 100 chars en customId
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
 /**
- * Crée une nouvelle semaine (weekId) et enregistre les messageIds par jour.
+ * Create session
+ * days: [{ key: 'mon', label:'Lundi', imageUrl?: string|null, mode:'embed'|'image'|'both', messageId?:string }]
  */
-function createWeek(guildId, weekId, payload) {
-  const { db, guild } = getGuildData(guildId);
-  guild.weeks[weekId] = {
+function createSession(guildId, createdBy, channelId, days, meta = {}) {
+  const db = readStore();
+  const g = ensureGuild(db, guildId);
+
+  const sessionId = newSessionId();
+
+  g.sessions[sessionId] = {
+    sessionId,
+    guildId,
+    channelId,
+    createdBy,
     createdAt: new Date().toISOString(),
-    ...payload,
+    closed: false,
+    closedAt: null,
+    days: days.map((d) => ({
+      key: d.key,
+      label: d.label,
+      mode: d.mode || "embed",
+      imageUrl: d.imageUrl || null,
+      messageId: d.messageId || null,
+    })),
+    votes: {}, // votes[dayKey] = { present:Set as array, absent: array }
+    meta: {
+      title: meta.title || null,
+    },
   };
+
+  // init votes structure
+  for (const d of g.sessions[sessionId].days) {
+    g.sessions[sessionId].votes[d.key] = { present: [], absent: [] };
+  }
+
+  g.lastSessionId = sessionId;
   writeStore(db);
-  return guild.weeks[weekId];
+  return g.sessions[sessionId];
 }
 
-function getWeek(guildId, weekId) {
+function getSession(guildId, sessionId) {
   const db = readStore();
-  return db.guilds?.[guildId]?.weeks?.[weekId] || null;
+  const g = db.guilds[guildId];
+  if (!g) return null;
+  return g.sessions[sessionId] || null;
 }
 
-function updateWeek(guildId, weekId, patch) {
-  const { db, guild } = getGuildData(guildId);
-  if (!guild.weeks[weekId]) return null;
+function updateSessionDayMessage(guildId, sessionId, dayKey, patch) {
+  const db = readStore();
+  const g = ensureGuild(db, guildId);
+  const s = g.sessions[sessionId];
+  if (!s) return null;
 
-  guild.weeks[weekId] = {
-    ...guild.weeks[weekId],
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  };
+  const day = s.days.find((x) => x.key === dayKey);
+  if (!day) return null;
+
+  Object.assign(day, patch);
+  writeStore(db);
+  return day;
+}
+
+function setVote(guildId, sessionId, dayKey, userId, status /* 'present'|'absent' */) {
+  const db = readStore();
+  const g = ensureGuild(db, guildId);
+  const s = g.sessions[sessionId];
+  if (!s) return { ok: false, reason: "SESSION_NOT_FOUND" };
+  if (s.closed) return { ok: false, reason: "CLOSED" };
+
+  const bucket = s.votes[dayKey];
+  if (!bucket) return { ok: false, reason: "DAY_NOT_FOUND" };
+
+  // remove from both
+  bucket.present = bucket.present.filter((id) => id !== userId);
+  bucket.absent = bucket.absent.filter((id) => id !== userId);
+
+  // add to selected
+  if (status === "present") bucket.present.push(userId);
+  if (status === "absent") bucket.absent.push(userId);
 
   writeStore(db);
-  return guild.weeks[weekId];
+  return { ok: true };
 }
 
-/**
- * Enregistre un vote.
- * dayIndex: 0..6
- * status: "present" | "absent"
- */
-function setVote(guildId, weekId, dayIndex, userId, status) {
-  const { db, guild } = getGuildData(guildId);
-  const week = guild.weeks[weekId];
-  if (!week) return null;
+function closeSession(guildId, sessionId, closedBy) {
+  const db = readStore();
+  const g = ensureGuild(db, guildId);
+  const s = g.sessions[sessionId];
+  if (!s) return null;
 
-  if (!week.votes) week.votes = {};
-  if (!week.votes[dayIndex]) week.votes[dayIndex] = { present: [], absent: [] };
-
-  // retirer de l'autre liste si existant
-  const day = week.votes[dayIndex];
-  day.present = (day.present || []).filter((id) => id !== userId);
-  day.absent = (day.absent || []).filter((id) => id !== userId);
-
-  // ajouter dans la bonne liste
-  if (status === "present") day.present.push(userId);
-  else day.absent.push(userId);
-
-  week.votes[dayIndex] = day;
-  week.updatedAt = new Date().toISOString();
-
+  s.closed = true;
+  s.closedAt = new Date().toISOString();
+  s.closedBy = closedBy || null;
   writeStore(db);
-  return week;
+  return s;
 }
 
-function getCounts(week, dayIndex) {
-  const day = week?.votes?.[dayIndex];
-  const present = day?.present?.length || 0;
-  const absent = day?.absent?.length || 0;
-  return { present, absent };
+function getLastOpenSession(guildId) {
+  const db = readStore();
+  const g = db.guilds[guildId];
+  if (!g) return null;
+  // lastSessionId d'abord
+  if (g.lastSessionId) {
+    const s = g.sessions[g.lastSessionId];
+    if (s && !s.closed) return s;
+  }
+  // fallback : scan
+  const sessions = Object.values(g.sessions || {});
+  const open = sessions.filter((s) => !s.closed);
+  open.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return open[0] || null;
 }
 
 module.exports = {
   STORE_PATH,
-  createWeek,
-  getWeek,
-  updateWeek,
+  createSession,
+  getSession,
+  updateSessionDayMessage,
   setVote,
-  getCounts,
+  closeSession,
+  getLastOpenSession,
 };
