@@ -1,72 +1,75 @@
+// src/commands/dispos/dispo_close.js
+// Ferme une semaine de disponibilités
+// CommonJS — discord.js v14
+
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { requireStaff, requireGuildConfig } = require("../../core/guildConfig");
-const { getLastSessionId, getSession, upsertSession } = require("../../core/disposStore");
-const { buildButtons, buildEmbed } = require("../../core/disposButtons");
+const { getSession, closeSession } = require("../../core/disposWeekStore");
+const { buttonsRow } = require("../../core/disposWeekButtons");
+const { getGuildConfig } = require("../../core/configManager");
+const { normalizeConfig } = require("../../core/guildConfig");
 
 const FLAGS_EPHEMERAL = 64;
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("dispo_close")
-    .setDescription("Ferme la dernière session dispos (désactive les boutons).")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((o) =>
-      o.setName("message_id").setDescription("ID du message de la session (optionnel)").setRequired(false)
-    ),
+    .setDescription("Ferme la semaine de disponibilités en cours.")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
-    const cfg = await requireGuildConfig(interaction);
-    if (!cfg) return;
-
-    const staffOk = await requireStaff(interaction);
-    if (!staffOk) return;
-
-    const guildId = interaction.guildId;
-    const messageId = interaction.options.getString("message_id", false) || getLastSessionId(guildId);
-
-    if (!messageId) {
-      return interaction.reply({ content: "Aucune session trouvée.", flags: FLAGS_EPHEMERAL });
-    }
-
-    const session = getSession(guildId, messageId);
-    if (!session) {
-      return interaction.reply({ content: "Session introuvable.", flags: FLAGS_EPHEMERAL });
-    }
-
-    if (session.closed) {
-      return interaction.reply({ content: "Session déjà fermée.", flags: FLAGS_EPHEMERAL });
-    }
-
-    const disposChannelId = session.channelId || cfg.channels?.dispos;
-    if (!disposChannelId) {
-      return interaction.reply({ content: "Salon dispos non configuré.", flags: FLAGS_EPHEMERAL });
-    }
-
-    const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
-    if (!channel) {
-      return interaction.reply({ content: "Salon dispos introuvable.", flags: FLAGS_EPHEMERAL });
-    }
-
-    const msg = await channel.messages.fetch(messageId).catch(() => null);
-    if (!msg) {
-      // On ferme quand même en data
-      upsertSession(guildId, messageId, { closed: true, closedAt: new Date().toISOString() });
+    if (!interaction.inGuild()) {
       return interaction.reply({
-        content: "Message de session introuvable, mais la session a été marquée fermée dans les données.",
+        content: "Commande utilisable uniquement dans un serveur.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    const updated = upsertSession(guildId, messageId, {
-      closed: true,
-      closedAt: new Date().toISOString(),
-    });
+    const cfgRaw = getGuildConfig(interaction.guildId);
+    if (!cfgRaw) {
+      return interaction.reply({
+        content: "Serveur non configuré. Lance `/setup`.",
+        flags: FLAGS_EPHEMERAL,
+      });
+    }
 
-    await msg.edit({
-      embeds: [buildEmbed(updated, cfg)],
-      components: [buildButtons(true)],
-    });
+    const cfg = normalizeConfig(cfgRaw);
 
-    await interaction.reply({ content: "Session fermée ✅", flags: FLAGS_EPHEMERAL });
+    const session = getSession(interaction.guildId);
+    if (!session) {
+      return interaction.reply({
+        content: "Aucune semaine de dispos active.",
+        flags: FLAGS_EPHEMERAL,
+      });
+    }
+
+    const channel = await interaction.guild.channels
+      .fetch(session.channelId)
+      .catch(() => null);
+
+    if (!channel) {
+      return interaction.reply({
+        content: "Salon des dispos introuvable.",
+        flags: FLAGS_EPHEMERAL,
+      });
+    }
+
+    // Désactiver les boutons sur chaque jour
+    for (const day of session.days) {
+      try {
+        const msg = await channel.messages.fetch(day.messageId);
+        await msg.edit({
+          components: [buttonsRow(session.rootId, day.index, true)],
+        });
+      } catch {
+        // message supprimé ou inaccessible → on ignore
+      }
+    }
+
+    closeSession(interaction.guildId);
+
+    await interaction.reply({
+      content: "✅ Les disponibilités ont été **fermées**.",
+      flags: FLAGS_EPHEMERAL,
+    });
   },
 };
