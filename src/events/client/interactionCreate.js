@@ -1,33 +1,34 @@
-const { Events } = require("discord.js");
+// src/events/client/interactionCreate.js
 const { warn } = require("../../core/logger");
-const { handleDisposWeekButton } = require("../../core/disposWeekButtons");
-
-const FLAGS_EPHEMERAL = 64;
+const { getGuildConfigSafe } = require("../../core/guildConfig");
+const { handleDispoButton } = require("../../core/disposWeekButtons");
 
 module.exports = {
-  name: Events.InteractionCreate,
-  once: false,
+  name: "interactionCreate",
   async execute(interaction, client) {
     try {
-      // 1) Boutons dispos semaine
+      // 1) Boutons / menus
       if (interaction.isButton()) {
-        const handled = await handleDisposWeekButton(interaction);
+        const guildCfg = interaction.inGuild() ? getGuildConfigSafe(interaction.guildId) : null;
+
+        // handle dispo buttons
+        const handled = await handleDispoButton(interaction, guildCfg);
         if (handled) return;
       }
 
-      // 2) Slash
-      if (!interaction.isChatInputCommand()) return;
+      // 2) Slash commands
+      if (interaction.isChatInputCommand()) {
+        const command = client.commands.get(interaction.commandName);
+        if (!command) return;
 
-      const cmd = client.commands.get(interaction.commandName);
-      if (!cmd) return;
-
-      await cmd.execute(interaction, client);
+        await command.execute(interaction, client);
+      }
     } catch (err) {
-      warn("Erreur interactionCreate :", err);
-      const payload = { content: "Erreur.", flags: FLAGS_EPHEMERAL };
+      warn("Erreur interactionCreate:", err);
       try {
-        if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
-        else await interaction.reply(payload);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: "Erreur interne.", flags: 64 });
+        }
       } catch {}
     }
   },
