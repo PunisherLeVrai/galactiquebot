@@ -1,83 +1,60 @@
 const fs = require("fs");
 const path = require("path");
 
-const FILE_PATH = path.join(__dirname, "..", "..", "config", "servers.json");
+const CONFIG_PATH = path.join(__dirname, "..", "..", "config", "servers.json");
 
-let cache = null;
-let dirty = false;
-
-function ensureFile() {
-  const dir = path.dirname(FILE_PATH);
+function ensureConfigFile() {
+  const dir = path.dirname(CONFIG_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(FILE_PATH)) fs.writeFileSync(FILE_PATH, "{}", "utf8");
-}
 
-function loadAll() {
-  if (cache) return cache;
-  ensureFile();
-
-  try {
-    const raw = fs.readFileSync(FILE_PATH, "utf8");
-    cache = raw.trim() ? JSON.parse(raw) : {};
-  } catch {
-    cache = {};
+  if (!fs.existsSync(CONFIG_PATH)) {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify({ version: 1, guilds: {} }, null, 2), "utf8");
   }
-  dirty = false;
-  return cache;
 }
 
-function saveAll() {
-  ensureFile();
-  const data = loadAll();
-  fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), "utf8");
-  dirty = false;
+function readAll() {
+  ensureConfigFile();
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    // fallback safe
+    return { version: 1, guilds: {} };
+  }
+}
+
+function writeAll(data) {
+  ensureConfigFile();
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), "utf8");
 }
 
 function getGuildConfig(guildId) {
-  const all = loadAll();
-  if (!all[guildId]) {
-    all[guildId] = {
-      name: null,
-      colors: { primary: null },
-      roles: {},
-      channels: {},
-      features: {}
-    };
-    dirty = true;
-  }
-  return all[guildId];
+  const data = readAll();
+  if (!data.guilds[guildId]) return null;
+  return data.guilds[guildId];
 }
 
-function setGuildConfig(guildId, patch) {
-  const all = loadAll();
-  const current = getGuildConfig(guildId);
+function upsertGuildConfig(guildId, patch) {
+  const data = readAll();
+  if (!data.guilds[guildId]) data.guilds[guildId] = {};
 
-  all[guildId] = {
-    ...current,
+  data.guilds[guildId] = {
+    ...data.guilds[guildId],
     ...patch,
-    colors: { ...(current.colors || {}), ...(patch.colors || {}) },
-    roles: { ...(current.roles || {}), ...(patch.roles || {}) },
-    channels: { ...(current.channels || {}), ...(patch.channels || {}) },
-    features: { ...(current.features || {}), ...(patch.features || {}) }
+    updatedAt: new Date().toISOString(),
   };
 
-  dirty = true;
-  return all[guildId];
+  writeAll(data);
+  return data.guilds[guildId];
 }
 
-function isDirty() {
-  return dirty;
-}
-
-function getFilePath() {
-  return FILE_PATH;
+function exportAll() {
+  return readAll();
 }
 
 module.exports = {
-  loadAll,
-  saveAll,
   getGuildConfig,
-  setGuildConfig,
-  isDirty,
-  getFilePath
+  upsertGuildConfig,
+  exportAll,
+  CONFIG_PATH
 };
