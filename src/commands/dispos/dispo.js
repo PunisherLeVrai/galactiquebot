@@ -1,172 +1,83 @@
 // src/commands/dispos/dispo.js
+// /dispo => crée la semaine (7 messages) + boutons présent/absent + images optionnelles
+
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { getGuildConfig } = require("../../core/configManager");
-const { normalizeConfig } = require("../../core/guildConfig");
-const { createSession } = require("../../core/disposWeekStore");
-const { buildDayEmbed, buildPayload } = require("../../core/disposWeekRenderer");
-const { buttonsRow } = require("../../core/disposWeekButtons");
+const { getGuildConfigSafe } = require("../../core/guildConfig");
+const { renderDisposWeek } = require("../../core/disposWeekRenderer");
 
 const FLAGS_EPHEMERAL = 64;
-const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
-
-function uniq(arr) {
-  return [...new Set(arr)];
-}
-
-/**
- * Construit la liste des "attendus" depuis un ou plusieurs rôles.
- * Note: pour être RAM-friendly, on utilise role.members (cache) ; si le serveur est petit,
- * on peut forcer un fetch complet une fois.
- */
-async function buildExpectedUserIds(guild, roleIds) {
-  const clean = Array.isArray(roleIds) ? roleIds.filter(Boolean) : [];
-  if (clean.length === 0) return [];
-
-  // Option : si serveur raisonnable, on fetch une fois pour remplir role.members correctement
-  // (évite "sans réponse" faux si cache incomplet).
-  // Ajuste le seuil si besoin.
-  if (guild.memberCount && guild.memberCount <= 800) {
-    try {
-      await guild.members.fetch();
-    } catch {
-      // on continue sur cache
-    }
-  }
-
-  const ids = [];
-  for (const rid of clean) {
-    const role = await guild.roles.fetch(rid).catch(() => null);
-    if (!role) continue;
-    for (const [memberId] of role.members) ids.push(memberId);
-  }
-
-  return uniq(ids);
-}
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("dispo")
-    .setDescription("Crée les dispos de la semaine (7 jours).")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((o) => o.setName("titre").setDescription("Titre (ex: Dispos semaine)").setRequired(true))
-    .addStringOption((o) => o.setName("note").setDescription("Note (deadline, infos)").setRequired(false))
-    .addStringOption((o) =>
-      o
-        .setName("images")
-        .setDescription("Images: aucune / 1 image / 7 images")
-        .setRequired(false)
-        .addChoices(
-          { name: "Aucune", value: "none" },
-          { name: "1 image (même pour 7 jours)", value: "one" },
-          { name: "7 images (une par jour)", value: "multi" }
-        )
+    .setDescription("Créer les disponibilités de la semaine (7 jours).")
+    // tu peux enlever cette permission si tu veux laisser tout le monde créer les 7 messages
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption((opt) =>
+      opt
+        .setName("semaine")
+        .setDescription("Label semaine (ex: 22/01 → 28/01)")
+        .setRequired(true)
     )
-    .addAttachmentOption((o) => o.setName("image").setDescription("Image unique (si mode = 1 image)").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image1").setDescription("Lundi").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image2").setDescription("Mardi").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image3").setDescription("Mercredi").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image4").setDescription("Jeudi").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image5").setDescription("Vendredi").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image6").setDescription("Samedi").setRequired(false))
-    .addAttachmentOption((o) => o.setName("image7").setDescription("Dimanche").setRequired(false)),
+    // Images depuis téléphone/PC : tu uploades direct dans la commande
+    .addAttachmentOption((opt) => opt.setName("image1").setDescription("Image 1 (optionnelle)").setRequired(false))
+    .addAttachmentOption((opt) => opt.setName("image2").setDescription("Image 2 (optionnelle)").setRequired(false))
+    .addAttachmentOption((opt) => opt.setName("image3").setDescription("Image 3 (optionnelle)").setRequired(false))
+    .addAttachmentOption((opt) => opt.setName("image4").setDescription("Image 4 (optionnelle)").setRequired(false)),
 
   async execute(interaction) {
     if (!interaction.inGuild()) {
-      return interaction.reply({ content: "Commande serveur uniquement.", flags: FLAGS_EPHEMERAL });
+      return interaction.reply({ content: "Commande utilisable uniquement dans un serveur.", flags: FLAGS_EPHEMERAL });
     }
 
-    const cfg = normalizeConfig(getGuildConfig(interaction.guildId) || {});
-    const disposChannelId = cfg.channels?.dispos;
-
-    if (!disposChannelId) {
+    const guildCfg = getGuildConfigSafe(interaction.guildId);
+    if (!guildCfg || !guildCfg.disposChannelId) {
       return interaction.reply({
-        content: "Salon **Dispos** non configuré. Fais `/setup` et sélectionne le salon dispos.",
+        content: "Ce serveur n’est pas configuré. Lance `/setup` (admin) puis réessaie.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
-    if (!channel) return interaction.reply({ content: "Salon dispos introuvable.", flags: FLAGS_EPHEMERAL });
-
-    const title = interaction.options.getString("titre", true);
-    const note = interaction.options.getString("note") || null;
-    const imageMode = interaction.options.getString("images") || "none";
-
-    const one = interaction.options.getAttachment("image");
-    const multi = [
-      interaction.options.getAttachment("image1"),
-      interaction.options.getAttachment("image2"),
-      interaction.options.getAttachment("image3"),
-      interaction.options.getAttachment("image4"),
-      interaction.options.getAttachment("image5"),
-      interaction.options.getAttachment("image6"),
-      interaction.options.getAttachment("image7"),
-    ];
-
-    if (imageMode === "one" && !one) {
-      return interaction.reply({ content: "Mode **1 image** choisi, mais aucune image fournie.", flags: FLAGS_EPHEMERAL });
-    }
-    if (imageMode === "multi" && !multi.some(Boolean)) {
+    const channel = interaction.guild.channels.cache.get(guildCfg.disposChannelId);
+    if (!channel) {
       return interaction.reply({
-        content: "Mode **7 images** choisi, mais aucune image fournie (image1..image7).",
+        content: "Salon dispos introuvable. Refais `/setup` et sélectionne un salon valide.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    // ✅ rôle(s) “attendus” pour calcul Sans réponse
-    const scopeRoleIds = Array.isArray(cfg.disposScopeRoleIds) ? cfg.disposScopeRoleIds : [];
-    const expectedUserIds = await buildExpectedUserIds(interaction.guild, scopeRoleIds);
-
-    const rootId = `${Date.now()}-${interaction.user.id}`;
-
-    const session = {
-      rootId,
-      guildId: interaction.guildId,
-      channelId: disposChannelId,
-      title,
-      note,
-      createdBy: interaction.user.id,
-      createdAt: new Date().toISOString(),
-
-      // ✅ utilisé par le renderer
-      scopeRoleIds,
-      expectedUserIds, // peut être [] si aucun rôle configuré
-
-      days: DAYS.map((label, idx) => ({
-        index: idx,
-        label,
-        messageId: null,
-        imageUrl: null,
-        responses: {},
-      })),
-    };
-
-    // Création des 7 messages
-    for (let i = 0; i < 7; i++) {
-      let imageUrl = null;
-      if (imageMode === "one") imageUrl = one.url;
-      else if (imageMode === "multi" && multi[i]) imageUrl = multi[i].url;
-
-      session.days[i].imageUrl = imageUrl;
-
-      const embed = buildDayEmbed(session, i, cfg);
-      const msg = await channel.send({
-        ...buildPayload(embed, { imageUrl }),
-        components: [buttonsRow(rootId, i, false)],
-      });
-
-      session.days[i].messageId = msg.id;
-    }
-
-    createSession(interaction.guildId, session);
+    // Récupère les attachments
+    const weekLabel = interaction.options.getString("semaine", true);
+    const atts = ["image1", "image2", "image3", "image4"]
+      .map((k) => interaction.options.getAttachment(k))
+      .filter(Boolean)
+      .map((a) => ({ url: a.url, name: a.name }));
 
     await interaction.reply({
-      content:
-        `Dispos semaine créées dans <#${disposChannelId}> (Lundi → Dimanche).\n` +
-        (scopeRoleIds.length
-          ? `Base “Sans réponse” : ${scopeRoleIds.map((id) => `<@&${id}>`).join(", ")}`
-          : "Base “Sans réponse” : non définie (configure-la dans /setup)."),
+      content: `Création des dispos semaine: **${weekLabel}**…`,
       flags: FLAGS_EPHEMERAL,
     });
+
+    try {
+      const res = await renderDisposWeek({
+        client: interaction.client,
+        guild: interaction.guild,
+        channel,
+        guildCfg,
+        weekLabel,
+        attachments: atts,
+      });
+
+      await interaction.followUp({
+        content: `OK. Dispos créées dans ${channel} (weekId: \`${res.weekId}\`).`,
+        flags: FLAGS_EPHEMERAL,
+      });
+    } catch (err) {
+      await interaction.followUp({
+        content: `Erreur pendant la création des dispos. Vérifie les permissions du bot dans ${channel}.`,
+        flags: FLAGS_EPHEMERAL,
+      });
+      throw err;
+    }
   },
 };
