@@ -1,1 +1,18 @@
-
+{
+  "name": "xig-blaugrana-fc-staff-bot",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy:commands": "node deploy-commands.js",
+    "deploy:nuke": "node deploy-nuke.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5"
+  }
+}
