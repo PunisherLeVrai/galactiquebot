@@ -1,5 +1,5 @@
 // src/commands/admin/setup.js
-// Setup interactif (sans demander d'IDs à la main) : sélecteurs salons + rôles
+// Setup interactif : salons + rôles + rôles concernés par les dispos
 // CommonJS — discord.js v14
 
 const {
@@ -12,7 +12,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  ComponentType,
 } = require("discord.js");
 
 const { getGuildConfig, upsertGuildConfig } = require("../../core/configManager");
@@ -28,6 +27,10 @@ function fmtChannel(id) {
 }
 function fmtRole(id) {
   return id ? `<@&${id}>` : "—";
+}
+function fmtRoles(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return "—";
+  return ids.map((id) => `<@&${id}>`).join("\n");
 }
 
 function buildSummaryEmbed(guild, cfgDraft, cfgSaved) {
@@ -61,6 +64,11 @@ function buildSummaryEmbed(guild, cfgDraft, cfgSaved) {
         inline: true,
       },
       {
+        name: "Dispos — rôles concernés (brouillon)",
+        value: fmtRoles(cfgDraft.disposScopeRoleIds),
+        inline: true,
+      },
+      {
         name: "Actuel (enregistré)",
         value: [
           `• commandes: ${fmtChannel(cfgSaved.commandsChannelId)}`,
@@ -70,6 +78,7 @@ function buildSummaryEmbed(guild, cfgDraft, cfgSaved) {
           `• staff: ${fmtRole(cfgSaved.staffRoleId)}`,
           `• joueur: ${fmtRole(cfgSaved.playerRoleId)}`,
           `• essai: ${fmtRole(cfgSaved.trialRoleId)}`,
+          `• roles dispos: ${Array.isArray(cfgSaved.disposScopeRoleIds) ? cfgSaved.disposScopeRoleIds.map((id) => `<@&${id}>`).join(", ") : "—"}`,
         ].join("\n"),
         inline: false,
       }
@@ -86,14 +95,10 @@ module.exports = {
   async execute(interaction) {
     try {
       if (!interaction.inGuild()) {
-        return interaction.reply({
-          content: "Cette commande doit être utilisée dans un serveur.",
-          flags: FLAGS_EPHEMERAL,
-        });
+        return interaction.reply({ content: "Commande serveur uniquement.", flags: FLAGS_EPHEMERAL });
       }
 
-      const member = interaction.member;
-      if (!member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+      if (!interaction.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
         return interaction.reply({
           content: "Tu dois être **Administrateur** pour utiliser `/setup`.",
           flags: FLAGS_EPHEMERAL,
@@ -114,6 +119,9 @@ module.exports = {
         staffRoleId: cfgSaved.staffRoleId || null,
         playerRoleId: cfgSaved.playerRoleId || null,
         trialRoleId: cfgSaved.trialRoleId || null,
+
+        // ✅ nouveau
+        disposScopeRoleIds: Array.isArray(cfgSaved.disposScopeRoleIds) ? cfgSaved.disposScopeRoleIds : [],
       };
 
       const scope = `${guildId}:${interaction.user.id}`;
@@ -122,9 +130,14 @@ module.exports = {
         dispos: `setup:dispos:${scope}`,
         planning: `setup:planning:${scope}`,
         annonces: `setup:annonces:${scope}`,
+
         staff: `setup:staff:${scope}`,
         player: `setup:player:${scope}`,
         trial: `setup:trial:${scope}`,
+
+        // ✅ nouveau
+        scopeRoles: `setup:scopeRoles:${scope}`,
+
         save: `setup:save:${scope}`,
         cancel: `setup:cancel:${scope}`,
         reset: `setup:reset:${scope}`,
@@ -133,7 +146,7 @@ module.exports = {
       const rowCommands = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.commands)
-          .setPlaceholder("Salon commandes (où tu veux utiliser les commandes)")
+          .setPlaceholder("Salon commandes")
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
@@ -142,7 +155,7 @@ module.exports = {
       const rowDispos = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.dispos)
-          .setPlaceholder("Salon dispos (présences/absences)")
+          .setPlaceholder("Salon dispos")
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
@@ -151,7 +164,7 @@ module.exports = {
       const rowPlanning = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.planning)
-          .setPlaceholder("Salon planning (calendrier/programmation)")
+          .setPlaceholder("Salon planning")
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
@@ -160,22 +173,10 @@ module.exports = {
       const rowAnnonces = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.annonces)
-          .setPlaceholder("Salon annonces (news/communiqués)")
+          .setPlaceholder("Salon annonces")
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
-      );
-
-      const rowRoles1 = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.staff).setPlaceholder("Rôle Staff").setMinValues(0).setMaxValues(1)
-      );
-
-      const rowRoles2 = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.player).setPlaceholder("Rôle Joueur").setMinValues(0).setMaxValues(1)
-      );
-
-      const rowRoles3 = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.trial).setPlaceholder("Rôle Essai").setMinValues(0).setMaxValues(1)
       );
 
       const rowButtons = new ActionRowBuilder().addComponents(
@@ -184,23 +185,41 @@ module.exports = {
         new ButtonBuilder().setCustomId(CID.cancel).setLabel("Annuler").setStyle(ButtonStyle.Danger)
       );
 
-      // 1/2 message (salons + boutons)
+      // 1/2 : salons + boutons
       await interaction.reply({
         embeds: [buildSummaryEmbed(guild, cfgDraft, cfgSaved)],
         components: [rowCommands, rowDispos, rowPlanning, rowAnnonces, rowButtons],
         flags: FLAGS_EPHEMERAL,
       });
 
-      // 2/2 message (rôles)
+      // 2/2 : rôles
+      const rowStaff = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder().setCustomId(CID.staff).setPlaceholder("Rôle Staff").setMinValues(0).setMaxValues(1)
+      );
+      const rowPlayer = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder().setCustomId(CID.player).setPlaceholder("Rôle Joueur").setMinValues(0).setMaxValues(1)
+      );
+      const rowTrial = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder().setCustomId(CID.trial).setPlaceholder("Rôle Essai").setMinValues(0).setMaxValues(1)
+      );
+
+      // ✅ nouveau : rôles concernés par les dispos (multi)
+      const rowScopeRoles = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.scopeRoles)
+          .setPlaceholder("Dispos — rôles concernés (1 à 25)")
+          .setMinValues(0)
+          .setMaxValues(25)
+      );
+
       const rolesMsg = await interaction.followUp({
         content: "Sélection des rôles :",
-        components: [rowRoles1, rowRoles2, rowRoles3],
+        components: [rowStaff, rowPlayer, rowTrial, rowScopeRoles],
         flags: FLAGS_EPHEMERAL,
       });
 
       const mainMsg = await interaction.fetchReply();
-
-      const isOwnerScope = (customId) => customId.endsWith(scope);
+      const isOwnerScope = (customId) => typeof customId === "string" && customId.endsWith(scope);
 
       const refreshMain = async () => {
         await interaction.editReply({
@@ -209,7 +228,6 @@ module.exports = {
         });
       };
 
-      // Collector principal (sur message 1)
       const collectorMain = mainMsg.createMessageComponentCollector({
         time: 10 * 60 * 1000,
       });
@@ -244,6 +262,8 @@ module.exports = {
               cfgDraft.playerRoleId = null;
               cfgDraft.trialRoleId = null;
 
+              cfgDraft.disposScopeRoleIds = [];
+
               await i.deferUpdate();
               await refreshMain();
               return;
@@ -251,6 +271,9 @@ module.exports = {
 
             if (i.customId === CID.cancel) {
               collectorMain.stop("cancel");
+              try {
+                await rolesMsg.edit({ content: "Setup annulé.", components: [] });
+              } catch {}
               return i.update({ content: "Setup annulé.", embeds: [], components: [] });
             }
 
@@ -267,6 +290,9 @@ module.exports = {
                 staffRoleId: cfgDraft.staffRoleId,
                 playerRoleId: cfgDraft.playerRoleId,
                 trialRoleId: cfgDraft.trialRoleId,
+
+                // ✅ nouveau
+                disposScopeRoleIds: cfgDraft.disposScopeRoleIds,
 
                 setupBy: interaction.user.id,
                 setupAt: new Date().toISOString(),
@@ -299,7 +325,6 @@ module.exports = {
         }
       });
 
-      // Collector roles (sur message 2)
       const collectorRoles = rolesMsg.createMessageComponentCollector({
         time: 10 * 60 * 1000,
       });
@@ -310,16 +335,22 @@ module.exports = {
             return i.reply({ content: "Ce setup ne t’appartient pas.", flags: FLAGS_EPHEMERAL });
           }
 
-          if (!i.isRoleSelectMenu()) return;
+          if (i.isRoleSelectMenu()) {
+            // 1 rôle
+            const one = i.values?.[0] || null;
 
-          const selected = i.values?.[0] || null;
+            if (i.customId === CID.staff) cfgDraft.staffRoleId = one;
+            if (i.customId === CID.player) cfgDraft.playerRoleId = one;
+            if (i.customId === CID.trial) cfgDraft.trialRoleId = one;
 
-          if (i.customId === CID.staff) cfgDraft.staffRoleId = selected;
-          if (i.customId === CID.player) cfgDraft.playerRoleId = selected;
-          if (i.customId === CID.trial) cfgDraft.trialRoleId = selected;
+            // ✅ multi rôles dispos
+            if (i.customId === CID.scopeRoles) {
+              cfgDraft.disposScopeRoleIds = Array.isArray(i.values) ? i.values : [];
+            }
 
-          await i.deferUpdate();
-          await refreshMain();
+            await i.deferUpdate();
+            await refreshMain();
+          }
         } catch (err) {
           warn("Erreur collector setup (roles):", err);
           try {
@@ -330,15 +361,11 @@ module.exports = {
         }
       });
 
-      const stopAll = async (reason) => {
-        collectorRoles.stop(reason);
+      collectorMain.on("end", async (_c, reason) => {
         try {
+          collectorRoles.stop(reason);
           await rolesMsg.edit({ components: [] });
         } catch {}
-      };
-
-      collectorMain.on("end", async (_collected, reason) => {
-        await stopAll(reason);
 
         if (reason === "time") {
           try {
