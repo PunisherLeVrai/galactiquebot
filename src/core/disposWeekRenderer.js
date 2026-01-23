@@ -1,70 +1,109 @@
 // src/core/disposWeekRenderer.js
-const { EmbedBuilder } = require("discord.js");
+// Rendu des embeds Dispos (jour) + Rapport (staff)
+// CommonJS — discord.js v14
 
-function countVotes(session, dayKey) {
-  const v = session.votes?.[dayKey] || { present: [], absent: [] };
-  return {
-    present: v.present?.length || 0,
-    absent: v.absent?.length || 0,
-  };
+const { EmbedBuilder } = require("discord.js");
+const { getCounts } = require("./disposWeekStore");
+
+function safeIntColor(value, fallback = null) {
+  const n = Number(value);
+  return Number.isInteger(n) ? n : fallback;
 }
 
-function buildDayEmbed({ guildName, session, day, brandTitle }) {
-  const { present, absent } = countVotes(session, day.key);
+function chunk(arr, size = 40) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Embed d'un jour de dispo
+ */
+function buildDayEmbed({ guildName, session, day, brandTitle, brandColor }) {
+  const counts = getCounts(session, day.key);
 
   const e = new EmbedBuilder()
     .setTitle(brandTitle || "Disponibilités")
-    .setDescription(`**Jour : ${day.label}**\nClique sur un bouton pour indiquer ta dispo.`)
+    .setDescription(
+      [
+        `**Jour : ${day.label}**`,
+        session?.meta?.note ? `\n${session.meta.note}` : "",
+        "",
+        "Clique sur un bouton pour indiquer ta disponibilité.",
+      ].join("\n")
+    )
     .addFields(
-      { name: "✅ Présents", value: `${present}`, inline: true },
-      { name: "❌ Absents", value: `${absent}`, inline: true },
+      { name: "✅ Présents", value: `${counts.present}`, inline: true },
+      { name: "❌ Absents", value: `${counts.absent}`, inline: true },
       { name: "Statut", value: session.closed ? "🔒 Fermé" : "🟢 Ouvert", inline: true }
     )
     .setFooter({ text: `${guildName} • Session ${session.sessionId}` });
 
-  // Image si mode = image/both
+  const color = safeIntColor(brandColor, null);
+  if (color !== null) e.setColor(color);
+
+  // Mode image / both -> image
   if ((day.mode === "image" || day.mode === "both") && day.imageUrl) {
     e.setImage(day.imageUrl);
   }
 
+  // Mode "image only" : on peut rendre l'embed plus léger (optionnel)
+  // Ici on garde les compteurs, car tu veux voir présent/absent.
   return e;
 }
 
-function buildStaffReportEmbed({ guildName, session, day, playersNonRespondingMentions }) {
-  const v = session.votes?.[day.key] || { present: [], absent: [] };
+/**
+ * Embed de rapport staff : tout le monde présent/absent + non répondants joueurs
+ * inputs:
+ * - presentIds/absentIds : arrays userId
+ * - nonRespondingPlayerIds : arrays userId (rôle joueur uniquement)
+ */
+function buildStaffReportEmbed({
+  guildName,
+  session,
+  day,
+  presentIds,
+  absentIds,
+  nonRespondingPlayerIds,
+  brandColor,
+}) {
+  const presentMentions = (presentIds || []).map((id) => `<@${id}>`);
+  const absentMentions = (absentIds || []).map((id) => `<@${id}>`);
+  const nonMentions = (nonRespondingPlayerIds || []).map((id) => `<@${id}>`);
 
-  const presentMentions = (v.present || []).map((id) => `<@${id}>`);
-  const absentMentions = (v.absent || []).map((id) => `<@${id}>`);
-
-  const chunk = (arr, max = 50) => {
-    const out = [];
-    for (let i = 0; i < arr.length; i += max) out.push(arr.slice(i, i + max));
-    return out;
-  };
+  const presentBlocks = presentMentions.length ? chunk(presentMentions, 35).map((c) => c.join(" ")).join("\n") : "—";
+  const absentBlocks = absentMentions.length ? chunk(absentMentions, 35).map((c) => c.join(" ")).join("\n") : "—";
+  const nonBlocks = nonMentions.length ? chunk(nonMentions, 35).map((c) => c.join(" ")).join("\n") : "—";
 
   const e = new EmbedBuilder()
     .setTitle("Rapport — Disponibilités")
-    .setDescription(`**Jour : ${day.label}**\nSession: \`${session.sessionId}\``)
+    .setDescription(
+      [
+        `**Jour : ${day.label}**`,
+        `Session : \`${session.sessionId}\``,
+      ].join("\n")
+    )
     .addFields(
       {
         name: `✅ Présents (tout le monde) — ${presentMentions.length}`,
-        value: presentMentions.length ? chunk(presentMentions, 40).map((c) => c.join(" ")).join("\n") : "—",
+        value: presentBlocks,
         inline: false,
       },
       {
         name: `❌ Absents (tout le monde) — ${absentMentions.length}`,
-        value: absentMentions.length ? chunk(absentMentions, 40).map((c) => c.join(" ")).join("\n") : "—",
+        value: absentBlocks,
         inline: false,
       },
       {
-        name: `⏳ Non répondants (rôle Joueur) — ${playersNonRespondingMentions.length}`,
-        value: playersNonRespondingMentions.length
-          ? chunk(playersNonRespondingMentions, 40).map((c) => c.join(" ")).join("\n")
-          : "—",
+        name: `⏳ Non répondants (rôle Joueur) — ${nonMentions.length}`,
+        value: nonBlocks,
         inline: false,
       }
     )
     .setFooter({ text: `${guildName}` });
+
+  const color = safeIntColor(brandColor, null);
+  if (color !== null) e.setColor(color);
 
   return e;
 }
