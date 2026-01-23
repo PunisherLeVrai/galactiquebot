@@ -5,5 +5,5 @@ module.exports = {
   once: true,
   execute(client) {
     log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
-  }
+  },
 };
