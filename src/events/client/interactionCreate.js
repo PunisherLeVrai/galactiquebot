@@ -1,24 +1,24 @@
-const { warn } = require("../../core/logger");
+const { Events } = require("discord.js");
+const { error } = require("../../core/logger");
 
 module.exports = {
-  name: "interactionCreate",
+  name: Events.InteractionCreate,
   once: false,
   async execute(interaction, client) {
+    if (!interaction.isChatInputCommand()) return;
+
+    const cmd = client.commands.get(interaction.commandName);
+    if (!cmd) return;
+
     try {
-      if (!interaction.isChatInputCommand()) return;
-
-      const cmd = client.commands.get(interaction.commandName);
-      if (!cmd) return;
-
       await cmd.execute(interaction, client);
     } catch (e) {
-      warn("Erreur interactionCreate:", e);
-
-      // Réponse safe
-      if (interaction.deferred || interaction.replied) {
-        await interaction.followUp({ content: "Une erreur est survenue.", ephemeral: true }).catch(() => {});
+      error("Erreur commande:", interaction.commandName, e);
+      const payload = { content: "Erreur interne.", ephemeral: true };
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(payload).catch(() => {});
       } else {
-        await interaction.reply({ content: "Une erreur est survenue.", ephemeral: true }).catch(() => {});
+        await interaction.reply(payload).catch(() => {});
       }
     }
   },
