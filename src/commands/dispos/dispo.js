@@ -1,77 +1,45 @@
-const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { requireStaff, requireGuildConfig } = require("../../core/guildConfig");
-const { createSession } = require("../../core/disposStore");
-const { buildButtons, buildEmbed } = require("../../core/disposButtons");
+const { SlashCommandBuilder } = require("discord.js");
+const { ensureChannel } = require("../../core/guildConfig");
 
 const FLAGS_EPHEMERAL = 64;
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("dispo")
-    .setDescription("Crée une session de disponibilités (boutons).")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((o) =>
-      o.setName("titre").setDescription("Titre de la session (ex: Match Lundi 21h)").setRequired(true)
-    )
-    .addStringOption((o) =>
-      o.setName("note").setDescription("Texte optionnel (infos, deadline, etc.)").setRequired(false)
-    ),
+    .setDescription("Indiquer ta disponibilité"),
 
   async execute(interaction) {
-    const cfg = await requireGuildConfig(interaction);
-    if (!cfg) return;
+    try {
+      // 🔒 vérifie config + bon salon
+      ensureChannel(interaction, "commandsChannelId");
 
-    // Option : restreindre au rôle staff configuré
-    const staffOk = await requireStaff(interaction);
-    if (!staffOk) return;
+      await interaction.reply({
+        content: "🟢 Système de disponibilités – à implémenter",
+        flags: FLAGS_EPHEMERAL,
+      });
+    } catch (err) {
+      if (err.code === "SERVER_NOT_CONFIGURED") {
+        return interaction.reply({
+          content:
+            "Ce serveur n’est pas encore configuré.\n" +
+            "Lance `/setup` (admin) puis réessaie.\n" +
+            "Astuce : utilise `/export_config` pour sauvegarder `servers.json`.",
+          flags: FLAGS_EPHEMERAL,
+        });
+      }
 
-    const title = interaction.options.getString("titre", true);
-    const note = interaction.options.getString("note", false);
+      if (err.code === "WRONG_CHANNEL") {
+        return interaction.reply({
+          content: `Cette commande doit être utilisée dans <#${err.expectedChannelId}>.`,
+          flags: FLAGS_EPHEMERAL,
+        });
+      }
 
-    const disposChannelId = cfg.channels?.dispos;
-    if (!disposChannelId) {
+      console.error("[DISPO_ERROR]", err);
       return interaction.reply({
-        content: "Aucun salon **Dispos** configuré. Fais `/setup` et sélectionne le salon dispos.",
+        content: "Erreur lors de l’exécution de la commande.",
         flags: FLAGS_EPHEMERAL,
       });
     }
-
-    const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
-    if (!channel) {
-      return interaction.reply({
-        content: "Salon dispos introuvable. Vérifie la config `/setup`.",
-        flags: FLAGS_EPHEMERAL,
-      });
-    }
-
-    // Post the session message
-    const tempSession = {
-      messageId: "pending",
-      channelId: disposChannelId,
-      title,
-      note: note || null,
-      createdBy: interaction.user.id,
-      createdAt: new Date().toISOString(),
-      closed: false,
-      responses: {},
-    };
-
-    const msg = await channel.send({
-      embeds: [buildEmbed(tempSession, cfg)],
-      components: [buildButtons(false)],
-    });
-
-    // Save with real message id
-    const session = {
-      ...tempSession,
-      messageId: msg.id,
-    };
-
-    createSession(interaction.guildId, session);
-
-    await interaction.reply({
-      content: `Session dispos créée dans <#${disposChannelId}>.\nMessage: https://discord.com/channels/${interaction.guildId}/${disposChannelId}/${msg.id}`,
-      flags: FLAGS_EPHEMERAL,
-    });
   },
 };
