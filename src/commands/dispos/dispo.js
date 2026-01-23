@@ -1,4 +1,7 @@
 // src/commands/dispos/dispo.js
+// /dispo -> crée 1 à 7 messages (jours au choix), mode embed/image/both, images upload
+// CommonJS — discord.js v14
+
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -6,7 +9,7 @@ const {
 } = require("discord.js");
 
 const { getGuildConfig, isStaff } = require("../../core/guildConfig");
-const { createSession, updateSessionDayMessage } = require("../../core/disposWeekStore");
+const { createSession, updateSessionDay, getSession } = require("../../core/disposWeekStore");
 const { buildDayEmbed } = require("../../core/disposWeekRenderer");
 const { buildRows } = require("../../core/disposWeekButtons");
 
@@ -23,16 +26,27 @@ const DAYS = [
 ];
 
 function parseDays(input) {
-  if (!input || input === "all") return DAYS;
-  const parts = input.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (!input) return null;
+  const s = input.trim().toLowerCase();
+  if (s === "all") return DAYS;
+
+  const parts = s.split(",").map((x) => x.trim()).filter(Boolean);
   const selected = DAYS.filter((d) => parts.includes(d.key));
   return selected.length ? selected : null;
+}
+
+function pickImageUrlForDay(imageUrls, dayIndex) {
+  if (!imageUrls || imageUrls.length === 0) return null;
+  // Si 1 image => répéter sur tous les jours
+  if (imageUrls.length === 1) return imageUrls[0];
+  // Sinon 1 image par jour dans l'ordre fourni, fallback sur la première
+  return imageUrls[dayIndex] || imageUrls[0];
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("dispo")
-    .setDescription("Créer les messages de disponibilités (1 à 7 jours).")
+    .setDescription("Créer des disponibilités (1 à 7 jours).")
     .addStringOption((opt) =>
       opt
         .setName("jours")
@@ -50,7 +64,7 @@ module.exports = {
         )
         .setRequired(true)
     )
-    // 7 attachments max (1 par option)
+    // 0..7 images upload depuis tel/PC
     .addAttachmentOption((o) => o.setName("img1").setDescription("Image 1").setRequired(false))
     .addAttachmentOption((o) => o.setName("img2").setDescription("Image 2").setRequired(false))
     .addAttachmentOption((o) => o.setName("img3").setDescription("Image 3").setRequired(false))
@@ -58,77 +72,82 @@ module.exports = {
     .addAttachmentOption((o) => o.setName("img5").setDescription("Image 5").setRequired(false))
     .addAttachmentOption((o) => o.setName("img6").setDescription("Image 6").setRequired(false))
     .addAttachmentOption((o) => o.setName("img7").setDescription("Image 7").setRequired(false))
-    // staff-only conseillé (sinon n'importe qui crée 7 messages)
+    // staff only (conseillé)
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   async execute(interaction) {
-    const cfg = getGuildConfig(interaction.guildId);
-    if (!cfg) {
-      return interaction.reply({
-        content: "Ce serveur n’est pas configuré. Lance `/setup` d’abord.",
-        flags: FLAGS_EPHEMERAL,
-      });
+    if (!interaction.inGuild()) {
+      return interaction.reply({ content: "Commande utilisable uniquement dans un serveur.", flags: FLAGS_EPHEMERAL });
     }
 
-    // Restriction : staff (ou ManageGuild)
-    if (!isStaff(interaction.member, cfg) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    const cfg = getGuildConfig(interaction.guildId);
+    if (!cfg) {
+      return interaction.reply({ content: "Serveur non configuré. Lance `/setup`.", flags: FLAGS_EPHEMERAL });
+    }
+
+    // Staff only (ou ManageGuild)
+    const staffOk =
+      isStaff(interaction.member, cfg) ||
+      interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+      interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+
+    if (!staffOk) {
       return interaction.reply({ content: "Commande réservée au staff.", flags: FLAGS_EPHEMERAL });
     }
 
-    const disposChannelId = cfg.disposChannelId;
-    if (!disposChannelId) {
+    if (!cfg.disposChannelId) {
       return interaction.reply({
-        content: "Salon dispos non configuré. Fais `/setup` et définis le salon dispos.",
+        content: "Salon Dispos non configuré. Fais `/setup` et sélectionne un salon Dispos.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    const channel = await interaction.client.channels.fetch(disposChannelId).catch(() => null);
+    const channel = await interaction.client.channels.fetch(cfg.disposChannelId).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) {
       return interaction.reply({
-        content: "Le salon dispos configuré est invalide (doit être un salon texte).",
+        content: "Salon Dispos invalide (doit être un salon texte). Vérifie `/setup`.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    const joursInput = interaction.options.getString("jours", true);
+    const daysInput = interaction.options.getString("jours", true);
     const mode = interaction.options.getString("mode", true);
 
-    const daysSelected = parseDays(joursInput);
-    if (!daysSelected) {
+    const selectedDays = parseDays(daysInput);
+    if (!selectedDays) {
       return interaction.reply({
-        content: "Format jours invalide. Exemple: `lun,mar,mer` ou `all`.",
+        content: "Paramètre `jours` invalide. Exemple: `lun,mar,mer` ou `all`.",
         flags: FLAGS_EPHEMERAL,
       });
     }
 
-    // Récup images uploadées
-    const imgs = [];
+    // Images uploadées
+    const imageUrls = [];
     for (let i = 1; i <= 7; i++) {
       const att = interaction.options.getAttachment(`img${i}`);
-      if (att?.url) imgs.push(att.url);
+      if (att?.url) imageUrls.push(att.url);
     }
 
-    // Mapping images -> jour (si 1 image => répétée)
-    const days = daysSelected.map((d, idx) => ({
+    // Construire days pour la session
+    const days = selectedDays.map((d, idx) => ({
       key: d.key,
       label: d.label,
       mode,
-      imageUrl: imgs.length ? (imgs[idx] || imgs[0]) : null,
+      imageUrl: pickImageUrlForDay(imageUrls, idx),
     }));
 
-    // création session
-    const session = createSession(interaction.guildId, interaction.user.id, disposChannelId, days, {
+    // Créer session (store)
+    const session = createSession(interaction.guildId, interaction.user.id, channel.id, days, {
       title: "Disponibilités",
     });
 
     await interaction.reply({
-      content: `Création des dispos : ${days.length} jour(s) dans ${channel}.`,
+      content: `Création des dispos : **${days.length}** jour(s) dans ${channel} (session \`${session.sessionId}\`).`,
       flags: FLAGS_EPHEMERAL,
     });
 
-    // Envoi messages
-    for (const day of session.days) {
+    // Envoyer les messages
+    for (const [idx, day] of session.days.entries()) {
       const embed = buildDayEmbed({
         guildName: interaction.guild.name,
         session,
@@ -148,10 +167,19 @@ module.exports = {
         components: rows,
       });
 
-      updateSessionDayMessage(interaction.guildId, session.sessionId, day.key, {
-        messageId: msg.id,
-        // si tu veux récupérer l’URL réelle d’une image postée en attachment plus tard, on peut l’ajouter ici
-      });
+      updateSessionDay(interaction.guildId, session.sessionId, day.key, { messageId: msg.id });
+
+      // Optionnel : légère pause pour éviter rate limit si 7 messages d'un coup
+      if (idx < session.days.length - 1) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
+
+    // Recharger la session (avec messageIds)
+    const fresh = getSession(interaction.guildId, session.sessionId);
+    await interaction.followUp({
+      content: `✅ Dispos créées. Session: \`${fresh.sessionId}\` — Messages: **${fresh.days.filter(d => d.messageId).length}**.`,
+      flags: FLAGS_EPHEMERAL,
+    });
   },
 };
