@@ -1,76 +1,113 @@
 // src/core/disposWeekRenderer.js
-const fs = require("fs");
-const path = require("path");
-const { EmbedBuilder, AttachmentBuilder } = require("discord.js");
+// Rend une semaine de dispos (7 messages max) avec boutons + images en attachments.
+//
+// Stratégie images:
+// - Tu passes des attachments via la commande (/dispo images...)
+// - Le renderer re-uploade ces fichiers sur CHAQUE message du jour (Discord ne permet pas "réutiliser" un upload sans re-jointe)
+// - Si tu envoies 0 image => embed seul
 
-function buildCounts(dayResponses) {
-  const out = { present: 0, absent: 0 };
-  for (const v of Object.values(dayResponses || {})) {
-    if (v === "present") out.present++;
-    else if (v === "absent") out.absent++;
-  }
-  return out;
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require("discord.js");
+
+const { createWeek } = require("./disposWeekStore");
+
+const DAY_LABELS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+
+function weekIdFromNow() {
+  // identifiant stable, suffisant
+  return `${Date.now()}`;
 }
 
-function buildNoResponseCount(expectedUserIds, dayResponses) {
-  if (!Array.isArray(expectedUserIds) || expectedUserIds.length === 0) return null;
-
-  const responded = new Set(Object.keys(dayResponses || {}));
-  let no = 0;
-  for (const id of expectedUserIds) {
-    if (!responded.has(id)) no++;
-  }
-  return no;
+function buildButtonsRow(guildId, weekId, dayIndex) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`dispo:week:${guildId}:${weekId}:${dayIndex}:present`)
+      .setLabel("Présent")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`dispo:week:${guildId}:${weekId}:${dayIndex}:absent`)
+      .setLabel("Absent")
+      .setStyle(ButtonStyle.Danger)
+  );
 }
 
-function buildDayEmbed(session, dayIndex, cfg) {
-  const day = session.days[dayIndex];
-  const c = buildCounts(day.responses);
-
-  const embed = new EmbedBuilder()
-    .setTitle(session.title || "DISPONIBILITÉS")
-    .setDescription([`**${day.label}**`, session.note ? session.note : null].filter(Boolean).join("\n"))
-    .addFields(
-      { name: "✅ Présent", value: String(c.present), inline: true },
-      { name: "❌ Absent", value: String(c.absent), inline: true },
-      { name: "📊 Total réponses", value: String(c.present + c.absent), inline: true }
+function buildDayEmbed({ weekLabel, dayIndex, guildName, attachmentsCount }) {
+  const { EmbedBuilder } = require("discord.js");
+  return new EmbedBuilder()
+    .setTitle(`Disponibilités — ${DAY_LABELS[dayIndex]}`)
+    .setDescription(
+      [
+        `Semaine : **${weekLabel}**`,
+        guildName ? `Serveur : **${guildName}**` : null,
+        "",
+        "Clique sur un bouton pour indiquer ta disponibilité.",
+        attachmentsCount > 0 ? `Images : **${attachmentsCount}** pièce(s) jointe(s).` : null,
+      ].filter(Boolean).join("\n")
     )
-    .setFooter({ text: `Semaine • ${day.label}` });
-
-  // ✅ Sans réponse basé sur rôles scope (capturé à la création)
-  const noResp = buildNoResponseCount(session.expectedUserIds, day.responses);
-  if (noResp !== null) {
-    embed.addFields({ name: "🕳️ Sans réponse", value: String(noResp), inline: true });
-  }
-
-  if (cfg?.colors?.primary != null) {
-    const v = Number(cfg.colors.primary);
-    if (!Number.isNaN(v)) embed.setColor(v);
-  }
-
-  return embed;
+    .addFields(
+      { name: "✅ Présents", value: "**0**", inline: true },
+      { name: "❌ Absents", value: "**0**", inline: true }
+    )
+    .setFooter({ text: "XIG — Dispos semaine" });
 }
 
-function buildPayload(embed, { imageUrl = null, localImagePath = null } = {}) {
-  if (imageUrl) {
-    embed.setImage(imageUrl);
-    return { embeds: [embed] };
+/**
+ * attachments: Array<{ url, name }>
+ * - fournis depuis les options attachments de la commande
+ */
+async function renderDisposWeek({ client, guild, channel, guildCfg, weekLabel, attachments }) {
+  const guildId = guild.id;
+  const weekId = weekIdFromNow();
+
+  const safeAttachments = (attachments || [])
+    .filter((a) => a && a.url)
+    .map((a, idx) => ({
+      attachment: a.url,
+      name: a.name || `image_${idx + 1}.png`,
+    }));
+
+  const messageIds = [];
+
+  // Ping optionnel (si configuré)
+  const ping = (guildCfg.disposPingRoleIds || []).map((id) => `<@&${id}>`).join(" ");
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
+    const embed = buildDayEmbed({
+      weekLabel,
+      dayIndex,
+      guildName: guildCfg.guildName || guild.name,
+      attachmentsCount: safeAttachments.length,
+    });
+
+    const row = buildButtonsRow(guildId, weekId, dayIndex);
+
+    const content = dayIndex === 0 && ping ? ping : null;
+
+    const msg = await channel.send({
+      content,
+      embeds: [embed],
+      components: [row],
+      files: safeAttachments.length ? safeAttachments : undefined,
+    });
+
+    messageIds.push(msg.id);
   }
 
-  if (localImagePath) {
-    const abs = path.isAbsolute(localImagePath) ? localImagePath : path.join(process.cwd(), localImagePath);
-    if (fs.existsSync(abs)) {
-      const fileName = path.basename(abs);
-      const file = new AttachmentBuilder(abs, { name: fileName });
-      embed.setImage(`attachment://${fileName}`);
-      return { embeds: [embed], files: [file] };
-    }
-  }
+  // persistance
+  createWeek(guildId, weekId, {
+    weekLabel,
+    guildName: guildCfg.guildName || guild.name,
+    channelId: channel.id,
+    messageIds, // index 0..6
+    attachmentsCount: safeAttachments.length,
+  });
 
-  return { embeds: [embed] };
+  return { weekId, messageIds };
 }
 
 module.exports = {
-  buildDayEmbed,
-  buildPayload,
+  renderDisposWeek,
 };
