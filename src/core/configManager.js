@@ -1,3 +1,4 @@
+// src/core/configManager.js
 const fs = require("fs");
 const path = require("path");
 
@@ -14,33 +15,47 @@ function ensureConfigFile() {
 
 function readAll() {
   ensureConfigFile();
+
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+
+    // Hardening: structure minimale garantie
+    if (!parsed || typeof parsed !== "object") return { version: 1, guilds: {} };
+    if (!parsed.guilds || typeof parsed.guilds !== "object") parsed.guilds = {};
+    if (!parsed.version) parsed.version = 1;
+
+    return parsed;
   } catch {
-    // fallback safe
     return { version: 1, guilds: {} };
   }
 }
 
 function writeAll(data) {
   ensureConfigFile();
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), "utf8");
+
+  const safe = data && typeof data === "object" ? data : { version: 1, guilds: {} };
+  if (!safe.guilds || typeof safe.guilds !== "object") safe.guilds = {};
+  if (!safe.version) safe.version = 1;
+
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(safe, null, 2), "utf8");
 }
 
+// ✅ IMPORTANT: renvoie TOUJOURS un objet (jamais null)
 function getGuildConfig(guildId) {
   const data = readAll();
-  if (!data.guilds[guildId]) return null;
-  return data.guilds[guildId];
+  return data.guilds[guildId] || {};
 }
 
 function upsertGuildConfig(guildId, patch) {
   const data = readAll();
-  if (!data.guilds[guildId]) data.guilds[guildId] = {};
+  if (!data.guilds[guildId] || typeof data.guilds[guildId] !== "object") {
+    data.guilds[guildId] = {};
+  }
 
   data.guilds[guildId] = {
     ...data.guilds[guildId],
-    ...patch,
+    ...(patch && typeof patch === "object" ? patch : {}),
     updatedAt: new Date().toISOString(),
   };
 
@@ -56,5 +71,5 @@ module.exports = {
   getGuildConfig,
   upsertGuildConfig,
   exportAll,
-  CONFIG_PATH
+  CONFIG_PATH,
 };
