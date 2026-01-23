@@ -1,3 +1,6 @@
+// src/core/logger.js
+// Logger simple
+
 function ts() {
   return new Date().toISOString();
 }
@@ -10,8 +13,4 @@ function warn(...args) {
   console.warn(`[${ts()}]`, ...args);
 }
 
-function error(...args) {
-  console.error(`[${ts()}]`, ...args);
-}
-
-module.exports = { log, warn, error };
+module.exports = { log, warn };
