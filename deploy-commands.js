@@ -1,48 +1,40 @@
 require("dotenv").config();
-
 const fs = require("fs");
 const path = require("path");
 const { REST, Routes } = require("discord.js");
 
-function walkJsFiles(dir, cb) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walkJsFiles(full, cb);
-    else if (entry.isFile() && entry.name.endsWith(".js")) cb(full);
-  }
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+
+if (!TOKEN || !CLIENT_ID) {
+  console.error("TOKEN et CLIENT_ID sont requis.");
+  process.exit(1);
 }
 
 function collectCommands() {
-  const base = path.join(__dirname, "src", "commands");
-  if (!fs.existsSync(base)) throw new Error(`Dossier introuvable: ${base}`);
-
   const commands = [];
-  walkJsFiles(base, (file) => {
-    const cmd = require(file);
-    if (cmd?.data?.toJSON) commands.push(cmd.data.toJSON());
-  });
+  const commandsPath = path.join(process.cwd(), "src", "commands");
 
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".js")) {
+        const cmd = require(full);
+        if (cmd?.data?.toJSON) commands.push(cmd.data.toJSON());
+      }
+    }
+  };
+
+  walk(commandsPath);
   return commands;
 }
 
-async function main() {
-  const token = process.env.TOKEN;
-  const clientId = process.env.CLIENT_ID;
+(async () => {
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+  const commands = collectCommands();
 
-  if (!token || !clientId) {
-    console.error("TOKEN ou CLIENT_ID manquant.");
-    process.exit(1);
-  }
-
-  const rest = new REST({ version: "10" }).setToken(token);
-  const body = collectCommands();
-
-  console.log(`Déploiement des commandes globales (${body.length})...`);
-  await rest.put(Routes.applicationCommands(clientId), { body });
+  console.log(`Déploiement des commandes globales (${commands.length})...`);
+  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
   console.log("Déploiement terminé.");
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+})();
