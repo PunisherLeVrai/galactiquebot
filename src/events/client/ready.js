@@ -1,26 +1,48 @@
 // src/events/client/ready.js
 // Démarrage central des automations (Dispos + Pseudos)
+// ✅ Safe: try/catch + anti double-start
 // CommonJS
 
-const { log } = require("../../core/logger");
+const { log, warn } = require("../../core/logger");
 
 const { startAutomations: startDisposAutomations } = require("../../core/disposAutomation");
 const { startPseudoSync } = require("../../core/pseudoSync");
 const { startPseudoReminders } = require("../../core/pseudoAutomation");
 
+let started = false;
+
 module.exports = {
   name: "ready",
   once: true,
   execute(client) {
-    log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
+    if (started) return;
+    started = true;
 
-    // ✅ Dispos (rapport/rappel/fermeture selon ta config)
-    startDisposAutomations(client);
+    try {
+      log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
 
-    // ✅ Pseudos : sync 1 fois par heure (silencieux)
-    startPseudoSync(client);
+      // ✅ Dispos (rapport/rappel/fermeture selon ta config)
+      try {
+        startDisposAutomations(client);
+      } catch (e) {
+        warn("[DISPOS_AUTOMATIONS_START_ERROR]", e);
+      }
 
-    // ✅ Pseudos : 3 rappels / 24h (sans mention) — activable via config
-    startPseudoReminders(client);
+      // ✅ Pseudos : sync 1 fois par heure (silencieux)
+      try {
+        startPseudoSync(client);
+      } catch (e) {
+        warn("[PSEUDO_SYNC_START_ERROR]", e);
+      }
+
+      // ✅ Pseudos : 3 rappels / 24h (sans mention) — activable via config
+      try {
+        startPseudoReminders(client);
+      } catch (e) {
+        warn("[PSEUDO_REMINDERS_START_ERROR]", e);
+      }
+    } catch (e) {
+      warn("[READY_FATAL_ERROR]", e);
+    }
   },
 };
