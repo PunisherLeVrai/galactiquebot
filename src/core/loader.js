@@ -1,82 +1,50 @@
 // src/core/loader.js
-// Chargeur commandes + events (récursif)
-// CommonJS — discord.js v14
-
 const fs = require("fs");
 const path = require("path");
 const { log, warn } = require("./logger");
 
-function walkJsFiles(dir) {
-  const out = [];
-  if (!fs.existsSync(dir)) return out;
-
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
+function walk(dir, onFile) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...walkJsFiles(full));
-    } else if (entry.isFile() && entry.name.endsWith(".js")) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-function safeRequire(modulePath) {
-  try {
-    // éviter cache en dev si besoin (optionnel)
-    // delete require.cache[require.resolve(modulePath)];
-    return require(modulePath);
-  } catch (e) {
-    warn("Require failed:", modulePath, e?.message || e);
-    return null;
+    if (entry.isDirectory()) walk(full, onFile);
+    else if (entry.isFile() && entry.name.endsWith(".js")) onFile(full);
   }
 }
 
 function loadCommands(client) {
-  const commandsDir = path.join(__dirname, "..", "commands");
-  const files = walkJsFiles(commandsDir);
+  const commandsPath = path.join(__dirname, "..", "commands");
+  if (!fs.existsSync(commandsPath)) return;
 
-  let ok = 0;
-  let skipped = 0;
+  walk(commandsPath, (full) => {
+    const cmd = require(full);
 
-  for (const file of files) {
-    const cmd = safeRequire(file);
     if (!cmd?.data?.name || typeof cmd.execute !== "function") {
-      skipped++;
-      continue;
+      warn("Commande ignorée :", full);
+      return;
     }
-    client.commands.set(cmd.data.name, cmd);
-    ok++;
-  }
 
-  log(`[LOADER] Commands loaded: ${ok} (skipped ${skipped})`);
+    client.commands.set(cmd.data.name, cmd);
+    log("Commande chargée :", cmd.data.name);
+  });
 }
 
 function loadEvents(client) {
-  const eventsDir = path.join(__dirname, "..", "events");
-  const files = walkJsFiles(eventsDir);
+  const eventsPath = path.join(__dirname, "..", "events");
+  if (!fs.existsSync(eventsPath)) return;
 
-  let ok = 0;
-  let skipped = 0;
+  walk(eventsPath, (full) => {
+    const evt = require(full);
 
-  for (const file of files) {
-    const evt = safeRequire(file);
     if (!evt?.name || typeof evt.execute !== "function") {
-      skipped++;
-      continue;
+      warn("Event ignoré :", full);
+      return;
     }
 
-    // evt.execute(interaction, client) pattern
-    const handler = (...args) => evt.execute(...args, client);
+    if (evt.once) client.once(evt.name, (...args) => evt.execute(...args, client));
+    else client.on(evt.name, (...args) => evt.execute(...args, client));
 
-    if (evt.once) client.once(evt.name, handler);
-    else client.on(evt.name, handler);
-
-    ok++;
-  }
-
-  log(`[LOADER] Events loaded: ${ok} (skipped ${skipped})`);
+    log("Event chargé :", evt.name);
+  });
 }
 
 async function loadAll(client) {
@@ -84,8 +52,4 @@ async function loadAll(client) {
   loadEvents(client);
 }
 
-module.exports = {
-  loadAll,
-  loadCommands,
-  loadEvents,
-};
+module.exports = { loadAll };
