@@ -27,11 +27,26 @@ async function safeReply(interaction, content) {
   } catch {}
 }
 
+/**
+ * Supporte 2 formats:
+ * - dispo:scope:action:sessionId:dayKey  (5)
+ * - dispo:scope:action:sessionId        (4)  => dayKey = null (actions "semaine")
+ */
 function parseCustomId(customId) {
-  const parts = String(customId).split(":");
-  if (parts.length !== 5) return null;
+  const parts = String(customId || "").split(":");
   if (parts[0] !== "dispo") return null;
-  return { scope: parts[1], action: parts[2], sessionId: parts[3], dayKey: parts[4] };
+
+  // 5 segments
+  if (parts.length === 5) {
+    return { scope: parts[1], action: parts[2], sessionId: parts[3], dayKey: parts[4] };
+  }
+
+  // 4 segments
+  if (parts.length === 4) {
+    return { scope: parts[1], action: parts[2], sessionId: parts[3], dayKey: null };
+  }
+
+  return null;
 }
 
 function isStaffAllowed(member, cfg) {
@@ -134,38 +149,63 @@ async function handleStaffRemind(interaction, cfg, session, day) {
   await safeReply(interaction, "🔔");
 }
 
-async function handleStaffReport(interaction, cfg, session, day) {
+async function sendOneDayReport(interaction, cfg, session, day) {
+  const staffChannelId = cfg.staffReportsChannelId || null;
+  if (!staffChannelId) return false;
+
+  const staffChannel = await fetchTextChannel(interaction.client, staffChannelId);
+  if (!staffChannel) return false;
+
+  const dayVotes = session.votes?.[day.key] || { present: [], absent: [] };
+  const presentIds = dayVotes.present || [];
+  const absentIds = dayVotes.absent || [];
+  const nonIds = await computeNonRespondingPlayers(interaction.guild, cfg, session, day.key);
+
+  const embed = buildStaffReportEmbed({
+    guildName: interaction.guild.name,
+    session,
+    day,
+    presentIds,
+    absentIds,
+    nonRespondingPlayerIds: nonIds,
+  });
+
+  await staffChannel.send({ embeds: [embed] });
+  return true;
+}
+
+async function handleStaffReport(interaction, cfg, session, day /* optional */) {
   try {
-    const staffChannelId = cfg.staffReportsChannelId || null;
-    if (!staffChannelId) {
+    // Si day est fourni => rapport du jour
+    if (day) {
+      const ok = await sendOneDayReport(interaction, cfg, session, day).catch((e) => {
+        warn("[DISPO_REPORT_SEND_DAY_ERROR]", e);
+        return false;
+      });
+
+      await safeReply(interaction, ok ? "📊" : "⚠️");
+      return;
+    }
+
+    // Sinon => rapport SEMAINE (tous les jours)
+    const days = session.days || [];
+    if (!days.length) {
       await safeReply(interaction, "⚠️");
       return;
     }
 
-    const staffChannel = await fetchTextChannel(interaction.client, staffChannelId);
-    if (!staffChannel) {
-      await safeReply(interaction, "⚠️");
-      return;
+    // Envoie un embed par jour (simple + robuste)
+    let sent = 0;
+    for (const d of days) {
+      try {
+        const ok = await sendOneDayReport(interaction, cfg, session, d);
+        if (ok) sent++;
+      } catch (e) {
+        warn("[DISPO_REPORT_SEND_ERROR]", e);
+      }
     }
 
-    const dayVotes = session.votes?.[day.key] || { present: [], absent: [] };
-    const presentIds = dayVotes.present || [];
-    const absentIds = dayVotes.absent || [];
-    const nonIds = await computeNonRespondingPlayers(interaction.guild, cfg, session, day.key);
-
-    // ⚠️ buildStaffReportEmbed peut throw -> on protège
-    const embed = buildStaffReportEmbed({
-      guildName: interaction.guild.name,
-      session,
-      day,
-      presentIds,
-      absentIds,
-      nonRespondingPlayerIds: nonIds,
-    });
-
-    await staffChannel.send({ embeds: [embed] });
-
-    await safeReply(interaction, "📊");
+    await safeReply(interaction, sent > 0 ? "📊" : "⚠️");
   } catch (e) {
     warn("[DISPO_REPORT_ERROR]", e);
     await safeReply(interaction, "⚠️");
@@ -222,18 +262,20 @@ async function handleStaffAutoToggle(interaction, cfg, session) {
 }
 
 async function handleDispoButton(interaction) {
-  // ✅ sécurité globale : plus jamais de ⚠️ sans réponse
+  // ✅ ACK AVANT TOUT (même si parse foire) => plus de ⚠️ Discord
+  await safeDefer(interaction);
+
   try {
     const parsed = parseCustomId(interaction.customId);
-    if (!parsed) return false;
+    if (!parsed) {
+      await safeReply(interaction, "⚠️");
+      return true;
+    }
 
     if (!interaction.inGuild()) {
       await safeReply(interaction, "⛔");
       return true;
     }
-
-    // ✅ ACK immédiat
-    await safeDefer(interaction);
 
     const cfg = getGuildConfig(interaction.guildId);
     if (!cfg) {
@@ -247,13 +289,14 @@ async function handleDispoButton(interaction) {
       return true;
     }
 
-    const day = (session.days || []).find((d) => d.key === parsed.dayKey);
-    if (!day) {
-      await safeReply(interaction, "⚠️");
-      return true;
-    }
+    const day = parsed.dayKey ? (session.days || []).find((d) => d.key === parsed.dayKey) : null;
+    // day peut être null si action "semaine"
 
     if (parsed.scope === "vote") {
+      if (!day) {
+        await safeReply(interaction, "⚠️");
+        return true;
+      }
       if (parsed.action === "present" || parsed.action === "absent") {
         await handleVote(interaction, cfg, session, day, parsed.action);
         return true;
@@ -269,21 +312,29 @@ async function handleDispoButton(interaction) {
       }
 
       if (parsed.action === "remind") {
+        if (!day) {
+          await safeReply(interaction, "⚠️");
+          return true;
+        }
         await handleStaffRemind(interaction, cfg, session, day);
         return true;
       }
+
       if (parsed.action === "report") {
-        await handleStaffReport(interaction, cfg, session, day);
+        await handleStaffReport(interaction, cfg, session, day); // day null => semaine
         return true;
       }
+
       if (parsed.action === "close") {
         await handleStaffClose(interaction, cfg, session);
         return true;
       }
+
       if (parsed.action === "reopen") {
         await handleStaffReopen(interaction, cfg, session);
         return true;
       }
+
       if (parsed.action === "auto") {
         await handleStaffAutoToggle(interaction, cfg, session);
         return true;
@@ -296,7 +347,6 @@ async function handleDispoButton(interaction) {
     await safeReply(interaction, "⚠️");
     return true;
   } catch (e) {
-    // dernier filet de sécurité
     warn("[DISPO_BUTTON_FATAL]", e);
     await safeReply(interaction, "⚠️");
     return true;
