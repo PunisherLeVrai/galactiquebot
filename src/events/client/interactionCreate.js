@@ -2,7 +2,7 @@
 // Router interactions (slash + buttons) — CommonJS
 // ✅ Dispo buttons
 // ✅ Slash commands
-// ✅ Gestion erreurs + anti "interaction failed" (defer/reply safe)
+// ✅ Anti "interaction failed" : on laisse les handlers buttons ACK eux-mêmes
 
 const { warn } = require("../../core/logger");
 const { handleDispoButton } = require("../../core/disposWeekButtonsHandler");
@@ -19,18 +19,16 @@ module.exports = {
 
         // Dispos: tout ce qui commence par "dispo:"
         if (cid.startsWith("dispo:")) {
-          // Important : les handlers doivent répondre/defer eux-mêmes.
           await handleDispoButton(interaction);
           return;
         }
 
-        // Autres boutons éventuels => ignore
+        // Autres boutons: on ignore (ne pas répondre pour éviter conflits)
         return;
       }
 
       // ----- SELECT MENUS / MODALS -----
-      // Tes commandes (/setup) gèrent via collectors, donc rien ici.
-      // On ignore volontairement pour éviter conflits.
+      // /setup utilise des collectors locaux, donc on ignore ici volontairement
       if (interaction.isAnySelectMenu?.() || interaction.isModalSubmit?.()) return;
 
       // ----- SLASH COMMANDS -----
@@ -38,7 +36,7 @@ module.exports = {
 
       const cmd = client.commands.get(interaction.commandName);
       if (!cmd) {
-        // évite "Unknown interaction" si la commande n'existe plus côté bot
+        // Commande supprimée / non déployée: réponse safe
         try {
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({ content: "⚠️", ephemeral: true });
@@ -47,24 +45,25 @@ module.exports = {
         return;
       }
 
-      // Exécution commande
       await cmd.execute(interaction, client);
     } catch (err) {
       warn("Erreur interactionCreate:", err);
 
-      // Réponse safe (évite l'échec d'interaction)
+      // Réponse safe
       try {
         if (interaction.isRepliable?.() === false) return;
 
-        if (interaction.deferred) {
-          await interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
+        if (interaction.deferred && !interaction.replied) {
+          await interaction.editReply({ content: "⚠️" }).catch(() => {});
           return;
         }
 
-        if (!interaction.replied) {
+        if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
           return;
         }
+
+        await interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
       } catch {}
     }
   },
