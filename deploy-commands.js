@@ -1,5 +1,9 @@
 // deploy-commands.js
 // Enregistre (ou supprime) les slash commands discord.js v14
+// ✅ Charge récursivement src/commands
+// ✅ Clear require cache (évite vieux exports en dev/redeploy)
+// ✅ Support exports { default: ... }
+// ✅ Option NUKE=true pour tout supprimer
 // CommonJS
 
 require("dotenv").config();
@@ -34,6 +38,19 @@ function walkJsFiles(dir) {
   return out;
 }
 
+function safeRequire(file) {
+  try {
+    delete require.cache[require.resolve(file)];
+  } catch {}
+  try {
+    const mod = require(file);
+    return mod?.default || mod;
+  } catch (e) {
+    console.warn("[DEPLOY] require failed:", file, e?.message || e);
+    return null;
+  }
+}
+
 function loadCommandsJSON() {
   const commandsDir = path.join(__dirname, "src", "commands");
   const files = walkJsFiles(commandsDir);
@@ -43,22 +60,19 @@ function loadCommandsJSON() {
   let skipped = 0;
 
   for (const file of files) {
-    let mod = null;
-    try {
-      mod = require(file);
-    } catch (e) {
-      console.warn("[DEPLOY] require failed:", file, e?.message || e);
-      skipped++;
-      continue;
-    }
-
+    const mod = safeRequire(file);
     if (!mod?.data?.name || typeof mod.execute !== "function") {
       skipped++;
       continue;
     }
 
-    commands.push(mod.data.toJSON());
-    ok++;
+    try {
+      commands.push(mod.data.toJSON());
+      ok++;
+    } catch (e) {
+      console.warn("[DEPLOY] toJSON failed:", file, e?.message || e);
+      skipped++;
+    }
   }
 
   console.log(`[DEPLOY] Commands found: ${ok} (skipped ${skipped})`);
@@ -68,7 +82,7 @@ function loadCommandsJSON() {
 async function main() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  // Choix route: guild ou global
+  // Route: guild ou global
   const route = GUILD_ID
     ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
     : Routes.applicationCommands(CLIENT_ID);
