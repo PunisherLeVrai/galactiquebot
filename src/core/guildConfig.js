@@ -1,113 +1,70 @@
 // src/core/guildConfig.js
-// Normalisation de la config par serveur + helpers (staff/joueur)
-// CommonJS
+const fs = require("fs");
+const path = require("path");
 
-const { getGuildConfig: getRawGuildConfig, upsertGuildConfig } = require("./configManager");
+const CONFIG_PATH = path.join(__dirname, "..", "..", "config", "servers.json");
 
-function normalizeHours(value, fallback) {
-  if (Array.isArray(value) && value.length) {
-    return value
-      .map((n) => Number(n))
-      .filter((n) => Number.isInteger(n) && n >= 0 && n <= 23);
+function ensureConfigFile() {
+  const dir = path.dirname(CONFIG_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  if (!fs.existsSync(CONFIG_PATH)) {
+    fs.writeFileSync(
+      CONFIG_PATH,
+      JSON.stringify({ version: 1, guilds: {} }, null, 2),
+      "utf8"
+    );
   }
-  return fallback;
 }
 
-function withDefaults(cfg = {}) {
-  return {
-    // Salons
-    disposChannelId: cfg.disposChannelId || null,
-    reportChannelId: cfg.reportChannelId || null, // salon staff dédié
+function readAll() {
+  ensureConfigFile();
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
 
-    commandsChannelId: cfg.commandsChannelId || null,
-    planningChannelId: cfg.planningChannelId || null,
-    annoncesChannelId: cfg.annoncesChannelId || null,
+    // Sécurité: structure minimale
+    if (!parsed || typeof parsed !== "object") return { version: 1, guilds: {} };
+    if (!parsed.guilds || typeof parsed.guilds !== "object") parsed.guilds = {};
+    if (!parsed.version) parsed.version = 1;
 
-    // Rôles
-    staffRoleId: cfg.staffRoleId || null,
-    playerRoleId: cfg.playerRoleId || null,
-    trialRoleId: cfg.trialRoleId || null,
-
-    // Automations (ON/OFF)
-    automationsEnabled: cfg.automationsEnabled ?? false,
-
-    // Heures (Europe/Paris côté Railway conseillé via env TZ)
-    automationReminderHours: normalizeHours(cfg.automationReminderHours, [12]),       // rappel 12h
-    automationReportHours: normalizeHours(cfg.automationReportHours, [12, 17]),       // rapport 12h/17h
-    automationCloseHours: normalizeHours(cfg.automationCloseHours, [17]),             // fermeture 17h
-
-    // Meta
-    guildName: cfg.guildName || null,
-    botLabel: cfg.botLabel || null,
-
-    updatedAt: cfg.updatedAt || null,
-    setupAt: cfg.setupAt || null,
-    setupBy: cfg.setupBy || null,
-  };
+    return parsed;
+  } catch {
+    return { version: 1, guilds: {} };
+  }
 }
 
-/**
- * Lecture config normalisée (ou null si pas configuré).
- */
+function writeAll(data) {
+  ensureConfigFile();
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), "utf8");
+}
+
 function getGuildConfig(guildId) {
-  const raw = getRawGuildConfig(guildId);
-  if (!raw) return null;
-  return withDefaults(raw);
+  const data = readAll();
+  return data.guilds[guildId] || null;
 }
 
-/**
- * Assure la config avec defaults en l'écrivant (utile au démarrage).
- */
-function ensureGuildConfig(guildId) {
-  const raw = getRawGuildConfig(guildId) || {};
-  const cfg = withDefaults(raw);
+function upsertGuildConfig(guildId, patch) {
+  const data = readAll();
+  if (!data.guilds[guildId]) data.guilds[guildId] = {};
 
-  // Écrit une fois pour persister les defaults si manquants
-  upsertGuildConfig(guildId, cfg);
-  return cfg;
+  data.guilds[guildId] = {
+    ...data.guilds[guildId],
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+
+  writeAll(data);
+  return data.guilds[guildId];
 }
 
-/**
- * Patch config (écrit dans servers.json).
- */
-function setGuildConfig(guildId, patch) {
-  const existing = getRawGuildConfig(guildId) || {};
-  const merged = withDefaults({ ...existing, ...patch });
-  return upsertGuildConfig(guildId, merged);
-}
-
-function hasRole(member, roleId) {
-  if (!member || !roleId) return false;
-  return member.roles?.cache?.has(roleId) || false;
-}
-
-/**
- * Staff = rôle staff si défini, sinon fallback admin.
- */
-function isStaff(member, cfg) {
-  if (!member) return false;
-  if (cfg?.staffRoleId) return hasRole(member, cfg.staffRoleId);
-
-  // fallback si pas de rôle staff configuré
-  return (
-    member.permissions?.has?.("Administrator") ||
-    member.permissions?.has?.("ManageGuild") ||
-    false
-  );
-}
-
-/**
- * Joueur = rôle playerRoleId (uniquement) — c'est la base "non répondants".
- */
-function isPlayer(member, cfg) {
-  if (!member || !cfg?.playerRoleId) return false;
-  return hasRole(member, cfg.playerRoleId);
+function exportAll() {
+  return readAll();
 }
 
 module.exports = {
+  CONFIG_PATH,
   getGuildConfig,
-  ensureGuildConfig,
-  setGuildConfig,
-  isStaff,
-  isPlayer,
+  upsertGuildConfig,
+  exportAll,
 };
