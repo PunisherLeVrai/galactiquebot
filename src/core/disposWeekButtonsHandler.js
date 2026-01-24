@@ -1,5 +1,7 @@
 // src/core/disposWeekButtonsHandler.js
-// Gestion des boutons Dispo — CommonJS
+// Gestion boutons Dispo — ACK immédiat (fix "Échec de l'interaction")
+// Rappel (🔔) envoyé dans le salon DISPO (cfg.disposChannelId)
+// CommonJS — discord.js v14
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getGuildConfig, upsertGuildConfig } = require("./guildConfig");
@@ -7,11 +9,25 @@ const { getSession, setVote, closeSession } = require("./disposWeekStore");
 const { buildDayEmbed, buildStaffReportEmbed } = require("./disposWeekRenderer");
 const { buildRows } = require("./disposWeekButtons");
 
-const FLAGS_EPHEMERAL = 64;
+async function safeDefer(interaction) {
+  try {
+    if (interaction.deferred || interaction.replied) return;
+    await interaction.deferReply({ ephemeral: true }); // ✅ ACK instant
+  } catch {}
+}
+
+async function safeReply(interaction, content) {
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content });
+    } else {
+      await interaction.reply({ content, ephemeral: true });
+    }
+  } catch {}
+}
 
 function parseCustomId(customId) {
   const parts = String(customId).split(":");
-  // dispo:<scope>:<action>:<sessionId>:<dayKey>
   if (parts.length !== 5) return null;
   if (parts[0] !== "dispo") return null;
   return { scope: parts[1], action: parts[2], sessionId: parts[3], dayKey: parts[4] };
@@ -65,12 +81,13 @@ async function refreshAllMessages(client, guildName, cfg, session) {
 async function computeNonRespondingPlayers(guild, cfg, session, dayKey) {
   if (!cfg?.playerRoleId) return [];
 
-  const dayVotes = session.votes?.[dayKey] || { present: [], absent: [] };
-  const responded = new Set([...(dayVotes.present || []), ...(dayVotes.absent || [])]);
-
+  // ⚠️ peut être long -> defer déjà fait
   try {
     await guild.members.fetch();
   } catch {}
+
+  const dayVotes = session.votes?.[dayKey] || { present: [], absent: [] };
+  const responded = new Set([...(dayVotes.present || []), ...(dayVotes.absent || [])]);
 
   const players = guild.members.cache.filter((m) => m.roles.cache.has(cfg.playerRoleId));
   const non = [];
@@ -84,15 +101,11 @@ async function handleVote(interaction, cfg, session, day, status) {
   const res = setVote(interaction.guildId, session.sessionId, day.key, interaction.user.id, status);
 
   if (!res.ok) {
-    const msg = res.reason === "CLOSED" ? "Ces dispos sont **fermées**." : "Impossible d’enregistrer ta réponse.";
-    await interaction.reply({ content: msg, flags: FLAGS_EPHEMERAL }).catch(() => {});
+    await safeReply(interaction, res.reason === "CLOSED" ? "🔒" : "⚠️");
     return;
   }
 
-  await interaction.reply({
-    content: `Réponse enregistrée : **${status === "present" ? "✅ Présent" : "❌ Absent"}** pour **${day.label}**.`,
-    flags: FLAGS_EPHEMERAL,
-  }).catch(() => {});
+  await safeReply(interaction, status === "present" ? "✅" : "❌");
 
   const freshSession = getSession(interaction.guildId, session.sessionId);
   await refreshDayMessage(interaction.client, interaction.guild.name, cfg, freshSession, day);
@@ -101,34 +114,26 @@ async function handleVote(interaction, cfg, session, day, status) {
 async function handleStaffRemind(interaction, cfg, session, day) {
   const nonIds = await computeNonRespondingPlayers(interaction.guild, cfg, session, day.key);
 
-  const disposChannelId = cfg.disposChannelId || session.channelId;
-  const channel = await fetchTextChannel(interaction.client, disposChannelId);
-
-  if (!channel) {
-    await interaction.reply({ content: "Salon Dispos introuvable. Vérifie `/setup`.", flags: FLAGS_EPHEMERAL });
+  // ✅ rappel dans salon DISPO
+  const dispoChannel = await fetchTextChannel(interaction.client, cfg.disposChannelId || session.channelId);
+  if (!dispoChannel) {
+    await safeReply(interaction, "⚠️");
     return;
   }
 
   const mentions = nonIds.map((id) => `<@${id}>`);
   const content =
-    `🔔 **Rappel disponibilités — ${day.label}**\n` +
-    (mentions.length ? mentions.join(" ") : "Aucun non répondant (rôle Joueur).");
+    `🔔 **${day.label}**\n` +
+    (mentions.length ? mentions.join(" ") : "—");
 
-  await channel.send({ content }).catch(() => null);
-
-  await interaction.reply({
-    content: `Rappel envoyé dans ${channel}.`,
-    flags: FLAGS_EPHEMERAL,
-  }).catch(() => {});
+  await dispoChannel.send({ content }).catch(() => null);
+  await safeReply(interaction, "🔔");
 }
 
 async function handleStaffReport(interaction, cfg, session, day) {
   const staffChannel = await fetchTextChannel(interaction.client, cfg.staffReportsChannelId);
   if (!staffChannel) {
-    await interaction.reply({
-      content: "Salon Staff (rapports) non configuré. Fais `/setup`.",
-      flags: FLAGS_EPHEMERAL,
-    });
+    await safeReply(interaction, "📊");
     return;
   }
 
@@ -147,27 +152,19 @@ async function handleStaffReport(interaction, cfg, session, day) {
   });
 
   await staffChannel.send({ embeds: [embed] }).catch(() => null);
-
-  await interaction.reply({
-    content: `Rapport envoyé dans ${staffChannel}.`,
-    flags: FLAGS_EPHEMERAL,
-  }).catch(() => {});
+  await safeReply(interaction, "📊");
 }
 
 async function handleStaffClose(interaction, cfg, session) {
   const closed = closeSession(interaction.guildId, session.sessionId, interaction.user.id);
   if (!closed) {
-    await interaction.reply({ content: "Impossible de fermer la session.", flags: FLAGS_EPHEMERAL });
+    await safeReply(interaction, "⚠️");
     return;
   }
 
   const fresh = getSession(interaction.guildId, session.sessionId);
   await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
-
-  await interaction.reply({
-    content: "🔒 Dispos fermées. Plus personne ne peut répondre.",
-    flags: FLAGS_EPHEMERAL,
-  }).catch(() => {});
+  await safeReply(interaction, "🔒");
 }
 
 async function handleStaffAutoToggle(interaction, cfg, session) {
@@ -187,11 +184,7 @@ async function handleStaffAutoToggle(interaction, cfg, session) {
   const freshSession = getSession(interaction.guildId, session.sessionId);
 
   await refreshAllMessages(interaction.client, interaction.guild.name, freshCfg, freshSession);
-
-  await interaction.reply({
-    content: `Automations : **${next ? "ON" : "OFF"}**.`,
-    flags: FLAGS_EPHEMERAL,
-  }).catch(() => {});
+  await safeReply(interaction, next ? "⚙️" : "🛑");
 }
 
 async function handleDispoButton(interaction) {
@@ -199,60 +192,56 @@ async function handleDispoButton(interaction) {
   if (!parsed) return false;
 
   if (!interaction.inGuild()) {
-    await interaction.reply({ content: "Utilisable uniquement dans un serveur.", flags: FLAGS_EPHEMERAL }).catch(() => {});
+    await safeReply(interaction, "⛔");
     return true;
   }
 
+  // ✅ ACK immédiat
+  await safeDefer(interaction);
+
   const cfg = getGuildConfig(interaction.guildId);
   if (!cfg) {
-    await interaction.reply({ content: "Serveur non configuré. Lance `/setup`.", flags: FLAGS_EPHEMERAL }).catch(() => {});
+    await safeReply(interaction, "⚙️");
     return true;
   }
 
   const session = getSession(interaction.guildId, parsed.sessionId);
   if (!session) {
-    await interaction.reply({ content: "Session introuvable (ancienne ou supprimée).", flags: FLAGS_EPHEMERAL }).catch(() => {});
+    await safeReply(interaction, "⚠️");
     return true;
   }
 
   const day = (session.days || []).find((d) => d.key === parsed.dayKey);
   if (!day) {
-    await interaction.reply({ content: "Jour introuvable.", flags: FLAGS_EPHEMERAL }).catch(() => {});
+    await safeReply(interaction, "⚠️");
     return true;
   }
 
   if (parsed.scope === "vote") {
     if (parsed.action === "present" || parsed.action === "absent") {
       await handleVote(interaction, cfg, session, day, parsed.action);
+      return true;
     }
+    await safeReply(interaction, "⚠️");
     return true;
   }
 
   if (parsed.scope === "staff") {
     if (!isStaffAllowed(interaction.member, cfg)) {
-      await interaction.reply({ content: "Action réservée au staff.", flags: FLAGS_EPHEMERAL }).catch(() => {});
+      await safeReply(interaction, "⛔");
       return true;
     }
 
-    if (parsed.action === "remind") {
-      await handleStaffRemind(interaction, cfg, session, day);
-      return true;
-    }
-    if (parsed.action === "report") {
-      await handleStaffReport(interaction, cfg, session, day);
-      return true;
-    }
-    if (parsed.action === "close") {
-      await handleStaffClose(interaction, cfg, session);
-      return true;
-    }
-    if (parsed.action === "auto") {
-      await handleStaffAutoToggle(interaction, cfg, session);
-      return true;
-    }
+    if (parsed.action === "remind") return (await handleStaffRemind(interaction, cfg, session, day), true);
+    if (parsed.action === "report") return (await handleStaffReport(interaction, cfg, session, day), true);
+    if (parsed.action === "close") return (await handleStaffClose(interaction, cfg, session), true);
+    if (parsed.action === "auto") return (await handleStaffAutoToggle(interaction, cfg, session), true);
+
+    await safeReply(interaction, "⚠️");
     return true;
   }
 
+  await safeReply(interaction, "⚠️");
   return true;
 }
 
