@@ -1,10 +1,19 @@
 // src/core/pseudoAutomation.js
 // 3 rappels / 24h (sans mention) — CommonJS
+// ✅ Anti-doublon par jour/heure/guild
+// ✅ Heures configurables (reminderHours)
+// ✅ Salon configurable (pseudo.scanChannelId)
+// ✅ Nettoyage Set (évite grossir sur le long terme)
+// ✅ Message clair + "où entre chaque plateforme"
+
+// NOTE: La sync 1x/heure est gérée par pseudoSync.js (startPseudoSync).
+// Ici: uniquement les rappels (optionnels).
 
 const { exportAllConfig, getGuildConfig } = require("./guildConfig");
 const { log, warn } = require("./logger");
 
 const ran = new Set();
+let lastCleanupDay = null;
 
 function dateKey(d) {
   const y = d.getFullYear();
@@ -24,21 +33,30 @@ async function fetchTextChannel(client, channelId) {
   return ch;
 }
 
-function content() {
+function buildContent() {
   return (
-    `🎮 **SCAN PSEUDOS (PSN OU XBOX OU EA)**\n\n` +
-    `Envoie **UNE SEULE** des 3 formes :\n\n` +
+    `🎮 **SYNC PSEUDOS (PRIORITÉ : PSN > XBOX > EA)**\n\n` +
+    `Envoie **UNE SEULE** ligne (au choix) :\n\n` +
     `• \`PSN: TonPseudo\`\n` +
-    `**OU**\n` +
     `• \`XBOX: TonGamertag\`\n` +
-    `**OU**\n` +
     `• \`EA: TonEAID\`\n\n` +
-    `Le bot détecte automatiquement et enregistre.`
+    `⚠️ Mets bien **les deux-points** après la plateforme.\n` +
+    `✅ Le bot enregistre et la sync se fait automatiquement.`
   );
+}
+
+// évite que le Set grossisse sur plusieurs jours
+function cleanupIfNewDay(now) {
+  const dk = dateKey(now);
+  if (lastCleanupDay === dk) return;
+  lastCleanupDay = dk;
+  ran.clear();
 }
 
 async function tick(client) {
   const now = new Date();
+  cleanupIfNewDay(now);
+
   const hour = now.getHours();
   const dK = dateKey(now);
 
@@ -54,9 +72,10 @@ async function tick(client) {
     const scanChannelId = pseudoCfg.scanChannelId || null;
     if (!scanChannelId) continue;
 
-    const hours = Array.isArray(pseudoCfg.reminderHours) && pseudoCfg.reminderHours.length
-      ? pseudoCfg.reminderHours
-      : [12, 17, 21];
+    const hours =
+      Array.isArray(pseudoCfg.reminderHours) && pseudoCfg.reminderHours.length
+        ? pseudoCfg.reminderHours
+        : [12, 17, 21];
 
     if (!hours.includes(hour)) continue;
 
@@ -68,7 +87,7 @@ async function tick(client) {
     if (!ch) continue;
 
     try {
-      await ch.send({ content: content() }); // ✅ sans mention
+      await ch.send({ content: buildContent() }); // ✅ sans mention
       log(`[PSEUDO_REMINDER] guild=${guildId} @${hour}h`);
     } catch (e) {
       warn("[PSEUDO_REMINDER] error:", e);
