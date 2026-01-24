@@ -1,5 +1,6 @@
 // src/core/disposWeekStore.js
 // Stockage JSON des dispos (multi-serveur) — CommonJS
+// + reset votes + reopen session (option 1: réutiliser messages existants)
 
 const fs = require("fs");
 const path = require("path");
@@ -42,6 +43,7 @@ function ensureGuild(db, guildId) {
   if (!db.guilds[guildId]) {
     db.guilds[guildId] = { sessions: {}, lastSessionId: null };
   }
+  if (!db.guilds[guildId].sessions) db.guilds[guildId].sessions = {};
   return db.guilds[guildId];
 }
 
@@ -54,8 +56,10 @@ function newId() {
  * {
  *  sessionId, guildId, channelId, createdBy, createdAt,
  *  closed, closedAt, closedBy,
+ *  meta: { title, note },
  *  days: [{ key,label,mode,imageUrl,messageId }],
- *  votes: { [dayKey]: { present:[], absent:[] } }
+ *  votes: { [dayKey]: { present:[], absent:[] } },
+ *  updatedAt
  * }
  */
 function createSession(guildId, createdBy, channelId, days, meta = {}) {
@@ -81,8 +85,8 @@ function createSession(guildId, createdBy, channelId, days, meta = {}) {
     days: (days || []).map((d) => ({
       key: d.key,
       label: d.label,
-      mode: d.mode || "embed",      // embed|image|both
-      imageUrl: d.imageUrl || null, // URL discord
+      mode: d.mode || "embed", // embed|image|both
+      imageUrl: d.imageUrl || null,
       messageId: d.messageId || null,
     })),
 
@@ -171,6 +175,36 @@ function closeSession(guildId, sessionId, closedBy) {
   return s;
 }
 
+/**
+ * ✅ Option 1: réouvrir la semaine suivante sans recréer de messages
+ * - rouvre (closed=false)
+ * - reset votes
+ * - garde les messageId existants
+ */
+function reopenSession(guildId, sessionId, reopenedBy) {
+  const db = readDb();
+  const g = ensureGuild(db, guildId);
+  const s = g.sessions?.[sessionId];
+  if (!s) return null;
+
+  s.closed = false;
+  s.closedAt = null;
+  s.closedBy = null;
+
+  // Reset votes
+  s.votes = {};
+  for (const d of s.days || []) {
+    s.votes[d.key] = { present: [], absent: [] };
+  }
+
+  s.reopenedAt = new Date().toISOString();
+  s.reopenedBy = reopenedBy || null;
+  s.updatedAt = new Date().toISOString();
+
+  writeDb(db);
+  return s;
+}
+
 function getCounts(session, dayKey) {
   const bucket = session?.votes?.[dayKey] || { present: [], absent: [] };
   return {
@@ -195,6 +229,18 @@ function getLastOpenSession(guildId) {
   return open[0] || null;
 }
 
+function getLastSession(guildId) {
+  const db = readDb();
+  const g = db.guilds?.[guildId];
+  if (!g) return null;
+
+  if (g.lastSessionId) return g.sessions?.[g.lastSessionId] || null;
+
+  const all = Object.values(g.sessions || {});
+  all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return all[0] || null;
+}
+
 module.exports = {
   STORE_PATH,
   createSession,
@@ -202,6 +248,8 @@ module.exports = {
   updateSessionDay,
   setVote,
   closeSession,
+  reopenSession,
   getCounts,
   getLastOpenSession,
+  getLastSession,
 };
