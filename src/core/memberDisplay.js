@@ -1,64 +1,43 @@
 // src/core/memberDisplay.js
 // Format : "NOM | RÔLE | POSTE1/POSTE2/POSTE3"
 // NOM = priorité : PSN > XBOX > EA > username Discord clean (sans chiffres/symboles + Maj)
-// RÔLE = déterministe (ordre fixe), ignore hiérarchie Discord
-// POSTE = 0..3 postes (labels depuis setup) join par "/"
-// Aucun bloc vide après "|" (on omet les blocs absents)
-// ✅ Gestion accents + underscore + espaces multiples (username)
-// ✅ Nettoyage des pseudos plateformes (trim / collapse spaces / limite)
+// RÔLE = déterministe via cfg.mainRoles (Président/Fondateur/GM/coGM/STAFF) — "Membre" jamais affiché
+// POSTE = 0..3 postes détectés depuis cfg.posts (liste complète détectable), join par "/"
+// Aucun bloc vide : si pas de rôle => pas de " | " inutile ; si pas de postes => idem
 // CommonJS
 
-const pseudoStore = require("./pseudoStore");
-
-function cleanValue(v, max = 40) {
-  if (!v) return "";
-  return String(v)
-    .replace(/[`]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
-}
+const { getUserPseudos } = require("./pseudoStore");
 
 function cleanUsername(raw) {
+  // Username Discord (pas pseudo serveur) nettoyé : lettres uniquement, Maj au début
   if (!raw) return "User";
 
-  // garde lettres + espaces (retire chiffres + symboles) + enlève accents
-  const noAccents = String(raw)
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "");
+  let name = String(raw);
 
-  const lettersSpaces = noAccents
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // retire chiffres
+  name = name.replace(/[0-9]/g, "");
 
-  if (!lettersSpaces) return "User";
+  // retire tout sauf lettres A-Z
+  name = name.replace(/[^a-zA-Z]/g, "");
 
-  // Maj au début, le reste en minuscules (plus stable/clean)
-  return lettersSpaces.charAt(0).toUpperCase() + lettersSpaces.slice(1).toLowerCase();
+  name = name.trim();
+  if (!name.length) return "User";
+
+  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 }
 
 function getBestName(member) {
-  if (!member) return "User";
+  if (!member?.guild?.id || !member?.user?.id) return "User";
 
-  const guildId = member.guild?.id;
-  const userId = member.user?.id;
-  if (!guildId || !userId) return "User";
-
-  // pseudos stockés
-  const entry = pseudoStore.getUserPseudos(guildId, userId);
+  const entry = getUserPseudos(member.guild.id, member.user.id);
 
   // Priorité stricte : PSN > XBOX > EA
-  const psn = cleanValue(entry?.psn);
-  const xbox = cleanValue(entry?.xbox);
-  const ea = cleanValue(entry?.ea);
+  if (entry?.psn) return entry.psn;
+  if (entry?.xbox) return entry.xbox;
+  if (entry?.ea) return entry.ea;
 
-  if (psn) return psn;
-  if (xbox) return xbox;
-  if (ea) return ea;
-
-  // Fallback : username clean
-  return cleanUsername(member.user?.username || "");
+  // Fallback : username clean (PAS le pseudo serveur)
+  return cleanUsername(member.user.username || "");
 }
 
 function hasRole(member, roleId) {
@@ -67,7 +46,11 @@ function hasRole(member, roleId) {
 }
 
 /**
- * RÔLE forcé : ordre fixe (ignore la hiérarchie Discord)
+ * Rôle principal forcé (ignore hiérarchie Discord)
+ * cfg.mainRoles = {
+ *   president:{id}, fondateur:{id}, gm:{id}, cogm:{id}, staff:{id}
+ * }
+ * Retourne: "Président" | "Fondateur" | "GM" | "coGM" | "STAFF" | null
  */
 function resolveMainRole(member, mainRoles = {}) {
   const order = ["president", "fondateur", "gm", "cogm", "staff"];
@@ -83,39 +66,51 @@ function resolveMainRole(member, mainRoles = {}) {
     const id = mainRoles?.[key]?.id || null;
     if (id && hasRole(member, id)) return labels[key];
   }
+
+  // IMPORTANT: on ne renvoie jamais "Membre"
   return null;
 }
 
 /**
- * POSTES 0..3, ordre déterministe basé sur cfg.posts (setup)
- * cfg.posts = [{ id, label }]
+ * Postes 0..3 (POSTE1/POSTE2/POSTE3)
+ * cfg.posts = [{ id: "roleId", label: "MDC" }, ...]
+ * Détecte sur TOUTE la liste, et renvoie les 3 premiers matchés (ordre cfg.posts)
  */
-function resolvePosts(member, postDefs = []) {
-  const defs = Array.isArray(postDefs) ? postDefs : [];
+function resolvePosts(member, postDefs = [], limit = 3) {
   const posts = [];
+  const defs = Array.isArray(postDefs) ? postDefs : [];
 
   for (const p of defs) {
     if (!p?.id) continue;
-    if (hasRole(member, p.id)) {
-      posts.push(cleanValue(p.label || "POSTE", 24) || "POSTE");
-      if (posts.length >= 3) break;
-    }
+    if (!hasRole(member, p.id)) continue;
+
+    const label = String(p.label || "").trim();
+    posts.push(label || "POSTE");
+
+    if (posts.length >= limit) break;
   }
 
   return posts;
 }
 
+/**
+ * Build final line :
+ * - "Chris" si rien
+ * - "Punisher | Président"
+ * - "Mattlsm | MDC"
+ * - "Nom | Rôle | Poste1/Poste2/Poste3"
+ */
 function buildMemberLine(member, cfg = {}) {
   const name = getBestName(member);
 
   const role = resolveMainRole(member, cfg.mainRoles || {});
-  const postList = resolvePosts(member, cfg.posts || []);
-  const postStr = postList.length ? postList.join("/") : null;
+  const postList = resolvePosts(member, cfg.posts || [], 3);
 
-  // Aucun bloc vide après "|"
   const parts = [name];
+
   if (role) parts.push(role);
-  if (postStr) parts.push(postStr);
+
+  if (postList.length) parts.push(postList.join("/"));
 
   return parts.join(" | ");
 }
