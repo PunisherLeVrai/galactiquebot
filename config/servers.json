@@ -1,1 +1,53 @@
-{}
+{
+  "guilds": {
+    "1392639720491581551": {
+      "botLabel": "XIG BLAUGRANA FC Staff",
+      "guildName": "XIG INTER GALACTIQUE",
+      "disposChannelId": "1429059902852173936",
+      "staffReportsChannelId": "1446471718943326259",
+      "commandsChannelId": "1393775984423211138",
+      "planningChannelId": "1457341736773877886",
+      "annoncesChannelId": "1393771922709286932",
+      "staffRoleId": "1393892611382575185",
+      "playerRoleId": "1393784530124668988",
+      "trialRoleId": null,
+      "automations": {
+        "enabled": true,
+        "reminderHour": 12,
+        "reportHours": [
+          12,
+          17
+        ],
+        "closeHour": 17
+      },
+      "setupBy": "448539638420733963",
+      "setupAt": "2026-01-24T02:09:55.125Z",
+      "updatedAt": "2026-01-24T02:12:12.204Z"
+    },
+    "1410246320324870217": {
+      "botLabel": "XIG BLAUGRANA FC Staff",
+      "guildName": "XIG DOR",
+      "disposChannelId": "1441625985559691304",
+      "staffReportsChannelId": "1448731756478857337",
+      "commandsChannelId": "1448726882626310356",
+      "planningChannelId": "1410246321092427817",
+      "annoncesChannelId": null,
+      "staffRoleId": "1414648635437617263",
+      "playerRoleId": "1410246320656093296",
+      "trialRoleId": "1410246320656093295",
+      "automations": {
+        "enabled": true,
+        "reminderHour": 12,
+        "reportHours": [
+          12,
+          17
+        ],
+        "closeHour": 17
+      },
+      "setupBy": "448539638420733963",
+      "setupAt": "2026-01-24T02:14:23.510Z",
+      "updatedAt": "2026-01-24T02:14:23.510Z"
+    }
+  },
+  "version": 1
+}
