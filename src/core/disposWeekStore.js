@@ -1,6 +1,5 @@
 // src/core/disposWeekStore.js
-// Stockage JSON simple (persistant si volume Railway, sinon reset au redeploy)
-// CommonJS
+// Stockage JSON des dispos (multi-serveur) — CommonJS
 
 const fs = require("fs");
 const path = require("path");
@@ -20,26 +19,28 @@ function ensureStoreFile() {
   }
 }
 
-function safeRead() {
+function readDb() {
   ensureStoreFile();
   try {
-    return JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
+    const raw = fs.readFileSync(STORE_PATH, "utf8");
+    const db = JSON.parse(raw);
+    if (!db || typeof db !== "object") return { version: 1, guilds: {} };
+    if (!db.guilds || typeof db.guilds !== "object") db.guilds = {};
+    if (!db.version) db.version = 1;
+    return db;
   } catch {
     return { version: 1, guilds: {} };
   }
 }
 
-function safeWrite(db) {
+function writeDb(db) {
   ensureStoreFile();
   fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2), "utf8");
 }
 
 function ensureGuild(db, guildId) {
   if (!db.guilds[guildId]) {
-    db.guilds[guildId] = {
-      sessions: {},      // sessionId -> session
-      lastSessionId: null,
-    };
+    db.guilds[guildId] = { sessions: {}, lastSessionId: null };
   }
   return db.guilds[guildId];
 }
@@ -49,25 +50,19 @@ function newId() {
 }
 
 /**
- * Session schema:
+ * session schema:
  * {
- *  sessionId,
- *  guildId,
- *  channelId,
- *  createdBy,
- *  createdAt,
- *  closed,
- *  closedAt,
- *  days: [{ key, label, mode, imageUrl, messageId }],
- *  votes: { [dayKey]: { present: [userId], absent: [userId] } }
+ *  sessionId, guildId, channelId, createdBy, createdAt,
+ *  closed, closedAt, closedBy,
+ *  days: [{ key,label,mode,imageUrl,messageId }],
+ *  votes: { [dayKey]: { present:[], absent:[] } }
  * }
  */
 function createSession(guildId, createdBy, channelId, days, meta = {}) {
-  const db = safeRead();
+  const db = readDb();
   const g = ensureGuild(db, guildId);
 
   const sessionId = newId();
-
   const session = {
     sessionId,
     guildId,
@@ -79,22 +74,22 @@ function createSession(guildId, createdBy, channelId, days, meta = {}) {
     closedBy: null,
 
     meta: {
-      title: meta.title || null,
+      title: meta.title || "Disponibilités",
       note: meta.note || null,
     },
 
     days: (days || []).map((d) => ({
-      key: d.key,                   // ex: lun/mar/...
-      label: d.label,               // ex: Lundi
+      key: d.key,
+      label: d.label,
       mode: d.mode || "embed",      // embed|image|both
-      imageUrl: d.imageUrl || null, // URL de l'attachment Discord
+      imageUrl: d.imageUrl || null, // URL discord
       messageId: d.messageId || null,
     })),
 
-    votes: {}, // init plus bas
+    votes: {},
+    updatedAt: new Date().toISOString(),
   };
 
-  // Init votes pour chaque jour
   for (const d of session.days) {
     session.votes[d.key] = { present: [], absent: [] };
   }
@@ -102,44 +97,28 @@ function createSession(guildId, createdBy, channelId, days, meta = {}) {
   g.sessions[sessionId] = session;
   g.lastSessionId = sessionId;
 
-  safeWrite(db);
+  writeDb(db);
   return session;
 }
 
 function getSession(guildId, sessionId) {
-  const db = safeRead();
+  const db = readDb();
   return db.guilds?.[guildId]?.sessions?.[sessionId] || null;
 }
 
-function updateSession(guildId, sessionId, patch) {
-  const db = safeRead();
-  const g = ensureGuild(db, guildId);
-  const s = g.sessions[sessionId];
-  if (!s) return null;
-
-  g.sessions[sessionId] = {
-    ...s,
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  };
-
-  safeWrite(db);
-  return g.sessions[sessionId];
-}
-
 function updateSessionDay(guildId, sessionId, dayKey, patch) {
-  const db = safeRead();
+  const db = readDb();
   const g = ensureGuild(db, guildId);
-  const s = g.sessions[sessionId];
+  const s = g.sessions?.[sessionId];
   if (!s) return null;
 
-  const idx = s.days.findIndex((d) => d.key === dayKey);
+  const idx = (s.days || []).findIndex((d) => d.key === dayKey);
   if (idx === -1) return null;
 
   s.days[idx] = { ...s.days[idx], ...patch };
   s.updatedAt = new Date().toISOString();
 
-  safeWrite(db);
+  writeDb(db);
   return s.days[idx];
 }
 
@@ -151,62 +130,36 @@ function ensureVotesShape(session, dayKey) {
   return session.votes[dayKey];
 }
 
-/**
- * Vote: tout le monde, 1 choix max par jour
- * status: "present" | "absent"
- */
 function setVote(guildId, sessionId, dayKey, userId, status) {
-  const db = safeRead();
+  const db = readDb();
   const g = ensureGuild(db, guildId);
-  const s = g.sessions[sessionId];
-
+  const s = g.sessions?.[sessionId];
   if (!s) return { ok: false, reason: "SESSION_NOT_FOUND" };
   if (s.closed) return { ok: false, reason: "CLOSED" };
 
-  const day = s.days.find((d) => d.key === dayKey);
-  if (!day) return { ok: false, reason: "DAY_NOT_FOUND" };
+  const dayExists = (s.days || []).some((d) => d.key === dayKey);
+  if (!dayExists) return { ok: false, reason: "DAY_NOT_FOUND" };
 
   const bucket = ensureVotesShape(s, dayKey);
 
-  // Retirer l'utilisateur des deux listes
   bucket.present = bucket.present.filter((id) => id !== userId);
   bucket.absent = bucket.absent.filter((id) => id !== userId);
 
-  // Ajouter au bon statut
   if (status === "present") bucket.present.push(userId);
   else if (status === "absent") bucket.absent.push(userId);
   else return { ok: false, reason: "BAD_STATUS" };
 
   s.votes[dayKey] = bucket;
   s.updatedAt = new Date().toISOString();
+  writeDb(db);
 
-  safeWrite(db);
-  return { ok: true };
-}
-
-function clearVote(guildId, sessionId, dayKey, userId) {
-  const db = safeRead();
-  const g = ensureGuild(db, guildId);
-  const s = g.sessions[sessionId];
-
-  if (!s) return { ok: false, reason: "SESSION_NOT_FOUND" };
-  if (s.closed) return { ok: false, reason: "CLOSED" };
-
-  const bucket = ensureVotesShape(s, dayKey);
-  bucket.present = bucket.present.filter((id) => id !== userId);
-  bucket.absent = bucket.absent.filter((id) => id !== userId);
-
-  s.votes[dayKey] = bucket;
-  s.updatedAt = new Date().toISOString();
-
-  safeWrite(db);
   return { ok: true };
 }
 
 function closeSession(guildId, sessionId, closedBy) {
-  const db = safeRead();
+  const db = readDb();
   const g = ensureGuild(db, guildId);
-  const s = g.sessions[sessionId];
+  const s = g.sessions?.[sessionId];
   if (!s) return null;
 
   s.closed = true;
@@ -214,13 +167,8 @@ function closeSession(guildId, sessionId, closedBy) {
   s.closedBy = closedBy || null;
   s.updatedAt = new Date().toISOString();
 
-  safeWrite(db);
+  writeDb(db);
   return s;
-}
-
-function isClosed(guildId, sessionId) {
-  const s = getSession(guildId, sessionId);
-  return !!s?.closed;
 }
 
 function getCounts(session, dayKey) {
@@ -231,11 +179,8 @@ function getCounts(session, dayKey) {
   };
 }
 
-/**
- * Dernière session ouverte (utile automations)
- */
 function getLastOpenSession(guildId) {
-  const db = safeRead();
+  const db = readDb();
   const g = db.guilds?.[guildId];
   if (!g) return null;
 
@@ -252,18 +197,11 @@ function getLastOpenSession(guildId) {
 
 module.exports = {
   STORE_PATH,
-
   createSession,
   getSession,
-  updateSession,
   updateSessionDay,
-
   setVote,
-  clearVote,
-
   closeSession,
-  isClosed,
-
   getCounts,
   getLastOpenSession,
 };
