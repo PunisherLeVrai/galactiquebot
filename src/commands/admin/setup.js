@@ -1,5 +1,17 @@
 // src/commands/admin/setup.js
-// Setup interactif 100 % emojis — mobile friendly — CommonJS
+// SETUP COMPLET (tout ce qu'on a défini) — Premium UI — Buttons emoji-only
+// Champs stockés:
+// - disposChannelId (📅)
+// - staffReportsChannelId (📊)
+// - commandsChannelId (⌨️) [opt]
+// - planningChannelId (🗓️) [opt]
+// - annoncesChannelId (📢) [opt]
+// - staffRoleId (🛡️)
+// - playerRoleId (👟)
+// - trialRoleId (🧪) [opt]
+// - automations: { enabled, reminderHour, reportHours, closeHour } (⚙️/🛑)
+//
+// CommonJS — discord.js v14
 
 const {
   SlashCommandBuilder,
@@ -11,29 +23,55 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  ComponentType,
 } = require("discord.js");
 
 const { getGuildConfig, upsertGuildConfig } = require("../../core/guildConfig");
 const { log, warn } = require("../../core/logger");
 
-const FLAGS_EPHEMERAL = 64;
+const EPHEMERAL = true;
 
-// Emojis utilisés
-const EMO = {
-  commands: "⌨️",
+// Horaires par défaut (ceux qu'on a définis)
+const DEFAULT_AUTOMATIONS = {
+  enabled: false,
+  reminderHour: 12,      // rappel
+  reportHours: [12, 17], // rapport
+  closeHour: 17,         // fermeture
+};
+
+// Emojis UI
+const ICON = {
+  title: "⚙️",
+  channels: "📂",
+  roles: "🧩",
+  auto: "🤖",
+
+  // salons
   dispos: "📅",
+  staffReports: "📊",
+  commands: "⌨️",
   planning: "🗓️",
   annonces: "📢",
+
+  // rôles
   staff: "🛡️",
   player: "👟",
   trial: "🧪",
+
+  // actions (emoji-only)
   save: "💾",
   reset: "🔄",
   cancel: "❎",
+  autoOn: "⚙️",
+  autoOff: "🛑",
+
+  // status
+  ok: "✅",
+  warn: "⚠️",
+  no: "⛔",
+  time: "⏳",
 };
 
-function fmt(id) {
+function fmtId(id) {
   return id ? `\`${id}\`` : "`—`";
 }
 function fmtCh(id) {
@@ -43,294 +81,439 @@ function fmtRole(id) {
   return id ? `<@&${id}>` : "—";
 }
 
-function embedSummary(guild, draft, saved) {
+function normalizeAutomations(saved) {
+  const a = saved?.automations || {};
+  return {
+    enabled: typeof a.enabled === "boolean" ? a.enabled : DEFAULT_AUTOMATIONS.enabled,
+    reminderHour: Number.isFinite(a.reminderHour) ? a.reminderHour : DEFAULT_AUTOMATIONS.reminderHour,
+    reportHours: Array.isArray(a.reportHours) ? a.reportHours : DEFAULT_AUTOMATIONS.reportHours,
+    closeHour: Number.isFinite(a.closeHour) ? a.closeHour : DEFAULT_AUTOMATIONS.closeHour,
+  };
+}
+
+function buildDashboardEmbed(guild, draft, saved) {
+  const auto = normalizeAutomations(saved);
+
+  const requiredOk =
+    !!draft.disposChannelId &&
+    !!draft.staffReportsChannelId &&
+    !!draft.staffRoleId &&
+    !!draft.playerRoleId;
+
   return new EmbedBuilder()
-    .setTitle("⚙️ Configuration du serveur")
-    .setDescription("Sélectionne via les menus. Les boutons sont en emojis.")
+    .setTitle(`${ICON.title} Setup — ${guild.name}`)
+    .setColor(0x5865f2)
+    .setDescription(
+      [
+        `${ICON.channels} Salons • ${ICON.roles} Rôles • ${ICON.auto} Auto`,
+        "",
+        requiredOk ? `${ICON.ok}` : `${ICON.warn}`,
+        "",
+        "Requis : 📅 + 📊 + 🛡️ + 👟",
+      ].join("\n")
+    )
     .addFields(
       {
-        name: "Serveur",
-        value: `${guild.name}\nID: ${fmt(guild.id)}`,
+        name: `${ICON.channels} Salons`,
+        value: [
+          `${ICON.dispos} ${fmtCh(draft.disposChannelId)}  (dispos)`,
+          `${ICON.staffReports} ${fmtCh(draft.staffReportsChannelId)}  (staff)`,
+          `${ICON.commands} ${fmtCh(draft.commandsChannelId)}  (opt)`,
+          `${ICON.planning} ${fmtCh(draft.planningChannelId)}  (opt)`,
+          `${ICON.annonces} ${fmtCh(draft.annoncesChannelId)}  (opt)`,
+        ].join("\n"),
+        inline: false,
       },
       {
-        name: `${EMO.commands} Commandes`,
-        value: `Draft: ${fmtCh(draft.commandsChannelId)}\nActuel: ${fmtCh(saved.commandsChannelId)}`,
-        inline: true,
+        name: `${ICON.roles} Rôles`,
+        value: [
+          `${ICON.staff} ${fmtRole(draft.staffRoleId)}`,
+          `${ICON.player} ${fmtRole(draft.playerRoleId)}`,
+          `${ICON.trial} ${fmtRole(draft.trialRoleId)} (opt)`,
+        ].join("\n"),
+        inline: false,
       },
       {
-        name: `${EMO.dispos} Dispos`,
-        value: `Draft: ${fmtCh(draft.disposChannelId)}\nActuel: ${fmtCh(saved.disposChannelId)}`,
-        inline: true,
+        name: `${ICON.auto} Automations`,
+        value: [
+          `État: **${auto.enabled ? "ON" : "OFF"}**`,
+          `🔔 ${auto.reminderHour}h`,
+          `📊 ${auto.reportHours.join("h, ")}h`,
+          `🔒 ${auto.closeHour}h`,
+        ].join("\n"),
+        inline: false,
       },
       {
-        name: `${EMO.planning} Planning`,
-        value: `Draft: ${fmtCh(draft.planningChannelId)}\nActuel: ${fmtCh(saved.planningChannelId)}`,
-        inline: true,
-      },
-      {
-        name: `${EMO.annonces} Annonces`,
-        value: `Draft: ${fmtCh(draft.annoncesChannelId)}\nActuel: ${fmtCh(saved.annoncesChannelId)}`,
-        inline: true,
-      },
-      {
-        name: `${EMO.staff} Staff`,
-        value: `Draft: ${fmtRole(draft.staffRoleId)}\nActuel: ${fmtRole(saved.staffRoleId)}`,
-        inline: true,
-      },
-      {
-        name: `${EMO.player} Joueur`,
-        value: `Draft: ${fmtRole(draft.playerRoleId)}\nActuel: ${fmtRole(saved.playerRoleId)}`,
-        inline: true,
-      },
-      {
-        name: `${EMO.trial} Essai`,
-        value: `Draft: ${fmtRole(draft.trialRoleId)}\nActuel: ${fmtRole(saved.trialRoleId)}`,
-        inline: true,
+        name: "ID",
+        value: fmtId(guild.id),
+        inline: false,
       }
     )
-    .setFooter({ text: "XIG BLAUGRANA FC Staff — Setup" });
+    .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+}
+
+function isOwnerScope(interaction, componentInteraction, scope) {
+  return (
+    componentInteraction.user.id === interaction.user.id &&
+    typeof componentInteraction.customId === "string" &&
+    componentInteraction.customId.endsWith(scope)
+  );
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Configurer le bot (salons + rôles).")
+    .setDescription("Configurer le bot (salons + rôles + automations).")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
-    if (!interaction.inGuild()) {
-      return interaction.reply({
-        content: "Utilisable uniquement dans un serveur.",
-        flags: FLAGS_EPHEMERAL,
+    try {
+      if (!interaction.inGuild()) {
+        return interaction.reply({ content: ICON.no, ephemeral: EPHEMERAL });
+      }
+
+      if (!interaction.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+        return interaction.reply({ content: ICON.no, ephemeral: EPHEMERAL });
+      }
+
+      const guild = interaction.guild;
+      const guildId = guild.id;
+
+      // Saved config (safe)
+      const saved = getGuildConfig(guildId) || {};
+      saved.automations = normalizeAutomations(saved);
+
+      // Draft
+      const draft = {
+        // salons
+        disposChannelId: saved.disposChannelId || null,
+        staffReportsChannelId: saved.staffReportsChannelId || null,
+        commandsChannelId: saved.commandsChannelId || null,
+        planningChannelId: saved.planningChannelId || null,
+        annoncesChannelId: saved.annoncesChannelId || null,
+
+        // rôles
+        staffRoleId: saved.staffRoleId || null,
+        playerRoleId: saved.playerRoleId || null,
+        trialRoleId: saved.trialRoleId || null,
+      };
+
+      // Scope
+      const scope = `${guildId}:${interaction.user.id}`;
+      const CID = {
+        // salons
+        dispos: `setup:dispos:${scope}`,
+        staffReports: `setup:staffReports:${scope}`,
+        commands: `setup:commands:${scope}`,
+        planning: `setup:planning:${scope}`,
+        annonces: `setup:annonces:${scope}`,
+
+        // rôles
+        staff: `setup:staff:${scope}`,
+        player: `setup:player:${scope}`,
+        trial: `setup:trial:${scope}`,
+
+        // actions
+        save: `setup:save:${scope}`,
+        reset: `setup:reset:${scope}`,
+        cancel: `setup:cancel:${scope}`,
+        autoToggle: `setup:auto:${scope}`,
+      };
+
+      // Components (Message 1): salons principaux + boutons (2 rows de boutons max)
+      const rowDispos = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(CID.dispos)
+          .setPlaceholder(`${ICON.dispos} Dispos`)
+          .setMinValues(0)
+          .setMaxValues(1)
+          .addChannelTypes(ChannelType.GuildText)
+      );
+
+      const rowStaffReports = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(CID.staffReports)
+          .setPlaceholder(`${ICON.staffReports} Staff (rapports)`)
+          .setMinValues(0)
+          .setMaxValues(1)
+          .addChannelTypes(ChannelType.GuildText)
+      );
+
+      const rowCommands = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(CID.commands)
+          .setPlaceholder(`${ICON.commands} Commandes (opt)`)
+          .setMinValues(0)
+          .setMaxValues(1)
+          .addChannelTypes(ChannelType.GuildText)
+      );
+
+      const rowPlanning = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(CID.planning)
+          .setPlaceholder(`${ICON.planning} Planning (opt)`)
+          .setMinValues(0)
+          .setMaxValues(1)
+          .addChannelTypes(ChannelType.GuildText)
+      );
+
+      // Buttons row (emoji-only) — mobile safe
+      const rowActions1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(CID.save).setLabel(ICON.save).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(CID.reset).setLabel(ICON.reset).setStyle(ButtonStyle.Secondary)
+      );
+
+      // Message 1 send (5 rows max)
+      await interaction.reply({
+        embeds: [buildDashboardEmbed(guild, draft, saved)],
+        components: [rowDispos, rowStaffReports, rowCommands, rowPlanning, rowActions1],
+        ephemeral: EPHEMERAL,
       });
-    }
 
-    const guild = interaction.guild;
-    const guildId = guild.id;
-    const member = interaction.member;
+      // Components (Message 2): annonces + rôles + auto/cancel (2 boutons)
+      const rowAnnonces = new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(CID.annonces)
+          .setPlaceholder(`${ICON.annonces} Annonces (opt)`)
+          .setMinValues(0)
+          .setMaxValues(1)
+          .addChannelTypes(ChannelType.GuildText)
+      );
 
-    if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({
-        content: "Tu dois être Administrateur.",
-        flags: FLAGS_EPHEMERAL,
-      });
-    }
-
-    const saved = getGuildConfig(guildId) || {};
-
-    const draft = {
-      commandsChannelId: saved.commandsChannelId || null,
-      disposChannelId: saved.disposChannelId || null,
-      planningChannelId: saved.planningChannelId || null,
-      annoncesChannelId: saved.annoncesChannelId || null,
-      staffRoleId: saved.staffRoleId || null,
-      playerRoleId: saved.playerRoleId || null,
-      trialRoleId: saved.trialRoleId || null,
-    };
-
-    const scope = `${guildId}:${interaction.user.id}`;
-    const CID = {
-      commands: `setup:commands:${scope}`,
-      dispos: `setup:dispos:${scope}`,
-      planning: `setup:planning:${scope}`,
-      annonces: `setup:annonces:${scope}`,
-
-      staff: `setup:staff:${scope}`,
-      player: `setup:player:${scope}`,
-      trial: `setup:trial:${scope}`,
-
-      save: `setup:save:${scope}`,
-      reset: `setup:reset:${scope}`,
-      cancel: `setup:cancel:${scope}`,
-    };
-
-    const embed = embedSummary(guild, draft, saved);
-
-    const rowChannels1 = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder()
-        .setCustomId(CID.commands)
-        .setPlaceholder(`${EMO.commands} Salon commandes`)
-        .addChannelTypes(ChannelType.GuildText)
-        .setMinValues(0)
-        .setMaxValues(1)
-    );
-
-    const rowChannels2 = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder()
-        .setCustomId(CID.dispos)
-        .setPlaceholder(`${EMO.dispos} Salon dispos`)
-        .addChannelTypes(ChannelType.GuildText)
-        .setMinValues(0)
-        .setMaxValues(1)
-    );
-
-    const rowChannels3 = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder()
-        .setCustomId(CID.planning)
-        .setPlaceholder(`${EMO.planning} Salon planning`)
-        .addChannelTypes(ChannelType.GuildText)
-        .setMinValues(0)
-        .setMaxValues(1)
-    );
-
-    const rowChannels4 = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder()
-        .setCustomId(CID.annonces)
-        .setPlaceholder(`${EMO.annonces} Salon annonces`)
-        .addChannelTypes(ChannelType.GuildText)
-        .setMinValues(0)
-        .setMaxValues(1)
-    );
-
-    const rowRoles = [
-      new ActionRowBuilder().addComponents(
+      const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
-          .setPlaceholder(`${EMO.staff} Rôle Staff`)
+          .setPlaceholder(`${ICON.staff} Staff`)
           .setMinValues(0)
           .setMaxValues(1)
-      ),
-      new ActionRowBuilder().addComponents(
+      );
+
+      const rowRolePlayer = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.player)
-          .setPlaceholder(`${EMO.player} Rôle Joueur`)
+          .setPlaceholder(`${ICON.player} Joueur`)
           .setMinValues(0)
           .setMaxValues(1)
-      ),
-      new ActionRowBuilder().addComponents(
+      );
+
+      const rowRoleTrial = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.trial)
-          .setPlaceholder(`${EMO.trial} Rôle Essai`)
+          .setPlaceholder(`${ICON.trial} Essai (opt)`)
           .setMinValues(0)
           .setMaxValues(1)
-      ),
-    ];
+      );
 
-    const rowButtons = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(CID.save)
-        .setLabel(EMO.save)     // 💾
-        .setStyle(ButtonStyle.Success),
+      const rowActions2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(CID.autoToggle)
+          .setLabel(saved.automations.enabled ? ICON.autoOn : ICON.autoOff)
+          .setStyle(saved.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(CID.cancel).setLabel(ICON.cancel).setStyle(ButtonStyle.Danger)
+      );
 
-      new ButtonBuilder()
-        .setCustomId(CID.reset)
-        .setLabel(EMO.reset)    // 🔄
-        .setStyle(ButtonStyle.Secondary),
-
-      new ButtonBuilder()
-        .setCustomId(CID.cancel)
-        .setLabel(EMO.cancel)   // ❎
-        .setStyle(ButtonStyle.Danger)
-    );
-
-    await interaction.reply({
-      embeds: [embed],
-      components: [rowChannels1, rowChannels2, rowChannels3, rowChannels4, rowButtons],
-      flags: FLAGS_EPHEMERAL,
-    });
-
-    const rolesMsg = await interaction.followUp({
-      content: "Sélection des rôles :",
-      components: rowRoles,
-      flags: FLAGS_EPHEMERAL,
-    });
-
-    const mainMsg = await interaction.fetchReply();
-    const isOwner = (id) => id.endsWith(scope);
-
-    const refresh = async () => {
-      const e = embedSummary(guild, draft, saved);
-      await interaction.editReply({
-        embeds: [e],
-        components: [rowChannels1, rowChannels2, rowChannels3, rowChannels4, rowButtons],
+      const msg2 = await interaction.followUp({
+        content: "🧩",
+        components: [rowAnnonces, rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
+        ephemeral: EPHEMERAL,
       });
-    };
 
-    const collectorMain = mainMsg.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 10 * 60 * 1000,
-    });
+      const mainMsg = await interaction.fetchReply();
 
-    // LISTENERS
-    mainMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 })
-      .on("collect", async (i) => {
-        if (i.user.id !== interaction.user.id || !isOwner(i.customId)) {
-          return i.reply({ content: "Pas pour toi.", flags: FLAGS_EPHEMERAL });
-        }
+      const refresh = async () => {
+        // refresh auto button state
+        rowActions2.components[0].setLabel(saved.automations.enabled ? ICON.autoOn : ICON.autoOff);
+        rowActions2.components[0].setStyle(saved.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
-        if (i.isChannelSelectMenu()) {
-          const v = i.values?.[0] || null;
-          if (i.customId === CID.commands) draft.commandsChannelId = v;
-          if (i.customId === CID.dispos) draft.disposChannelId = v;
-          if (i.customId === CID.planning) draft.planningChannelId = v;
-          if (i.customId === CID.annonces) draft.annoncesChannelId = v;
+        await interaction.editReply({
+          embeds: [buildDashboardEmbed(guild, draft, saved)],
+          components: [rowDispos, rowStaffReports, rowCommands, rowPlanning, rowActions1],
+        });
 
-          await i.deferUpdate();
-          await refresh();
-          return;
-        }
+        await msg2.edit({
+          content: "🧩",
+          components: [rowAnnonces, rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
+        }).catch(() => {});
+      };
 
-        if (i.isButton()) {
-          if (i.customId === CID.reset) {
-            Object.keys(draft).forEach((k) => (draft[k] = null));
+      const collectorMain = mainMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 });
+      const collector2 = msg2.createMessageComponentCollector({ time: 10 * 60 * 1000 });
+
+      const stopAll = (reason) => {
+        try { collectorMain.stop(reason); } catch {}
+        try { collector2.stop(reason); } catch {}
+      };
+
+      // Message 1 collector
+      collectorMain.on("collect", async (i) => {
+        try {
+          if (!isOwnerScope(interaction, i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true });
+          }
+
+          if (i.isChannelSelectMenu()) {
+            const v = i.values?.[0] || null;
+
+            if (i.customId === CID.dispos) draft.disposChannelId = v;
+            if (i.customId === CID.staffReports) draft.staffReportsChannelId = v;
+            if (i.customId === CID.commands) draft.commandsChannelId = v;
+            if (i.customId === CID.planning) draft.planningChannelId = v;
+
             await i.deferUpdate();
-            await refresh();
-            return;
+            return refresh();
           }
 
-          if (i.customId === CID.cancel) {
-            return i.update({
-              content: "Setup annulé.",
-              embeds: [],
-              components: [],
-            });
+          if (i.isButton()) {
+            if (i.customId === CID.reset) {
+              draft.disposChannelId = null;
+              draft.staffReportsChannelId = null;
+              draft.commandsChannelId = null;
+              draft.planningChannelId = null;
+              draft.annoncesChannelId = null;
+
+              draft.staffRoleId = null;
+              draft.playerRoleId = null;
+              draft.trialRoleId = null;
+
+              saved.automations = { ...DEFAULT_AUTOMATIONS };
+
+              await i.deferUpdate();
+              return refresh();
+            }
+
+            if (i.customId === CID.save) {
+              // requis : 📅 + 📊 + 🛡️ + 👟
+              const requiredOk =
+                !!draft.disposChannelId &&
+                !!draft.staffReportsChannelId &&
+                !!draft.staffRoleId &&
+                !!draft.playerRoleId;
+
+              if (!requiredOk) {
+                return i.reply({ content: ICON.warn, ephemeral: true });
+              }
+
+              const patch = {
+                botLabel: "XIG BLAUGRANA FC Staff",
+                guildName: guild.name,
+
+                // salons
+                disposChannelId: draft.disposChannelId,
+                staffReportsChannelId: draft.staffReportsChannelId,
+                commandsChannelId: draft.commandsChannelId,
+                planningChannelId: draft.planningChannelId,
+                annoncesChannelId: draft.annoncesChannelId,
+
+                // rôles
+                staffRoleId: draft.staffRoleId,
+                playerRoleId: draft.playerRoleId,
+                trialRoleId: draft.trialRoleId,
+
+                // auto
+                automations: normalizeAutomations(saved),
+
+                setupBy: interaction.user.id,
+                setupAt: new Date().toISOString(),
+              };
+
+              const savedNow = upsertGuildConfig(guildId, patch);
+              Object.assign(saved, savedNow);
+              saved.automations = normalizeAutomations(saved);
+
+              stopAll("saved");
+
+              await i.update({
+                content: ICON.save,
+                embeds: [buildDashboardEmbed(guild, draft, saved)],
+                components: [],
+              });
+
+              await msg2.edit({ content: ICON.save, components: [] }).catch(() => {});
+              return;
+            }
           }
-
-          if (i.customId === CID.save) {
-            const data = {
-              commandsChannelId: draft.commandsChannelId,
-              disposChannelId: draft.disposChannelId,
-              planningChannelId: draft.planningChannelId,
-              annoncesChannelId: draft.annoncesChannelId,
-              staffRoleId: draft.staffRoleId,
-              playerRoleId: draft.playerRoleId,
-              trialRoleId: draft.trialRoleId,
-              setupBy: interaction.user.id,
-              setupAt: new Date().toISOString(),
-            };
-
-            const savedNow = upsertGuildConfig(guildId, data);
-            Object.assign(saved, savedNow);
-
-            await i.update({
-              content: "💾 Configuration enregistrée.",
-              embeds: [embedSummary(guild, draft, saved)],
-              components: [],
-            });
-
-            await rolesMsg.edit({ content: "Configuration enregistrée.", components: [] });
-            return;
-          }
+        } catch (e) {
+          warn("setup collectorMain error:", e);
+          try {
+            if (!i.deferred && !i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
+          } catch {}
         }
       });
 
-    rolesMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 })
-      .on("collect", async (i) => {
-        if (i.user.id !== interaction.user.id || !isOwner(i.customId)) {
-          return i.reply({ content: "Pas pour toi.", flags: FLAGS_EPHEMERAL });
-        }
+      // Message 2 collector
+      collector2.on("collect", async (i) => {
+        try {
+          if (!isOwnerScope(interaction, i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true });
+          }
 
-        if (i.isRoleSelectMenu()) {
-          const v = i.values?.[0] || null;
-          if (i.customId === CID.staff) draft.staffRoleId = v;
-          if (i.customId === CID.player) draft.playerRoleId = v;
-          if (i.customId === CID.trial) draft.trialRoleId = v;
+          if (i.isChannelSelectMenu()) {
+            const v = i.values?.[0] || null;
+            if (i.customId === CID.annonces) draft.annoncesChannelId = v;
 
-          await i.deferUpdate();
-          await refresh();
+            await i.deferUpdate();
+            return refresh();
+          }
+
+          if (i.isRoleSelectMenu()) {
+            const v = i.values?.[0] || null;
+
+            if (i.customId === CID.staff) draft.staffRoleId = v;
+            if (i.customId === CID.player) draft.playerRoleId = v;
+            if (i.customId === CID.trial) draft.trialRoleId = v;
+
+            await i.deferUpdate();
+            return refresh();
+          }
+
+          if (i.isButton()) {
+            if (i.customId === CID.autoToggle) {
+              saved.automations = normalizeAutomations(saved);
+              saved.automations.enabled = !saved.automations.enabled;
+
+              await i.deferUpdate();
+              return refresh();
+            }
+
+            if (i.customId === CID.cancel) {
+              stopAll("cancel");
+
+              await i.update({ content: ICON.cancel, components: [] }).catch(() => {});
+              try {
+                await interaction.editReply({ content: ICON.cancel, embeds: [], components: [] });
+              } catch {}
+              return;
+            }
+          }
+        } catch (e) {
+          warn("setup collector2 error:", e);
+          try {
+            if (!i.deferred && !i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
+          } catch {}
         }
       });
 
-    log(`[SETUP] lancé par ${interaction.user.tag} sur ${guild.name} (${guildId})`);
+      collectorMain.on("end", async (_c, reason) => {
+        if (reason === "time") {
+          try {
+            await interaction.editReply({ content: ICON.time, embeds: [], components: [] });
+          } catch {}
+          try {
+            await msg2.edit({ content: ICON.time, components: [] });
+          } catch {}
+        }
+      });
+
+      log(`[SETUP COMPLET] ${interaction.user.tag} sur ${guild.name} (${guildId})`);
+    } catch (e) {
+      warn("[SETUP_ERROR]", e);
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: ICON.warn, ephemeral: true });
+        } else {
+          await interaction.followUp({ content: ICON.warn, ephemeral: true });
+        }
+      } catch {}
+    }
   },
 };
