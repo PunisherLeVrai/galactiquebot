@@ -3,6 +3,7 @@
 // Confirmations en followUp éphémère (✅ ❌ 🔔 📊 🔒 ♻️ ⚙️ 🛑 ⚠️)
 // Rappel (🔔) envoyé dans le salon DISPO
 // + ♻️ reopen (reset votes + rouvre + réutilise les mêmes messages)
+// CommonJS — discord.js v14
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getGuildConfig, upsertGuildConfig } = require("./guildConfig");
@@ -11,20 +12,27 @@ const { buildDayEmbed, buildStaffReportEmbed } = require("./disposWeekRenderer")
 const { buildRows } = require("./disposWeekButtons");
 const { warn } = require("./logger");
 
+// Marqueur interne (pour distinguer deferUpdate vs deferReply)
+const ACK_MODE = Symbol("ACK_MODE");
+
 /**
  * ACK robuste pour boutons:
  * - deferUpdate() = le plus fiable (accuse réception sans "répondre")
- * - fallback deferReply() si nécessaire
+ * - fallback deferReply({ephemeral:true}) si nécessaire
+ * Retourne true/false.
  */
 async function safeAck(interaction) {
   try {
     if (interaction.deferred || interaction.replied) return true;
+
     await interaction.deferUpdate(); // ✅ ACK instant bouton
+    interaction[ACK_MODE] = "update";
     return true;
   } catch {
     try {
       if (!interaction.deferred && !interaction.replied) {
         await interaction.deferReply({ ephemeral: true });
+        interaction[ACK_MODE] = "reply";
         return true;
       }
     } catch {}
@@ -35,30 +43,35 @@ async function safeAck(interaction) {
 /**
  * Message éphémère après ACK:
  * - si deferUpdate() => followUp éphémère
- * - si deferReply() => editReply
+ * - si deferReply()  => editReply (éphémère déjà)
  * - sinon reply éphémère
  */
 async function safeEphemeral(interaction, content) {
-  try {
-    if (interaction.deferred && !interaction.replied) {
-      // cas deferReply() -> edit
-      // cas deferUpdate() -> followUp
-      // Discord ne fournit pas un flag direct, on fait un essai followUp puis fallback editReply
-      try {
-        await interaction.followUp({ content, ephemeral: true });
-        return;
-      } catch {
-        await interaction.editReply({ content });
-        return;
-      }
-    }
+  const msg = String(content || "").slice(0, 2000) || "⚠️";
 
-    if (!interaction.replied) {
-      await interaction.reply({ content, ephemeral: true });
+  try {
+    const mode = interaction[ACK_MODE];
+
+    if (mode === "update") {
+      // Après deferUpdate, on ne peut PAS editReply (pas de reply). On followUp.
+      await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
       return;
     }
 
-    await interaction.followUp({ content, ephemeral: true });
+    if (mode === "reply") {
+      // Après deferReply, on editReply.
+      await interaction.editReply({ content: msg }).catch(() => {});
+      return;
+    }
+
+    // fallback standard
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    // déjà répondu ailleurs
+    await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
   } catch {}
 }
 
@@ -74,11 +87,9 @@ function parseCustomId(customId) {
   if (parts.length === 5) {
     return { scope: parts[1], action: parts[2], sessionId: parts[3], dayKey: parts[4] };
   }
-
   if (parts.length === 4) {
     return { scope: parts[1], action: parts[2], sessionId: parts[3], dayKey: null };
   }
-
   return null;
 }
 
@@ -103,26 +114,31 @@ async function safeFetchMessage(channel, messageId) {
 }
 
 async function refreshDayMessage(client, guildName, cfg, session, day) {
-  const channel = await fetchTextChannel(client, session.channelId);
-  if (!channel) return;
+  try {
+    const channel = await fetchTextChannel(client, session.channelId);
+    if (!channel) return;
 
-  const msg = await safeFetchMessage(channel, day.messageId);
-  if (!msg) return;
+    const msg = await safeFetchMessage(channel, day.messageId);
+    if (!msg) return;
 
-  const embed = buildDayEmbed({ guildName, session, day });
-  const rows = buildRows({
-    sessionId: session.sessionId,
-    dayKey: day.key,
-    closed: session.closed,
-    automationsEnabled: !!cfg?.automations?.enabled,
-  });
+    const embed = buildDayEmbed({ guildName, session, day });
+    const rows = buildRows({
+      sessionId: session.sessionId,
+      dayKey: day.key,
+      closed: session.closed,
+      automationsEnabled: !!cfg?.automations?.enabled,
+    });
 
-  await msg.edit({ embeds: [embed], components: rows }).catch(() => {});
+    await msg.edit({ embeds: [embed], components: rows }).catch(() => {});
+  } catch (e) {
+    warn("[DISPO_REFRESH_DAY_ERROR]", e);
+  }
 }
 
 async function refreshAllMessages(client, guildName, cfg, session) {
   for (const day of session.days || []) {
     if (!day.messageId) continue;
+    // séquentiel pour éviter rate limit mobile/railway
     await refreshDayMessage(client, guildName, cfg, session, day);
   }
 }
@@ -131,13 +147,14 @@ async function computeNonRespondingPlayers(guild, cfg, session, dayKey) {
   if (!cfg?.playerRoleId) return [];
 
   try {
-    await guild.members.fetch();
+    // Assure cache membres à jour si possible
+    await guild.members.fetch().catch(() => {});
   } catch {}
 
   const dayVotes = session.votes?.[dayKey] || { present: [], absent: [] };
   const responded = new Set([...(dayVotes.present || []), ...(dayVotes.absent || [])]);
 
-  const players = guild.members.cache.filter((m) => m.roles.cache.has(cfg.playerRoleId));
+  const players = guild.members.cache.filter((m) => m?.roles?.cache?.has(cfg.playerRoleId));
   const non = [];
   for (const m of players.values()) {
     if (!responded.has(m.user.id)) non.push(m.user.id);
@@ -156,7 +173,9 @@ async function handleVote(interaction, cfg, session, day, status) {
   await safeEphemeral(interaction, status === "present" ? "✅" : "❌");
 
   const freshSession = getSession(interaction.guildId, session.sessionId);
-  await refreshDayMessage(interaction.client, interaction.guild.name, cfg, freshSession, day);
+  if (freshSession) {
+    await refreshDayMessage(interaction.client, interaction.guild.name, cfg, freshSession, day);
+  }
 }
 
 async function handleStaffRemind(interaction, cfg, session, day) {
@@ -203,23 +222,25 @@ async function sendOneDayReport(interaction, cfg, session, day) {
     nonRespondingPlayerIds: nonIds,
   });
 
-  await staffChannel.send({ embeds: [embed] });
-  return true;
+  try {
+    await staffChannel.send({ embeds: [embed] });
+    return true;
+  } catch (e) {
+    warn("[DISPO_REPORT_SEND_ERROR]", e);
+    return false;
+  }
 }
 
 async function handleStaffReport(interaction, cfg, session, dayOrNull) {
   try {
-    // jour
+    // Rapport du jour
     if (dayOrNull) {
-      const ok = await sendOneDayReport(interaction, cfg, session, dayOrNull).catch((e) => {
-        warn("[DISPO_REPORT_SEND_DAY_ERROR]", e);
-        return false;
-      });
+      const ok = await sendOneDayReport(interaction, cfg, session, dayOrNull);
       await safeEphemeral(interaction, ok ? "📊" : "⚠️");
       return;
     }
 
-    // semaine (tous les jours)
+    // Rapport semaine (tous les jours)
     const days = session.days || [];
     if (!days.length) {
       await safeEphemeral(interaction, "⚠️");
@@ -228,17 +249,15 @@ async function handleStaffReport(interaction, cfg, session, dayOrNull) {
 
     let sent = 0;
     for (const d of days) {
-      try {
-        const ok = await sendOneDayReport(interaction, cfg, session, d);
-        if (ok) sent++;
-      } catch (e) {
-        warn("[DISPO_REPORT_SEND_ERROR]", e);
-      }
+      // petite pause pour limiter rate limit
+      const ok = await sendOneDayReport(interaction, cfg, session, d);
+      if (ok) sent++;
+      await new Promise((r) => setTimeout(r, 150));
     }
 
     await safeEphemeral(interaction, sent > 0 ? "📊" : "⚠️");
   } catch (e) {
-    warn("[DISPO_REPORT_ERROR]", e);
+    warn("[DISPO_REPORT_FATAL]", e);
     await safeEphemeral(interaction, "⚠️");
   }
 }
@@ -251,7 +270,8 @@ async function handleStaffClose(interaction, cfg, session) {
   }
 
   const fresh = getSession(interaction.guildId, session.sessionId);
-  await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
+  if (fresh) await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
+
   await safeEphemeral(interaction, "🔒");
 }
 
@@ -263,7 +283,8 @@ async function handleStaffReopen(interaction, cfg, session) {
   }
 
   const fresh = getSession(interaction.guildId, session.sessionId);
-  await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
+  if (fresh) await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
+
   await safeEphemeral(interaction, "♻️");
 }
 
@@ -279,8 +300,8 @@ async function handleStaffAutoToggle(interaction, cfg, session) {
       },
     });
 
-    const freshCfg = getGuildConfig(interaction.guildId) || {};
-    const freshSession = getSession(interaction.guildId, session.sessionId);
+    const freshCfg = getGuildConfig(interaction.guildId) || cfg;
+    const freshSession = getSession(interaction.guildId, session.sessionId) || session;
 
     await refreshAllMessages(interaction.client, interaction.guild.name, freshCfg, freshSession);
     await safeEphemeral(interaction, next ? "⚙️" : "🛑");
@@ -291,7 +312,7 @@ async function handleStaffAutoToggle(interaction, cfg, session) {
 }
 
 async function handleDispoButton(interaction) {
-  // ✅ ACK avant tout
+  // ✅ ACK avant tout (sinon symbole attention)
   await safeAck(interaction);
 
   try {
@@ -314,26 +335,30 @@ async function handleDispoButton(interaction) {
 
     const session = getSession(interaction.guildId, parsed.sessionId);
     if (!session) {
-      // Ancien message après redeploy / session supprimée
+      // Cas classique après redeploy / purge: message ancien, session introuvable
       await safeEphemeral(interaction, "♻️");
       return true;
     }
 
     const day = parsed.dayKey ? (session.days || []).find((d) => d.key === parsed.dayKey) : null;
 
+    // --- VOTES ---
     if (parsed.scope === "vote") {
       if (!day) {
         await safeEphemeral(interaction, "⚠️");
         return true;
       }
+
       if (parsed.action === "present" || parsed.action === "absent") {
         await handleVote(interaction, cfg, session, day, parsed.action);
         return true;
       }
+
       await safeEphemeral(interaction, "⚠️");
       return true;
     }
 
+    // --- STAFF ---
     if (parsed.scope === "staff") {
       if (!isStaffAllowed(interaction.member, cfg)) {
         await safeEphemeral(interaction, "⛔");
@@ -350,7 +375,8 @@ async function handleDispoButton(interaction) {
       }
 
       if (parsed.action === "report") {
-        await handleStaffReport(interaction, cfg, session, day); // day null => semaine
+        // day null => rapport semaine
+        await handleStaffReport(interaction, cfg, session, day);
         return true;
       }
 
