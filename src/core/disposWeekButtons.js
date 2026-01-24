@@ -1,21 +1,16 @@
 // src/core/disposWeekButtons.js
-// Construction des boutons Dispos (public + staff)
-// CommonJS — discord.js v14
+// Construction des boutons Dispo — CommonJS
 
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
 /**
- * CustomId format (compact, stable):
- * - Votes:  dispo:vote:<present|absent>:<sessionId>:<dayKey>
- * - Staff:  dispo:staff:<remind|report|close|auto>:<sessionId>:<dayKey>
- *
- * Note: sessionId/dayKey doivent rester courts pour respecter la limite 100 chars.
+ * customId:
+ * - vote:  dispo:vote:<present|absent>:<sessionId>:<dayKey>
+ * - staff: dispo:staff:<remind|report|close|auto>:<sessionId>:<dayKey>
  */
-
 function buildRows({ sessionId, dayKey, closed, automationsEnabled }) {
   const isClosed = !!closed;
 
-  // Row public (présent/absent)
   const rowPublic = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`dispo:vote:present:${sessionId}:${dayKey}`)
@@ -29,7 +24,6 @@ function buildRows({ sessionId, dayKey, closed, automationsEnabled }) {
       .setDisabled(isClosed)
   );
 
-  // Row staff (rappel/rapport/fermer/auto)
   const rowStaff = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`dispo:staff:remind:${sessionId}:${dayKey}`)
@@ -46,13 +40,11 @@ function buildRows({ sessionId, dayKey, closed, automationsEnabled }) {
       .setDisabled(isClosed),
     new ButtonBuilder()
       .setCustomId(`dispo:staff:auto:${sessionId}:${dayKey}`)
-      .setLabel(automationsEnabled ? "Automations: ON" : "Automations: OFF")
+      .setLabel(automationsEnabled ? "Auto: ON" : "Auto: OFF")
       .setStyle(automationsEnabled ? ButtonStyle.Success : ButtonStyle.Secondary)
   );
 
   return [rowPublic, rowStaff];
 }
 
-module.exports = {
-  buildRows,
-};
+module.exports = { buildRows };
