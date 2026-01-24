@@ -1,11 +1,11 @@
 // src/core/disposWeekButtonsHandler.js
 // Gestion boutons Dispo — ACK immédiat (fix "Échec de l'interaction")
-// Rappel (🔔) envoyé dans le salon DISPO (cfg.disposChannelId)
-// CommonJS — discord.js v14
+// Rappel (🔔) envoyé dans le salon DISPO
+// + ♻️ reopen (reset votes + rouvre + réutilise les mêmes messages)
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getGuildConfig, upsertGuildConfig } = require("./guildConfig");
-const { getSession, setVote, closeSession } = require("./disposWeekStore");
+const { getSession, setVote, closeSession, reopenSession } = require("./disposWeekStore");
 const { buildDayEmbed, buildStaffReportEmbed } = require("./disposWeekRenderer");
 const { buildRows } = require("./disposWeekButtons");
 
@@ -81,7 +81,6 @@ async function refreshAllMessages(client, guildName, cfg, session) {
 async function computeNonRespondingPlayers(guild, cfg, session, dayKey) {
   if (!cfg?.playerRoleId) return [];
 
-  // ⚠️ peut être long -> defer déjà fait
   try {
     await guild.members.fetch();
   } catch {}
@@ -122,9 +121,7 @@ async function handleStaffRemind(interaction, cfg, session, day) {
   }
 
   const mentions = nonIds.map((id) => `<@${id}>`);
-  const content =
-    `🔔 **${day.label}**\n` +
-    (mentions.length ? mentions.join(" ") : "—");
+  const content = `🔔 **${day.label}**\n` + (mentions.length ? mentions.join(" ") : "—");
 
   await dispoChannel.send({ content }).catch(() => null);
   await safeReply(interaction, "🔔");
@@ -165,6 +162,19 @@ async function handleStaffClose(interaction, cfg, session) {
   const fresh = getSession(interaction.guildId, session.sessionId);
   await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
   await safeReply(interaction, "🔒");
+}
+
+async function handleStaffReopen(interaction, cfg, session) {
+  // ✅ reset votes + reopen (option 1)
+  const reopened = reopenSession(interaction.guildId, session.sessionId, interaction.user.id);
+  if (!reopened) {
+    await safeReply(interaction, "⚠️");
+    return;
+  }
+
+  const fresh = getSession(interaction.guildId, session.sessionId);
+  await refreshAllMessages(interaction.client, interaction.guild.name, cfg, fresh);
+  await safeReply(interaction, "♻️");
 }
 
 async function handleStaffAutoToggle(interaction, cfg, session) {
@@ -232,10 +242,26 @@ async function handleDispoButton(interaction) {
       return true;
     }
 
-    if (parsed.action === "remind") return (await handleStaffRemind(interaction, cfg, session, day), true);
-    if (parsed.action === "report") return (await handleStaffReport(interaction, cfg, session, day), true);
-    if (parsed.action === "close") return (await handleStaffClose(interaction, cfg, session), true);
-    if (parsed.action === "auto") return (await handleStaffAutoToggle(interaction, cfg, session), true);
+    if (parsed.action === "remind") {
+      await handleStaffRemind(interaction, cfg, session, day);
+      return true;
+    }
+    if (parsed.action === "report") {
+      await handleStaffReport(interaction, cfg, session, day);
+      return true;
+    }
+    if (parsed.action === "close") {
+      await handleStaffClose(interaction, cfg, session);
+      return true;
+    }
+    if (parsed.action === "reopen") {
+      await handleStaffReopen(interaction, cfg, session);
+      return true;
+    }
+    if (parsed.action === "auto") {
+      await handleStaffAutoToggle(interaction, cfg, session);
+      return true;
+    }
 
     await safeReply(interaction, "⚠️");
     return true;
