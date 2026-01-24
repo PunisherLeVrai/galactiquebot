@@ -1,5 +1,7 @@
 // src/core/disposAutomation.js
 // Automations Dispo: rappel / rapport / fermeture selon config serveur — CommonJS
+// Rappel -> salon DISPO (cfg.disposChannelId)
+// Rapport -> salon STAFF (cfg.staffReportsChannelId)
 
 const { exportAllConfig, getGuildConfig } = require("./guildConfig");
 const { getLastOpenSession, getSession, closeSession } = require("./disposWeekStore");
@@ -8,7 +10,7 @@ const { buildRows } = require("./disposWeekButtons");
 const { buildDayEmbed } = require("./disposWeekRenderer");
 const { log, warn } = require("./logger");
 
-const ran = new Set(); // anti double-run
+const ran = new Set();
 
 function dateKey(d) {
   const y = d.getFullYear();
@@ -16,7 +18,6 @@ function dateKey(d) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-
 function makeRunKey({ guildId, dateK, hour, type, sessionId, dayKey }) {
   return `${guildId}|${dateK}|${hour}|${type}|${sessionId}|${dayKey || "-"}`;
 }
@@ -36,12 +37,12 @@ async function safeFetchMessage(channel, messageId) {
 async function computeNonRespondingPlayers(guild, cfg, session, dayKey) {
   if (!cfg?.playerRoleId) return [];
 
-  const dayVotes = session.votes?.[dayKey] || { present: [], absent: [] };
-  const responded = new Set([...(dayVotes.present || []), ...(dayVotes.absent || [])]);
-
   try {
     await guild.members.fetch();
   } catch {}
+
+  const dayVotes = session.votes?.[dayKey] || { present: [], absent: [] };
+  const responded = new Set([...(dayVotes.present || []), ...(dayVotes.absent || [])]);
 
   const players = guild.members.cache.filter((m) => m.roles.cache.has(cfg.playerRoleId));
   const nonIds = [];
@@ -80,10 +81,7 @@ async function sendReminder(client, guild, cfg, session, day) {
   const nonIds = await computeNonRespondingPlayers(guild, cfg, session, day.key);
   const mentions = nonIds.map((id) => `<@${id}>`);
 
-  const content =
-    `🔔 **Rappel disponibilités — ${day.label}**\n` +
-    (mentions.length ? mentions.join(" ") : "Aucun non répondant (rôle Joueur).");
-
+  const content = `🔔 **${day.label}**\n` + (mentions.length ? mentions.join(" ") : "—");
   await channel.send({ content }).catch(() => {});
 }
 
@@ -130,7 +128,7 @@ async function tick(client) {
     const reportHours = Array.isArray(cfg.automations.reportHours) ? cfg.automations.reportHours : [12, 17];
     const closeHour = cfg.automations.closeHour ?? 17;
 
-    // Rappel
+    // 🔔 Rappel
     if (hour === reminderHour) {
       for (const day of session.days || []) {
         const k = makeRunKey({ guildId, dateK: dKey, hour, type: "remind", sessionId: session.sessionId, dayKey: day.key });
@@ -145,7 +143,7 @@ async function tick(client) {
       }
     }
 
-    // Rapport
+    // 📊 Rapport
     if (reportHours.includes(hour)) {
       for (const day of session.days || []) {
         const k = makeRunKey({ guildId, dateK: dKey, hour, type: "report", sessionId: session.sessionId, dayKey: day.key });
@@ -160,7 +158,7 @@ async function tick(client) {
       }
     }
 
-    // Fermeture
+    // 🔒 Fermeture
     if (hour === closeHour) {
       const k = makeRunKey({ guildId, dateK: dKey, hour, type: "close", sessionId: session.sessionId, dayKey: "ALL" });
       if (!ran.has(k)) {
