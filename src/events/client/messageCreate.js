@@ -1,23 +1,47 @@
 // src/events/client/messageCreate.js
-// Scan pseudos dans un salon dédié: PSN OU XBOX OU EA
+// Scan pseudos dans un salon dédié: PSN / XBOX / EA
+// ✅ Salon configuré via setup: cfg.pseudo.scanChannelId
+// ✅ Priorité: PSN > XBOX > EA (en pratique: on enregistre ce que la personne envoie)
+// ✅ Parse strict + clean + limite longueur
+// ✅ Confirmation (✅) sans mention
+// ✅ Option deleteMessages
+// ✅ Anti-spam (cooldown par user)
 // CommonJS — nécessite Intent MessageContent
 
-const { getGuildConfig } = require("../../core/guildConfig");
+const { getOrCreateGuildConfig } = require("../../core/guildConfig");
 const { setUserPseudo } = require("../../core/pseudoStore");
 const { warn } = require("../../core/logger");
+
+const COOLDOWN_MS = 10_000; // 10s par user dans le salon scan
+const lastByUser = new Map(); // key: guildId:userId -> epoch
+
+function now() {
+  return Date.now();
+}
+
+function cleanValue(v) {
+  return String(v || "")
+    .replace(/[`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
+}
 
 // Parse strict : "PSN: xxx" / "XBOX: xxx" / "EA: xxx"
 function parsePseudo(content) {
   const text = String(content || "").trim();
 
-  let m = text.match(/^(psn)\s*[:\-]\s*(.+)$/i);
-  if (m) return { platform: "psn", value: m[2] };
+  // PSN
+  let m = text.match(/^(psn|playstation)\s*[:=\-]\s*(.+)$/i);
+  if (m) return { platform: "psn", value: cleanValue(m[2]) };
 
-  m = text.match(/^(xbox|xbl)\s*[:\-]\s*(.+)$/i);
-  if (m) return { platform: "xbox", value: m[2] };
+  // XBOX
+  m = text.match(/^(xbox|xbl)\s*[:=\-]\s*(.+)$/i);
+  if (m) return { platform: "xbox", value: cleanValue(m[2]) };
 
-  m = text.match(/^(ea|ea\s*id)\s*[:\-]\s*(.+)$/i);
-  if (m) return { platform: "ea", value: m[2] };
+  // EA
+  m = text.match(/^(ea|ea\s*id)\s*[:=\-]\s*(.+)$/i);
+  if (m) return { platform: "ea", value: cleanValue(m[2]) };
 
   return null;
 }
@@ -25,12 +49,16 @@ function parsePseudo(content) {
 module.exports = {
   name: "messageCreate",
   once: false,
+
   async execute(message) {
     try {
       if (!message.guild) return;
-      if (message.author.bot) return;
+      if (!message.author || message.author.bot) return;
 
-      const cfg = getGuildConfig(message.guild.id) || {};
+      const guildId = message.guild.id;
+
+      // ✅ safe + auto-create defaults
+      const cfg = getOrCreateGuildConfig(guildId);
       const pseudoCfg = cfg.pseudo || {};
 
       const scanChannelId = pseudoCfg.scanChannelId || null;
@@ -39,22 +67,22 @@ module.exports = {
       // Scan uniquement dans le salon prévu
       if (message.channel.id !== scanChannelId) return;
 
+      // Anti-spam simple
+      const k = `${guildId}:${message.author.id}`;
+      const last = lastByUser.get(k) || 0;
+      if (now() - last < COOLDOWN_MS) return;
+      lastByUser.set(k, now());
+
       const parsed = parsePseudo(message.content);
-      if (!parsed) return;
+      if (!parsed || !parsed.value) return;
 
-      const saved = setUserPseudo(
-        message.guild.id,
-        message.author.id,
-        parsed.platform,
-        parsed.value
-      );
-
+      const saved = setUserPseudo(guildId, message.author.id, parsed.platform, parsed.value);
       if (!saved) return;
 
       // Confirmation simple sans ping
       await message.react("✅").catch(() => {});
 
-      // Optionnel: supprimer pour ne pas exposer l'ID (désactivé par défaut)
+      // Optionnel: supprimer les messages (désactivé par défaut)
       if (pseudoCfg.deleteMessages === true) {
         await message.delete().catch(() => {});
       }
