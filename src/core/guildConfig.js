@@ -79,17 +79,24 @@ function safeParseJSON(raw) {
   }
 }
 
+function normalizeRootData(data) {
+  const out = data && typeof data === "object" ? data : {};
+  if (!out.version) out.version = DEFAULT_DATA.version;
+  if (!out.guilds || typeof out.guilds !== "object") out.guilds = {};
+  return out;
+}
+
 function readAll() {
   ensureConfigFile();
 
-  const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-  const data = safeParseJSON(raw);
-
-  if (!data || typeof data !== "object") return { ...DEFAULT_DATA };
-  if (!data.guilds || typeof data.guilds !== "object") data.guilds = {};
-  if (!data.version) data.version = DEFAULT_DATA.version;
-
-  return data;
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+    const parsed = safeParseJSON(raw);
+    return normalizeRootData(parsed);
+  } catch {
+    // fallback safe
+    return { ...DEFAULT_DATA };
+  }
 }
 
 // write atomique (évite fichiers corrompus si crash pendant write)
@@ -97,25 +104,44 @@ function writeAll(data) {
   ensureConfigFile();
 
   const dir = path.dirname(CONFIG_PATH);
-  const tmp = path.join(dir, `servers.tmp.${Date.now()}.json`);
+  const tmp = path.join(dir, `servers.tmp.${process.pid}.${Date.now()}.json`);
 
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmp, CONFIG_PATH);
+  const payload = normalizeRootData(data);
+
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
+    // Sur Linux (Railway), rename remplace atomiquement.
+    fs.renameSync(tmp, CONFIG_PATH);
+  } catch (e) {
+    // cleanup + fallback (au cas où)
+    try {
+      if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    } catch {}
+    // fallback non-atomique (dernier recours)
+    try {
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(payload, null, 2), "utf8");
+    } catch {}
+    throw e;
+  }
 }
 
 function mergeGuildDefaults(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
+
   const merged = {
     ...DEFAULT_GUILD_CONFIG,
     ...c,
+
     automations: {
       ...DEFAULT_GUILD_CONFIG.automations,
       ...(c.automations || {}),
     },
+
     pseudo: {
       ...DEFAULT_GUILD_CONFIG.pseudo,
       ...(c.pseudo || {}),
     },
+
     mainRoles: {
       ...DEFAULT_GUILD_CONFIG.mainRoles,
       ...(c.mainRoles || {}),
@@ -125,10 +151,11 @@ function mergeGuildDefaults(cfg) {
       cogm: { ...(DEFAULT_GUILD_CONFIG.mainRoles.cogm), ...(c.mainRoles?.cogm || {}) },
       staff: { ...(DEFAULT_GUILD_CONFIG.mainRoles.staff), ...(c.mainRoles?.staff || {}) },
     },
+
     posts: Array.isArray(c.posts) ? c.posts : [],
   };
 
-  // normalisations simples
+  // normalisations simples (évite undefined / mauvais types)
   merged.automations.reportHours = Array.isArray(merged.automations.reportHours)
     ? merged.automations.reportHours
     : DEFAULT_GUILD_CONFIG.automations.reportHours;
@@ -136,6 +163,15 @@ function mergeGuildDefaults(cfg) {
   merged.pseudo.reminderHours = Array.isArray(merged.pseudo.reminderHours)
     ? merged.pseudo.reminderHours
     : DEFAULT_GUILD_CONFIG.pseudo.reminderHours;
+
+  // heures en nombres si jamais
+  merged.automations.reminderHour = Number.isFinite(merged.automations.reminderHour)
+    ? merged.automations.reminderHour
+    : DEFAULT_GUILD_CONFIG.automations.reminderHour;
+
+  merged.automations.closeHour = Number.isFinite(merged.automations.closeHour)
+    ? merged.automations.closeHour
+    : DEFAULT_GUILD_CONFIG.automations.closeHour;
 
   return merged;
 }
@@ -148,28 +184,52 @@ function getGuildConfig(guildId) {
 
 function getOrCreateGuildConfig(guildId) {
   const data = readAll();
+
   if (!data.guilds[guildId]) {
     data.guilds[guildId] = mergeGuildDefaults({});
     data.guilds[guildId].updatedAt = new Date().toISOString();
     writeAll(data);
-  } else {
-    // s'assure que les champs existent (sans réécrire systématiquement)
-    data.guilds[guildId] = mergeGuildDefaults(data.guilds[guildId]);
+    return data.guilds[guildId];
   }
+
+  // s'assure que les champs existent ET persiste si ça change (pour stabiliser au reboot)
+  const before = data.guilds[guildId];
+  const merged = mergeGuildDefaults(before);
+
+  // compare minimal (évite JSON.stringify lourd)
+  const changed =
+    !before ||
+    before.botLabel !== merged.botLabel ||
+    before.updatedAt !== merged.updatedAt || // souvent null → string
+    !before.automations ||
+    !before.pseudo ||
+    !before.mainRoles ||
+    !Array.isArray(before.posts);
+
+  data.guilds[guildId] = merged;
+
+  if (changed) {
+    data.guilds[guildId].updatedAt = new Date().toISOString();
+    writeAll(data);
+  }
+
   return data.guilds[guildId];
 }
 
 // patch shallow + merge defaults + updatedAt
 function upsertGuildConfig(guildId, patch) {
   const data = readAll();
+
   const current = mergeGuildDefaults(data.guilds[guildId] || {});
+  const p = patch && typeof patch === "object" ? patch : {};
+
   const merged = mergeGuildDefaults({
     ...current,
-    ...patch,
-    automations: { ...current.automations, ...(patch?.automations || {}) },
-    pseudo: { ...current.pseudo, ...(patch?.pseudo || {}) },
-    mainRoles: { ...current.mainRoles, ...(patch?.mainRoles || {}) },
-    posts: Array.isArray(patch?.posts) ? patch.posts : current.posts,
+    ...p,
+    automations: { ...current.automations, ...(p.automations || {}) },
+    pseudo: { ...current.pseudo, ...(p.pseudo || {}) },
+    mainRoles: { ...current.mainRoles, ...(p.mainRoles || {}) },
+    posts: Array.isArray(p.posts) ? p.posts : current.posts,
   });
 
   merged.updatedAt = new Date().toISOString();
