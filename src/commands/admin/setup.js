@@ -1,16 +1,8 @@
 // src/commands/admin/setup.js
-// SETUP COMPLET (tout ce qu'on a défini) — Premium UI — Buttons emoji-only
-// Champs stockés:
-// - disposChannelId (📅)
-// - staffReportsChannelId (📊)
-// - commandsChannelId (⌨️) [opt]
-// - planningChannelId (🗓️) [opt]
-// - annoncesChannelId (📢) [opt]
-// - staffRoleId (🛡️)
-// - playerRoleId (👟)
-// - trialRoleId (🧪) [opt]
-// - automations: { enabled, reminderHour, reportHours, closeHour } (⚙️/🛑)
-//
+// SETUP COMPLET (salons + rôles + automations) — Premium UI — Buttons emoji-only
+// ✅ Automatisations activables ON/OFF (toggle)
+// ✅ Pas d'IDs à taper (menus)
+// ✅ 2 messages éphémères (limite 5 rows respectée)
 // CommonJS — discord.js v14
 
 const {
@@ -30,7 +22,7 @@ const { log, warn } = require("../../core/logger");
 
 const EPHEMERAL = true;
 
-// Horaires par défaut (ceux qu'on a définis)
+// Horaires par défaut
 const DEFAULT_AUTOMATIONS = {
   enabled: false,
   reminderHour: 12,      // rappel
@@ -57,14 +49,13 @@ const ICON = {
   player: "👟",
   trial: "🧪",
 
-  // actions (emoji-only)
+  // actions
   save: "💾",
   reset: "🔄",
   cancel: "❎",
   autoOn: "⚙️",
   autoOff: "🛑",
 
-  // status
   ok: "✅",
   warn: "⚠️",
   no: "⛔",
@@ -83,17 +74,18 @@ function fmtRole(id) {
 
 function normalizeAutomations(saved) {
   const a = saved?.automations || {};
+  const reportHours =
+    Array.isArray(a.reportHours) && a.reportHours.length ? a.reportHours : DEFAULT_AUTOMATIONS.reportHours;
+
   return {
     enabled: typeof a.enabled === "boolean" ? a.enabled : DEFAULT_AUTOMATIONS.enabled,
     reminderHour: Number.isFinite(a.reminderHour) ? a.reminderHour : DEFAULT_AUTOMATIONS.reminderHour,
-    reportHours: Array.isArray(a.reportHours) ? a.reportHours : DEFAULT_AUTOMATIONS.reportHours,
+    reportHours,
     closeHour: Number.isFinite(a.closeHour) ? a.closeHour : DEFAULT_AUTOMATIONS.closeHour,
   };
 }
 
-function buildDashboardEmbed(guild, draft, saved) {
-  const auto = normalizeAutomations(saved);
-
+function buildDashboardEmbed(guild, draft, auto) {
   const requiredOk =
     !!draft.disposChannelId &&
     !!draft.staffReportsChannelId &&
@@ -143,11 +135,7 @@ function buildDashboardEmbed(guild, draft, saved) {
         ].join("\n"),
         inline: false,
       },
-      {
-        name: "ID",
-        value: fmtId(guild.id),
-        inline: false,
-      }
+      { name: "ID", value: fmtId(guild.id), inline: false }
     )
     .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 }
@@ -179,20 +167,18 @@ module.exports = {
       const guild = interaction.guild;
       const guildId = guild.id;
 
-      // Saved config (safe)
+      // Saved
       const saved = getGuildConfig(guildId) || {};
-      saved.automations = normalizeAutomations(saved);
+      let auto = normalizeAutomations(saved);
 
       // Draft
       const draft = {
-        // salons
         disposChannelId: saved.disposChannelId || null,
         staffReportsChannelId: saved.staffReportsChannelId || null,
         commandsChannelId: saved.commandsChannelId || null,
         planningChannelId: saved.planningChannelId || null,
         annoncesChannelId: saved.annoncesChannelId || null,
 
-        // rôles
         staffRoleId: saved.staffRoleId || null,
         playerRoleId: saved.playerRoleId || null,
         trialRoleId: saved.trialRoleId || null,
@@ -220,7 +206,7 @@ module.exports = {
         autoToggle: `setup:auto:${scope}`,
       };
 
-      // Components (Message 1): salons principaux + boutons (2 rows de boutons max)
+      // Message 1 (4 menus salons + 1 row boutons)
       const rowDispos = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.dispos)
@@ -257,20 +243,18 @@ module.exports = {
           .addChannelTypes(ChannelType.GuildText)
       );
 
-      // Buttons row (emoji-only) — mobile safe
       const rowActions1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.save).setLabel(ICON.save).setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(CID.reset).setLabel(ICON.reset).setStyle(ButtonStyle.Secondary)
       );
 
-      // Message 1 send (5 rows max)
       await interaction.reply({
-        embeds: [buildDashboardEmbed(guild, draft, saved)],
+        embeds: [buildDashboardEmbed(guild, draft, auto)],
         components: [rowDispos, rowStaffReports, rowCommands, rowPlanning, rowActions1],
         ephemeral: EPHEMERAL,
       });
 
-      // Components (Message 2): annonces + rôles + auto/cancel (2 boutons)
+      // Message 2 (annonces + 3 roles + toggle/cancel)
       const rowAnnonces = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.annonces)
@@ -307,8 +291,8 @@ module.exports = {
       const rowActions2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(CID.autoToggle)
-          .setLabel(saved.automations.enabled ? ICON.autoOn : ICON.autoOff)
-          .setStyle(saved.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+          .setLabel(auto.enabled ? ICON.autoOn : ICON.autoOff)
+          .setStyle(auto.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(CID.cancel).setLabel(ICON.cancel).setStyle(ButtonStyle.Danger)
       );
 
@@ -321,19 +305,20 @@ module.exports = {
       const mainMsg = await interaction.fetchReply();
 
       const refresh = async () => {
-        // refresh auto button state
-        rowActions2.components[0].setLabel(saved.automations.enabled ? ICON.autoOn : ICON.autoOff);
-        rowActions2.components[0].setStyle(saved.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowActions2.components[0].setLabel(auto.enabled ? ICON.autoOn : ICON.autoOff);
+        rowActions2.components[0].setStyle(auto.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
         await interaction.editReply({
-          embeds: [buildDashboardEmbed(guild, draft, saved)],
+          embeds: [buildDashboardEmbed(guild, draft, auto)],
           components: [rowDispos, rowStaffReports, rowCommands, rowPlanning, rowActions1],
         });
 
-        await msg2.edit({
-          content: "🧩",
-          components: [rowAnnonces, rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
-        }).catch(() => {});
+        await msg2
+          .edit({
+            content: "🧩",
+            components: [rowAnnonces, rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
+          })
+          .catch(() => {});
       };
 
       const collectorMain = mainMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 });
@@ -344,12 +329,9 @@ module.exports = {
         try { collector2.stop(reason); } catch {}
       };
 
-      // Message 1 collector
       collectorMain.on("collect", async (i) => {
         try {
-          if (!isOwnerScope(interaction, i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true });
-          }
+          if (!isOwnerScope(interaction, i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -375,56 +357,54 @@ module.exports = {
               draft.playerRoleId = null;
               draft.trialRoleId = null;
 
-              saved.automations = { ...DEFAULT_AUTOMATIONS };
+              auto = { ...DEFAULT_AUTOMATIONS };
 
               await i.deferUpdate();
               return refresh();
             }
 
             if (i.customId === CID.save) {
-              // requis : 📅 + 📊 + 🛡️ + 👟
               const requiredOk =
                 !!draft.disposChannelId &&
                 !!draft.staffReportsChannelId &&
                 !!draft.staffRoleId &&
                 !!draft.playerRoleId;
 
-              if (!requiredOk) {
-                return i.reply({ content: ICON.warn, ephemeral: true });
-              }
+              if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
               const patch = {
                 botLabel: "XIG BLAUGRANA FC Staff",
                 guildName: guild.name,
 
-                // salons
                 disposChannelId: draft.disposChannelId,
                 staffReportsChannelId: draft.staffReportsChannelId,
                 commandsChannelId: draft.commandsChannelId,
                 planningChannelId: draft.planningChannelId,
                 annoncesChannelId: draft.annoncesChannelId,
 
-                // rôles
                 staffRoleId: draft.staffRoleId,
                 playerRoleId: draft.playerRoleId,
                 trialRoleId: draft.trialRoleId,
 
-                // auto
-                automations: normalizeAutomations(saved),
+                automations: {
+                  enabled: !!auto.enabled,
+                  reminderHour: auto.reminderHour,
+                  reportHours: Array.isArray(auto.reportHours) ? auto.reportHours : DEFAULT_AUTOMATIONS.reportHours,
+                  closeHour: auto.closeHour,
+                },
 
                 setupBy: interaction.user.id,
                 setupAt: new Date().toISOString(),
               };
 
-              const savedNow = upsertGuildConfig(guildId, patch);
-              Object.assign(saved, savedNow);
-              saved.automations = normalizeAutomations(saved);
+              const savedNow = upsertGuildConfig(guildId, patch) || {};
+              auto = normalizeAutomations(savedNow);
 
               stopAll("saved");
 
               await i.update({
                 content: ICON.save,
-                embeds: [buildDashboardEmbed(guild, draft, saved)],
+                embeds: [buildDashboardEmbed(guild, draft, auto)],
                 components: [],
               });
 
@@ -440,12 +420,9 @@ module.exports = {
         }
       });
 
-      // Message 2 collector
       collector2.on("collect", async (i) => {
         try {
-          if (!isOwnerScope(interaction, i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true });
-          }
+          if (!isOwnerScope(interaction, i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -468,19 +445,19 @@ module.exports = {
 
           if (i.isButton()) {
             if (i.customId === CID.autoToggle) {
-              saved.automations = normalizeAutomations(saved);
-              saved.automations.enabled = !saved.automations.enabled;
-
+              auto.enabled = !auto.enabled;
               await i.deferUpdate();
               return refresh();
             }
 
             if (i.customId === CID.cancel) {
               stopAll("cancel");
-
               await i.update({ content: ICON.cancel, components: [] }).catch(() => {});
               try {
                 await interaction.editReply({ content: ICON.cancel, embeds: [], components: [] });
+              } catch {}
+              try {
+                await msg2.edit({ content: ICON.cancel, components: [] });
               } catch {}
               return;
             }
@@ -504,7 +481,7 @@ module.exports = {
         }
       });
 
-      log(`[SETUP COMPLET] ${interaction.user.tag} sur ${guild.name} (${guildId})`);
+      log(`[SETUP] ${interaction.user.tag} sur ${guild.name} (${guildId})`);
     } catch (e) {
       warn("[SETUP_ERROR]", e);
       try {
