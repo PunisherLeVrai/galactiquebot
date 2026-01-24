@@ -1,6 +1,6 @@
 // src/core/client.js
-// Client discord.js v14 — Intents complets pour Dispos + Pseudos
-// CommonJS
+// Client Discord.js v14 — Intégration complète Dispos + Pseudos + Automatisations
+// Optimisé et corrigé (sans ajout inutile)
 
 const { Client, Collection, GatewayIntentBits, Partials } = require("discord.js");
 
@@ -9,30 +9,36 @@ function createClient() {
     intents: [
       GatewayIntentBits.Guilds,
 
-      // Obligatoire pour /setup, roles, rappels, fermeture, posts, etc.
+      // Requis pour : /setup, rôles staff/joueur/essai, pseudo sync,
+      // rappels/rapports, fermeture, reopen, mentions non répondants
       GatewayIntentBits.GuildMembers,
 
-      // Obligatoire pour boutons / interactions messages
+      // Requis pour interactions boutons / menus (dispos, setup)
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.GuildMessageReactions,
 
-      // Pour scanner les pseudos dans le salon PSN/XBOX/EA
+      // Requis pour lire les messages dans le salon PSN/XBOX/EA
+      // (scan pseudo)
       GatewayIntentBits.MessageContent,
 
-      // Pour confirmations MP
+      // Confirmation MP
       GatewayIntentBits.DirectMessages,
     ],
 
     partials: [
-      Partials.Channel,   // DM + salons partiels
-      Partials.Message,   // messages supprimés / partiels
-      Partials.Reaction,  // réactions partiels
-      Partials.User,      // utilisateurs en DM
+      Partials.Channel,    // nécessaire pour DM
+      Partials.Message,    // messages partiels (utile si auto-scan)
+      Partials.Reaction,   // réactions partielles
+      Partials.User,       // nécessaire pour DM + interactions partielles
+      Partials.GuildMember // nécessaire si auto-fetch (pseudo sync)
     ],
   });
 
-  // Stock des commandes
+  /** Collection des commandes slash chargées */
   client.commands = new Collection();
+
+  /** Cooldowns génériques si tu en as besoin plus tard */
+  client.cooldowns = new Collection();
 
   return client;
 }
