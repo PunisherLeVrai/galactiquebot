@@ -1,5 +1,5 @@
 // src/commands/dispos/dispo.js
-// /dispo -> crée 1 à 7 messages (jours au choix), mode embed/image/both, images upload
+// /dispo create (jours 1-7) + /dispo reopen (option 1: réutiliser messages)
 // CommonJS — discord.js v14
 
 const {
@@ -9,7 +9,13 @@ const {
 } = require("discord.js");
 
 const { getGuildConfig } = require("../../core/guildConfig");
-const { createSession, updateSessionDay, getSession } = require("../../core/disposWeekStore");
+const {
+  createSession,
+  updateSessionDay,
+  getSession,
+  reopenSession,
+  getLastSession,
+} = require("../../core/disposWeekStore");
 const { buildDayEmbed } = require("../../core/disposWeekRenderer");
 const { buildRows } = require("../../core/disposWeekButtons");
 
@@ -49,57 +55,124 @@ function isStaffAllowed(member, cfg) {
   return false;
 }
 
+async function fetchTextChannel(client, channelId) {
+  if (!channelId) return null;
+  const ch = await client.channels.fetch(channelId).catch(() => null);
+  if (!ch || typeof ch.send !== "function") return null;
+  return ch;
+}
+
+async function safeFetchMessage(channel, messageId) {
+  if (!channel || !messageId) return null;
+  return channel.messages.fetch(messageId).catch(() => null);
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("dispo")
-    .setDescription("Créer des disponibilités (1 à 7 jours).")
-    .addStringOption((opt) =>
-      opt
-        .setName("jours")
-        .setDescription("Ex: lun,mar,mer ou all")
-        .setRequired(true)
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName("mode")
-        .setDescription("Affichage")
-        .addChoices(
-          { name: "Embed", value: "embed" },
-          { name: "Image", value: "image" },
-          { name: "Embed + Image", value: "both" }
+    .setDescription("Disponibilités")
+    .addSubcommand((s) =>
+      s
+        .setName("create")
+        .setDescription("Créer des dispos (1 à 7 jours).")
+        .addStringOption((opt) =>
+          opt.setName("jours").setDescription("Ex: lun,mar,mer ou all").setRequired(true)
         )
-        .setRequired(true)
+        .addStringOption((opt) =>
+          opt
+            .setName("mode")
+            .setDescription("Affichage")
+            .addChoices(
+              { name: "Embed", value: "embed" },
+              { name: "Image", value: "image" },
+              { name: "Embed+Image", value: "both" }
+            )
+            .setRequired(true)
+        )
+        .addAttachmentOption((o) => o.setName("img1").setDescription("Image 1").setRequired(false))
+        .addAttachmentOption((o) => o.setName("img2").setDescription("Image 2").setRequired(false))
+        .addAttachmentOption((o) => o.setName("img3").setDescription("Image 3").setRequired(false))
+        .addAttachmentOption((o) => o.setName("img4").setDescription("Image 4").setRequired(false))
+        .addAttachmentOption((o) => o.setName("img5").setDescription("Image 5").setRequired(false))
+        .addAttachmentOption((o) => o.setName("img6").setDescription("Image 6").setRequired(false))
+        .addAttachmentOption((o) => o.setName("img7").setDescription("Image 7").setRequired(false))
     )
-    .addAttachmentOption((o) => o.setName("img1").setDescription("Image 1").setRequired(false))
-    .addAttachmentOption((o) => o.setName("img2").setDescription("Image 2").setRequired(false))
-    .addAttachmentOption((o) => o.setName("img3").setDescription("Image 3").setRequired(false))
-    .addAttachmentOption((o) => o.setName("img4").setDescription("Image 4").setRequired(false))
-    .addAttachmentOption((o) => o.setName("img5").setDescription("Image 5").setRequired(false))
-    .addAttachmentOption((o) => o.setName("img6").setDescription("Image 6").setRequired(false))
-    .addAttachmentOption((o) => o.setName("img7").setDescription("Image 7").setRequired(false))
+    .addSubcommand((s) =>
+      s
+        .setName("reopen")
+        .setDescription("Rouvrir la dernière session (reset votes) en réutilisant les mêmes messages.")
+    )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   async execute(interaction) {
     if (!interaction.inGuild()) {
-      return interaction.reply({ content: "Commande utilisable uniquement dans un serveur.", ephemeral: EPHEMERAL });
+      return interaction.reply({ content: "⛔", ephemeral: EPHEMERAL });
     }
 
     const cfg = getGuildConfig(interaction.guildId);
     if (!cfg) {
-      return interaction.reply({ content: "Serveur non configuré. Lance `/setup`.", ephemeral: EPHEMERAL });
+      return interaction.reply({ content: "⚙️", ephemeral: EPHEMERAL });
     }
 
     if (!isStaffAllowed(interaction.member, cfg)) {
-      return interaction.reply({ content: "Commande réservée au staff.", ephemeral: EPHEMERAL });
+      return interaction.reply({ content: "⛔", ephemeral: EPHEMERAL });
     }
 
+    const sub = interaction.options.getSubcommand(true);
+
+    // =======================
+    // /dispo reopen
+    // =======================
+    if (sub === "reopen") {
+      const last = getLastSession(interaction.guildId);
+      if (!last) {
+        return interaction.reply({ content: "⚠️", ephemeral: EPHEMERAL });
+      }
+
+      // on reset votes + reopen (sans toucher aux messageId)
+      const reopened = reopenSession(interaction.guildId, last.sessionId, interaction.user.id);
+      if (!reopened) {
+        return interaction.reply({ content: "⚠️", ephemeral: EPHEMERAL });
+      }
+
+      // on édite les messages existants (option 1)
+      const channel = await fetchTextChannel(interaction.client, reopened.channelId);
+      if (!channel) {
+        return interaction.reply({ content: "⚠️", ephemeral: EPHEMERAL });
+      }
+
+      await interaction.reply({ content: "🔄", ephemeral: EPHEMERAL });
+
+      for (const day of reopened.days || []) {
+        if (!day.messageId) continue;
+
+        const msg = await safeFetchMessage(channel, day.messageId);
+        if (!msg) continue;
+
+        const embed = buildDayEmbed({ guildName: interaction.guild.name, session: reopened, day });
+        const rows = buildRows({
+          sessionId: reopened.sessionId,
+          dayKey: day.key,
+          closed: reopened.closed,
+          automationsEnabled: !!cfg?.automations?.enabled,
+        });
+
+        await msg.edit({ embeds: [embed], components: rows }).catch(() => {});
+      }
+
+      return interaction.followUp({ content: "✅", ephemeral: EPHEMERAL });
+    }
+
+    // =======================
+    // /dispo create
+    // =======================
     if (!cfg.disposChannelId) {
-      return interaction.reply({ content: "Salon Dispos non configuré. Fais `/setup`.", ephemeral: EPHEMERAL });
+      return interaction.reply({ content: "📅", ephemeral: EPHEMERAL });
     }
 
-    const channel = await interaction.client.channels.fetch(cfg.disposChannelId).catch(() => null);
+    const channel = await fetchTextChannel(interaction.client, cfg.disposChannelId);
     if (!channel || channel.type !== ChannelType.GuildText) {
-      return interaction.reply({ content: "Salon Dispos invalide (doit être un salon texte).", ephemeral: EPHEMERAL });
+      return interaction.reply({ content: "⚠️", ephemeral: EPHEMERAL });
     }
 
     const daysInput = interaction.options.getString("jours", true);
@@ -107,10 +180,7 @@ module.exports = {
 
     const selectedDays = parseDays(daysInput);
     if (!selectedDays) {
-      return interaction.reply({
-        content: "Paramètre `jours` invalide. Exemple: `lun,mar,mer` ou `all`.",
-        ephemeral: EPHEMERAL,
-      });
+      return interaction.reply({ content: "⚠️", ephemeral: EPHEMERAL });
     }
 
     const imageUrls = [];
@@ -131,7 +201,7 @@ module.exports = {
     });
 
     await interaction.reply({
-      content: `Création des dispos : **${days.length}** jour(s) dans ${channel} (session \`${session.sessionId}\`).`,
+      content: "✅",
       ephemeral: EPHEMERAL,
     });
 
@@ -147,12 +217,12 @@ module.exports = {
       const msg = await channel.send({ embeds: [embed], components: rows });
       updateSessionDay(interaction.guildId, session.sessionId, day.key, { messageId: msg.id });
 
-      if (idx < session.days.length - 1) await new Promise((r) => setTimeout(r, 250));
+      if (idx < session.days.length - 1) await new Promise((r) => setTimeout(r, 200));
     }
 
     const fresh = getSession(interaction.guildId, session.sessionId);
     await interaction.followUp({
-      content: `✅ Dispos créées. Messages: **${fresh.days.filter((d) => d.messageId).length}**.`,
+      content: `📅 ${fresh.days.filter((d) => d.messageId).length}`,
       ephemeral: EPHEMERAL,
     });
   },
