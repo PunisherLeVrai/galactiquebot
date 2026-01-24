@@ -4,31 +4,58 @@
 // RÔLE = déterministe (ordre fixe), ignore hiérarchie Discord
 // POSTE = 0..3 postes (labels depuis setup) join par "/"
 // Aucun bloc vide après "|" (on omet les blocs absents)
+// ✅ Gestion accents + underscore + espaces multiples (username)
+// ✅ Nettoyage des pseudos plateformes (trim / collapse spaces / limite)
 // CommonJS
 
 const pseudoStore = require("./pseudoStore");
 
+function cleanValue(v, max = 40) {
+  if (!v) return "";
+  return String(v)
+    .replace(/[`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
 function cleanUsername(raw) {
   if (!raw) return "User";
 
-  // Supprime chiffres + caractères spéciaux, garde lettres uniquement
-  let name = String(raw).replace(/[0-9]/g, "");
-  name = name.replace(/[^a-zA-Z]/g, "");
+  // garde lettres + espaces (retire chiffres + symboles) + enlève accents
+  const noAccents = String(raw)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "");
 
-  if (!name.length) return "User";
-  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+  const lettersSpaces = noAccents
+    .replace(/[^a-zA-Z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!lettersSpaces) return "User";
+
+  // Maj au début, le reste en minuscules (plus stable/clean)
+  return lettersSpaces.charAt(0).toUpperCase() + lettersSpaces.slice(1).toLowerCase();
 }
 
 function getBestName(member) {
   if (!member) return "User";
 
-  // On lit les pseudos stockés (peut contenir plusieurs plateformes)
-  const entry = pseudoStore.getUserPseudos(member.guild.id, member.user.id);
+  const guildId = member.guild?.id;
+  const userId = member.user?.id;
+  if (!guildId || !userId) return "User";
+
+  // pseudos stockés
+  const entry = pseudoStore.getUserPseudos(guildId, userId);
 
   // Priorité stricte : PSN > XBOX > EA
-  if (entry?.psn) return entry.psn;
-  if (entry?.xbox) return entry.xbox;
-  if (entry?.ea) return entry.ea;
+  const psn = cleanValue(entry?.psn);
+  const xbox = cleanValue(entry?.xbox);
+  const ea = cleanValue(entry?.ea);
+
+  if (psn) return psn;
+  if (xbox) return xbox;
+  if (ea) return ea;
 
   // Fallback : username clean
   return cleanUsername(member.user?.username || "");
@@ -36,7 +63,7 @@ function getBestName(member) {
 
 function hasRole(member, roleId) {
   if (!member || !roleId) return false;
-  return member.roles.cache.has(roleId);
+  return member.roles?.cache?.has(roleId) === true;
 }
 
 /**
@@ -64,14 +91,17 @@ function resolveMainRole(member, mainRoles = {}) {
  * cfg.posts = [{ id, label }]
  */
 function resolvePosts(member, postDefs = []) {
+  const defs = Array.isArray(postDefs) ? postDefs : [];
   const posts = [];
-  for (const p of postDefs) {
+
+  for (const p of defs) {
     if (!p?.id) continue;
     if (hasRole(member, p.id)) {
-      posts.push(p.label || "POSTE");
+      posts.push(cleanValue(p.label || "POSTE", 24) || "POSTE");
       if (posts.length >= 3) break;
     }
   }
+
   return posts;
 }
 
@@ -82,6 +112,7 @@ function buildMemberLine(member, cfg = {}) {
   const postList = resolvePosts(member, cfg.posts || []);
   const postStr = postList.length ? postList.join("/") : null;
 
+  // Aucun bloc vide après "|"
   const parts = [name];
   if (role) parts.push(role);
   if (postStr) parts.push(postStr);
@@ -92,6 +123,7 @@ function buildMemberLine(member, cfg = {}) {
 module.exports = {
   buildMemberLine,
   cleanUsername,
+  getBestName,
   resolveMainRole,
   resolvePosts,
 };
