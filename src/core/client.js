@@ -1,21 +1,17 @@
 // src/core/client.js
-// Création du client Discord (discord.js v14)
-// CommonJS — optimisé RAM (intents minimum nécessaires)
-
 const { Client, Collection, GatewayIntentBits, Partials } = require("discord.js");
 
 function createClient() {
   const client = new Client({
     intents: [
-      GatewayIntentBits.Guilds,          // nécessaire pour interactions (slash/buttons)
-      GatewayIntentBits.GuildMembers,    // nécessaire pour calculer non répondants (rôle Joueur)
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers, // utile pour roles/mentions/rappels
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.DirectMessages, // pour confirmations en MP si tu veux
     ],
-    partials: [
-      Partials.Channel,                  // sécurité: accès à certains channels partiels
-    ],
+    partials: [Partials.Channel], // nécessaire pour DM
   });
 
-  // Collection commandes
   client.commands = new Collection();
 
   return client;
