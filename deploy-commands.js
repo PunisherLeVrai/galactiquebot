@@ -1,40 +1,95 @@
+// deploy-commands.js
+// Enregistre (ou supprime) les slash commands discord.js v14
+// CommonJS
+
 require("dotenv").config();
+
 const fs = require("fs");
 const path = require("path");
 const { REST, Routes } = require("discord.js");
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID; // optionnel (si défini => deploy serveur)
+const NUKE = String(process.env.NUKE || "").toLowerCase() === "true";
 
-if (!TOKEN || !CLIENT_ID) {
-  console.error("TOKEN et CLIENT_ID sont requis.");
+if (!TOKEN) {
+  console.error("[DEPLOY] Missing env TOKEN");
+  process.exit(1);
+}
+if (!CLIENT_ID) {
+  console.error("[DEPLOY] Missing env CLIENT_ID");
   process.exit(1);
 }
 
-function collectCommands() {
+function walkJsFiles(dir) {
+  const out = [];
+  if (!fs.existsSync(dir)) return out;
+
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkJsFiles(full));
+    else if (entry.isFile() && entry.name.endsWith(".js")) out.push(full);
+  }
+  return out;
+}
+
+function loadCommandsJSON() {
+  const commandsDir = path.join(__dirname, "src", "commands");
+  const files = walkJsFiles(commandsDir);
+
   const commands = [];
-  const commandsPath = path.join(process.cwd(), "src", "commands");
+  let ok = 0;
+  let skipped = 0;
 
-  const walk = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && entry.name.endsWith(".js")) {
-        const cmd = require(full);
-        if (cmd?.data?.toJSON) commands.push(cmd.data.toJSON());
-      }
+  for (const file of files) {
+    let mod = null;
+    try {
+      mod = require(file);
+    } catch (e) {
+      console.warn("[DEPLOY] require failed:", file, e?.message || e);
+      skipped++;
+      continue;
     }
-  };
 
-  walk(commandsPath);
+    if (!mod?.data?.name || typeof mod.execute !== "function") {
+      skipped++;
+      continue;
+    }
+
+    commands.push(mod.data.toJSON());
+    ok++;
+  }
+
+  console.log(`[DEPLOY] Commands found: ${ok} (skipped ${skipped})`);
   return commands;
 }
 
-(async () => {
+async function main() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  const commands = collectCommands();
 
-  console.log(`Déploiement des commandes globales (${commands.length})...`);
-  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log("Déploiement terminé.");
-})();
+  // Choix route: guild ou global
+  const route = GUILD_ID
+    ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
+    : Routes.applicationCommands(CLIENT_ID);
+
+  const scopeLabel = GUILD_ID ? `GUILD ${GUILD_ID}` : "GLOBAL";
+
+  if (NUKE) {
+    console.log(`[DEPLOY] NUKE=true -> clearing commands (${scopeLabel})...`);
+    await rest.put(route, { body: [] });
+    console.log(`[DEPLOY] Commands cleared (${scopeLabel}).`);
+    return;
+  }
+
+  const commands = loadCommandsJSON();
+
+  console.log(`[DEPLOY] Deploying ${commands.length} commands (${scopeLabel})...`);
+  await rest.put(route, { body: commands });
+  console.log(`[DEPLOY] Deploy complete (${scopeLabel}).`);
+}
+
+main().catch((err) => {
+  console.error("[DEPLOY_ERROR]", err);
+  process.exit(1);
+});
