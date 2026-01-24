@@ -1,21 +1,12 @@
 // src/core/pseudoSync.js
-// Sync PSEUDO 1 fois par heure (silencieux) — CommonJS
-// ✅ Priorité: PSN > XBOX > EA > Username
-// ✅ Nick forcé: PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3 (jamais vide)
-// ✅ Pas de hiérarchie: on overwrite (si permissions OK)
-// ✅ RAM-friendly: fetch members activable + yield
-// Dépendances:
-// - guildConfig: exportAllConfig/getGuildConfig
-// - pseudoStore: getUserPseudos/setUserPseudo
-// - cfg.mainRoles + cfg.posts (déjà dans guildConfig)
-// - cfg.pseudo.syncEnabled / syncFetchMembers
-// - cfg.playerRoleId (utilisé seulement si tu veux limiter — ici: NON, tout le monde)
+// Sync 1 fois par heure (silencieux) — renomme les membres avec le format memberDisplay
+// CommonJS
 
 const { exportAllConfig, getGuildConfig } = require("./guildConfig");
-const { getUserPseudos, setUserPseudo } = require("./pseudoStore");
+const { buildMemberLine } = require("./memberDisplay");
 const { log, warn } = require("./logger");
 
-const ran = new Set(); // hourKey
+const ran = new Set();
 
 function hourKey(date) {
   const y = date.getFullYear();
@@ -25,102 +16,55 @@ function hourKey(date) {
   return `${y}-${m}-${d}-${h}`;
 }
 
-function normalizeValue(v, max = 40) {
-  if (!v) return "";
-  return String(v)
-    .replace(/[`]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+// limite Discord nickname: 32 chars
+function clampNick(nick) {
+  const s = String(nick || "").trim();
+  if (!s) return null;
+  return s.length > 32 ? s.slice(0, 32) : s;
 }
 
-function normalizeUsername(username) {
-  const raw = String(username || "");
+function shouldTargetMember(member, cfg) {
+  if (!member || member.user?.bot) return false;
 
-  // retire accents
-  const noAccents = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  // On cible en priorité les gens "du roster" (player/trial/staff),
+  // et aussi ceux qui ont un mainRole ou un poste configuré.
+  const staffRoleId = cfg.staffRoleId || null;
+  const playerRoleId = cfg.playerRoleId || null;
+  const trialRoleId = cfg.trialRoleId || null;
 
-  // supprime chiffres + caractères spéciaux (garde lettres + espaces)
-  const lettersOnly = noAccents
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  if (staffRoleId && member.roles.cache.has(staffRoleId)) return true;
+  if (playerRoleId && member.roles.cache.has(playerRoleId)) return true;
+  if (trialRoleId && member.roles.cache.has(trialRoleId)) return true;
 
-  if (!lettersOnly) return "User";
-
-  // majuscule au début (le reste en minuscules)
-  return lettersOnly.charAt(0).toUpperCase() + lettersOnly.slice(1).toLowerCase();
-}
-
-function pickPriorityPseudo(entry, fallbackUsername) {
-  const psn = normalizeValue(entry?.psn, 40);
-  const xbox = normalizeValue(entry?.xbox, 40);
-  const ea = normalizeValue(entry?.ea, 40);
-
-  if (psn) return psn;
-  if (xbox) return xbox;
-  if (ea) return ea;
-
-  return normalizeUsername(fallbackUsername);
-}
-
-function pickRoleLabel(member, cfg) {
-  const map = cfg?.mainRoles || {};
-  const order = [
-    { key: "president", label: "Président" },
-    { key: "fondateur", label: "Fondateur" },
-    { key: "gm", label: "GM" },
-    { key: "cogm", label: "coGM" },
-    { key: "staff", label: "Staff" },
-  ];
-
-  for (const it of order) {
-    const id = map?.[it.key]?.id;
-    if (id && member.roles.cache.has(id)) return it.label;
+  // mainRoles
+  const mr = cfg.mainRoles || {};
+  for (const key of ["president", "fondateur", "gm", "cogm", "staff"]) {
+    const id = mr?.[key]?.id || null;
+    if (id && member.roles.cache.has(id)) return true;
   }
 
-  return "Membre";
-}
-
-function pickPostsLabel(member, cfg) {
-  const posts = Array.isArray(cfg?.posts) ? cfg.posts : [];
-  const found = [];
-
+  // posts
+  const posts = Array.isArray(cfg.posts) ? cfg.posts : [];
   for (const p of posts) {
-    const roleId = p?.id;
-    if (!roleId) continue;
-
-    if (member.roles.cache.has(roleId)) {
-      const label = String(p.label || "").trim() || "Poste";
-      found.push(label);
-      if (found.length >= 3) break;
-    }
+    if (p?.id && member.roles.cache.has(p.id)) return true;
   }
 
-  return found.length ? found.join("/") : "—";
-}
-
-function buildNick(pseudo, roleLabel, postsLabel) {
-  const p = String(pseudo || "").trim() || "User";
-  const r = String(roleLabel || "").trim() || "Membre";
-  const po = String(postsLabel || "").trim() || "—";
-  return `${p} | ${r} | ${po}`;
+  // sinon on skip (évite de renommer tout le serveur)
+  return false;
 }
 
 async function syncGuild(client, guildId) {
   const cfg = getGuildConfig(guildId) || {};
   const pseudoCfg = cfg.pseudo || {};
 
-  if (!pseudoCfg.syncEnabled) return;
+  // ON/OFF
+  if (pseudoCfg.syncEnabled === false) return;
 
-  const guild =
-    client.guilds.cache.get(guildId) ||
-    (await client.guilds.fetch(guildId).catch(() => null));
-
+  const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
 
-  // Option RAM: fetch complet activable (défaut true)
-  const fetchMembers = pseudoCfg.syncFetchMembers !== false;
+  // fetch membres (recommandé)
+  const fetchMembers = pseudoCfg.syncFetchMembers !== false; // défaut true
   if (fetchMembers) {
     try {
       await guild.members.fetch();
@@ -134,33 +78,33 @@ async function syncGuild(client, guildId) {
   let changed = 0;
 
   for (const member of guild.members.cache.values()) {
-    if (!member || member.user?.bot) continue;
+    if (!shouldTargetMember(member, cfg)) continue;
 
-    const entry = getUserPseudos(guildId, member.user.id);
+    const targetNick = clampNick(buildMemberLine(member, cfg));
+    if (!targetNick) continue;
 
-    // Normalise sans changer la plateforme (PSN/XBOX/EA restent prioritaires)
-    if (entry?.psn) setUserPseudo(guildId, member.user.id, "psn", normalizeValue(entry.psn, 40));
-    if (entry?.xbox) setUserPseudo(guildId, member.user.id, "xbox", normalizeValue(entry.xbox, 40));
-    if (entry?.ea) setUserPseudo(guildId, member.user.id, "ea", normalizeValue(entry.ea, 40));
+    // nickname actuel (ou username fallback)
+    const current = (member.nickname || "").trim();
 
-    const pseudo = pickPriorityPseudo(entry, member.user.username);
-    const roleLabel = pickRoleLabel(member, cfg);
-    const postsLabel = pickPostsLabel(member, cfg);
-    const targetNick = buildNick(pseudo, roleLabel, postsLabel);
+    if (current === targetNick) {
+      processed++;
+      continue;
+    }
 
-    const currentNick = member.nickname || null;
-    if (currentNick !== targetNick) {
-      // force le changement (si permissions OK)
-      try {
-        await member.setNickname(targetNick, "PSEUDO_SYNC");
-        changed++;
-      } catch {
-        // pas de permissions / hiérarchie -> on ignore
-      }
+    try {
+      // NOTE: Discord refuse si le bot n'a pas permission / rôle au-dessus.
+      await member.setNickname(targetNick, "Pseudo sync (hourly)");
+      changed++;
+    } catch (e) {
+      // silencieux mais loggable
+      warn(
+        `[PSEUDO_SYNC] setNickname failed guild=${guildId} user=${member.user.id} (${member.user.tag})`,
+        e?.message || e
+      );
     }
 
     processed++;
-    if (processed % 500 === 0) await new Promise((r) => setTimeout(r, 50));
+    if (processed % 250 === 0) await new Promise((r) => setTimeout(r, 150));
   }
 
   log(`[PSEUDO_SYNC] guild=${guildId} processed=${processed} changed=${changed}`);
@@ -174,7 +118,6 @@ async function tick(client) {
 
   const all = exportAllConfig();
   const guildIds = Object.keys(all.guilds || {});
-
   for (const guildId of guildIds) {
     try {
       await syncGuild(client, guildId);
@@ -185,6 +128,7 @@ async function tick(client) {
 }
 
 function startPseudoSync(client) {
+  // check toutes les minutes, mais exécute 1 fois/heure via hourKey()
   setInterval(() => {
     tick(client).catch(() => {});
   }, 60 * 1000);
