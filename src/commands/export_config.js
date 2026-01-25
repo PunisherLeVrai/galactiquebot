@@ -3,9 +3,9 @@
 // CommonJS — discord.js v14
 
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { exportAllConfig, CONFIG_PATH } = require("../core/guildConfig");
+const { exportAllConfig, getGuildConfig, CONFIG_PATH } = require("../core/guildConfig");
 
-// Même helper que pseudo.js
+// Même helper que /setup et /pseudo
 function isStaff(member, cfg) {
   if (!member) return false;
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
@@ -31,23 +31,21 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
     .setDescription("Export de la configuration du serveur (servers.json).")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // garde-fou minimal
+    // garde-fou minimal côté Discord; le vrai contrôle est STAFF ONLY ci-dessous
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) {
-        return interaction.reply({ content: "⛔", ephemeral: true });
-      }
+      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
 
-      const { getGuildConfig } = require("../core/guildConfig");
       const cfg = getGuildConfig(interaction.guildId) || {};
 
-      // ----- STAFF ONLY -----
+      // ✅ STAFF ONLY
       if (!isStaff(interaction.member, cfg)) {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const data = exportAllConfig();
+      const data = exportAllConfig(); // normalisé par guildConfig.js
       const json = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(json, "utf8");
 
