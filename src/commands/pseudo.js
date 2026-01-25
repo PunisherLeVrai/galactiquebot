@@ -1,156 +1,153 @@
-// src/core/memberDisplay.js
-// Format: "PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3"
-//
-// PSEUDO priorité: PSN > XBOX > EA > username Discord
-// ✅ Préfixe obligatoire: psn:/xbox:/ea:
-// RÔLE priorité: Président > Fondateur > GM > coGM > STAFF
-// ✅ Rôle: détection par NOM des rôles (Président, Fondateur, GM, coGM, Staff)
-// ✅ Staff fallback: si membre a un des cfg.staffRoleIds (setup) -> "STAFF"
-// POSTES: max 3, ordre cfg.postRoleIds (0..25)
-// ✅ Postes: libellé = nom du rôle Discord (pas de label poste)
+// src/commands/pseudo.js
+// Mise à jour ou affichage du pseudo joueur
+// Support: psn / xbox / ea / auto-scan
+// Format final: "PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3"
+// CommonJS — discord.js v14
 
-const { PermissionFlagsBits } = require("discord.js");
-const { getUserPseudos } = require("./pseudoStore");
+const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  EmbedBuilder,
+} = require("discord.js");
 
-function normalizeUsername(username) {
-  const raw = String(username || "");
-  const noAccents = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-  const lettersOnly = noAccents
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!lettersOnly) return "User";
-  return lettersOnly.charAt(0).toUpperCase() + lettersOnly.slice(1).toLowerCase();
-}
-
-function cleanValue(v, max = 40) {
-  return String(v || "")
-    .replace(/[`|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
-}
-
-function ensurePrefix(platform, value) {
-  const v = cleanValue(value);
-  if (!v) return "";
-
-  const p = String(platform || "").toLowerCase();
-  const wanted = `${p}:`;
-
-  const lowered = v.toLowerCase();
-
-  // déjà OK
-  if (lowered.startsWith(wanted)) {
-    const rest = v.slice(wanted.length).trim().replace(/^\/+/, "");
-    return `${wanted}${rest}`.trim();
-  }
-
-  // tolère "psn:/xxx" ou "/xxx"
-  if (lowered.startsWith(`${wanted}/`)) {
-    const rest = v.slice((wanted + "/").length).trim();
-    return `${wanted}${rest}`.trim();
-  }
-
-  return `${wanted}${v}`.trim();
-}
-
-function pickBestPseudo(member) {
-  const entry = getUserPseudos(member.guild.id, member.user.id);
-
-  const psn = cleanValue(entry?.psn);
-  const xbox = cleanValue(entry?.xbox);
-  const ea = cleanValue(entry?.ea);
-
-  if (psn) return ensurePrefix("psn", psn);
-  if (xbox) return ensurePrefix("xbox", xbox);
-  if (ea) return ensurePrefix("ea", ea);
-
-  return normalizeUsername(member.user?.username);
-}
-
-function hasAnyRoleId(member, roleIds) {
-  const ids = Array.isArray(roleIds) ? roleIds : [];
-  return ids.some((id) => id && member.roles.cache.has(String(id)));
-}
-
-function roleNameMatches(roleName, keyword) {
-  const a = String(roleName || "").toLowerCase();
-  const k = String(keyword || "").toLowerCase();
-  return a === k || a.includes(k);
-}
-
-function resolveMainRole(member, cfg) {
-  if (!member) return null;
-
-  const isAdmin = member.permissions?.has?.(PermissionFlagsBits.Administrator);
-
-  // Priorité demandée (par NOM de rôle Discord)
-  const order = [
-    { keywords: ["président", "president"], label: "Président" },
-    { keywords: ["fondateur", "founder"], label: "Fondateur" },
-    { keywords: ["gm"], label: "GM" },
-    { keywords: ["cogm", "co gm", "co-gm"], label: "coGM" },
-    { keywords: ["staff"], label: "STAFF" },
-  ];
-
-  const roles = member.roles?.cache;
-  if (roles) {
-    for (const it of order) {
-      for (const kw of it.keywords) {
-        const found = roles.find((r) => roleNameMatches(r?.name, kw));
-        if (found) return it.label;
-      }
-    }
-  }
-
-  // Fallback STAFF si rôle staff configuré (setup) ou admin
-  const staffRoleIds = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
-  if (hasAnyRoleId(member, staffRoleIds) || isAdmin) return "STAFF";
-
-  return null;
-}
-
-function resolvePosts(member, cfg) {
-  // Nouveau format: cfg.postRoleIds (0..25)
-  // Compat: si tu as encore cfg.posts [{roleId,label}] on récupère roleId
-  const ids = Array.isArray(cfg?.postRoleIds)
-    ? cfg.postRoleIds
-    : Array.isArray(cfg?.posts)
-      ? cfg.posts.map((p) => p?.roleId).filter(Boolean)
-      : [];
-
-  const ordered = ids.map(String).filter(Boolean);
-  const out = [];
-
-  for (const roleId of ordered) {
-    const role = member.roles.cache.get(roleId);
-    if (!role) continue;
-
-    const name = cleanValue(role.name, 16);
-    out.push(name || "POSTE");
-
-    if (out.length >= 3) break;
-  }
-
-  return out;
-}
-
-function buildMemberLine(member, cfg) {
-  const pseudo = pickBestPseudo(member);
-  const role = resolveMainRole(member, cfg);
-  const posts = resolvePosts(member, cfg);
-
-  const parts = [pseudo];
-  if (role) parts.push(role);
-  if (posts.length) parts.push(posts.join("/"));
-
-  return parts.join(" | ");
-}
+const { getGuildConfig } = require("../core/guildConfig");
+const { setUserPseudos, getUserPseudos } = require("../core/pseudoStore");
+const { buildMemberLine } = require("../core/memberDisplay");
 
 module.exports = {
-  buildMemberLine,
-  resolveMainRole,
-  resolvePosts,
+  data: new SlashCommandBuilder()
+    .setName("pseudo")
+    .setDescription("Définir ou afficher le pseudo PSN/XBOX/EA.")
+    .addStringOption(opt =>
+      opt
+        .setName("psn")
+        .setDescription("ID PSN (optionnel)")
+        .setRequired(false)
+    )
+    .addStringOption(opt =>
+      opt
+        .setName("xbox")
+        .setDescription("ID XBOX (optionnel)")
+        .setRequired(false)
+    )
+    .addStringOption(opt =>
+      opt
+        .setName("ea")
+        .setDescription("ID EA (optionnel)")
+        .setRequired(false)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages),
+
+  async execute(interaction) {
+    try {
+      if (!interaction.inGuild()) {
+        return interaction.reply({ content: "⛔", ephemeral: true });
+      }
+
+      const guild = interaction.guild;
+      const guildId = guild.id;
+      const cfg = getGuildConfig(guildId) || {};
+
+      // ---------------------------------------------------------
+      // 1) Lecture des options fournies
+      // ---------------------------------------------------------
+      const psn = interaction.options.getString("psn") || "";
+      const xbox = interaction.options.getString("xbox") || "";
+      const ea = interaction.options.getString("ea") || "";
+
+      let mode = null;
+      if (psn) mode = "psn";
+      if (xbox) mode = "xbox";
+      if (ea) mode = "ea";
+
+      // ---------------------------------------------------------
+      // 2) Si aucun ID fourni, essayer auto SCAN du message dans le salon pseudoScan
+      // ---------------------------------------------------------
+      let autoExtract = { psn: "", xbox: "", ea: "" };
+
+      const scanChannelId = cfg.pseudoScanChannelId;
+      if (!mode && scanChannelId && interaction.channelId === scanChannelId) {
+        const txt = interaction?.options?._hoistedOptions?.[0]?.value || "";
+        const content = (txt || "").toString();
+
+        const mPsn = content.match(/psn[:= ]+([a-z0-9_\-]+)/i);
+        const mXbox = content.match(/xbox[:= ]+([a-z0-9_\-]+)/i);
+        const mEa = content.match(/ea[:= ]+([a-z0-9_\-]+)/i);
+
+        if (mPsn) autoExtract.psn = mPsn[1];
+        if (mXbox) autoExtract.xbox = mXbox[1];
+        if (mEa) autoExtract.ea = mEa[1];
+
+        if (autoExtract.psn || autoExtract.xbox || autoExtract.ea) {
+          mode = "auto";
+        }
+      }
+
+      // ---------------------------------------------------------
+      // 3) Stockage si mode défini
+      // ---------------------------------------------------------
+      if (mode) {
+        const patch = {
+          psn: psn || autoExtract.psn || undefined,
+          xbox: xbox || autoExtract.xbox || undefined,
+          ea: ea || autoExtract.ea || undefined,
+        };
+
+        const stored = setUserPseudos(guildId, interaction.user.id, patch);
+
+        const embed = new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle("Pseudo mis à jour")
+          .setDescription(
+            [
+              stored.psn ? `PSN: **${stored.psn}**` : null,
+              stored.xbox ? `XBOX: **${stored.xbox}**` : null,
+              stored.ea ? `EA: **${stored.ea}**` : null,
+            ]
+              .filter(Boolean)
+              .join("\n")
+          )
+          .setFooter({ text: cfg.botLabel || "XIG FC" });
+
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+      }
+
+      // ---------------------------------------------------------
+      // 4) Aucun pseudo fourni → juste afficher format complet
+      // ---------------------------------------------------------
+      const member = await guild.members.fetch(interaction.user.id);
+      const line = buildMemberLine(member, cfg);
+
+      const display = getUserPseudos(guildId, interaction.user.id) || {};
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle("Pseudo actuel")
+        .addFields(
+          {
+            name: "Données",
+            value:
+              [
+                display.psn ? `PSN: **${display.psn}**` : null,
+                display.xbox ? `XBOX: **${display.xbox}**` : null,
+                display.ea ? `EA: **${display.ea}**` : null,
+              ]
+                .filter(Boolean)
+                .join("\n") || "Aucun pseudo enregistré.",
+          },
+          {
+            name: "Format /pseudo",
+            value: `\`${line}\``,
+          }
+        )
+        .setFooter({ text: cfg.botLabel || "XIG FC" });
+
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    } catch (err) {
+      console.error("[/pseudo ERROR]", err);
+      try {
+        return interaction.reply({ content: "⚠️", ephemeral: true });
+      } catch {}
+    }
+  },
 };
