@@ -1,16 +1,24 @@
 // src/core/guildConfig.js
-// ✅ Stockage FORCÉ dans: <project>/src/config/servers.json
-// ✅ Override possible avec DATA_DIR (Railway volume) si tu veux plus tard
+// Config multi-serveur (servers.json) — CommonJS
+// ✅ staffRoleIds (multi) + playerRoleIds (multi)
+// ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
+// ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
+// ✅ utilitaires export/import/reset
+//
+// ✅ FIX : chemin stable basé sur ROOT_DIR (pas process.cwd())
+// - Par défaut: <root>/config/servers.json
+// - Override: DATA_DIR=/chemin/persistant (Railway volume, etc.)
 
 const fs = require("fs");
 const path = require("path");
 
-// src/core -> src
-const SRC_DIR = path.join(__dirname, ".."); // => <project>/src
-const DEFAULT_DATA_DIR = path.join(SRC_DIR, "config");
+// ROOT_DIR = racine du projet (car ce fichier est dans src/core)
+const ROOT_DIR = path.join(__dirname, "..", "..");
 
-// Si tu veux plus tard rendre persistant via Railway: DATA_DIR=/data
-const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : DEFAULT_DATA_DIR;
+// Dossier de data (persistant si DATA_DIR défini)
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(ROOT_DIR, "config");
 
 const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
@@ -19,15 +27,19 @@ const DEFAULT_DATA = { version: 1, guilds: {} };
 const DEFAULT_GUILD = {
   botLabel: "XIG BLAUGRANA FC Staff",
 
+  // salons
   disposChannelId: null,
   staffReportsChannelId: null,
   pseudoScanChannelId: null,
 
+  // rôles
   staffRoleIds: [],
   playerRoleIds: [],
+
+  // postes (0..25) : utilisés par /pseudo (sans label)
   postRoleIds: [],
 
-  // legacy compat
+  // compat legacy : [{ roleId, label }]
   posts: [],
 
   automations: { enabled: false },
@@ -39,6 +51,7 @@ const DEFAULT_GUILD = {
 
 function ensureFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
   if (!fs.existsSync(CONFIG_PATH)) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
   }
@@ -57,9 +70,11 @@ function safeReadJson(filePath, fallback) {
 function readAll() {
   ensureFile();
   const data = safeReadJson(CONFIG_PATH, { ...DEFAULT_DATA });
+
   if (!data || typeof data !== "object") return { ...DEFAULT_DATA };
   if (!data.guilds || typeof data.guilds !== "object") data.guilds = {};
   if (!data.version) data.version = 1;
+
   return data;
 }
 
@@ -71,6 +86,7 @@ function writeAll(data) {
 function uniqIds(arr, { max = null } = {}) {
   const out = [];
   const seen = new Set();
+
   for (const v of Array.isArray(arr) ? arr : []) {
     const id = String(v || "").trim();
     if (!id) continue;
@@ -79,9 +95,11 @@ function uniqIds(arr, { max = null } = {}) {
     out.push(id);
     if (typeof max === "number" && out.length >= max) break;
   }
+
   return out;
 }
 
+// legacy posts -> ids
 function extractPostRoleIdsFromLegacyPosts(posts) {
   if (!Array.isArray(posts)) return [];
   return uniqIds(
@@ -92,6 +110,7 @@ function extractPostRoleIdsFromLegacyPosts(posts) {
   );
 }
 
+// ids -> legacy posts (label neutre)
 function buildLegacyPostsFromIds(postRoleIds) {
   const ids = uniqIds(postRoleIds, { max: 25 });
   return ids.map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
@@ -106,16 +125,21 @@ function normalizeGuild(cfg) {
     automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
   };
 
+  // roles arrays
   out.staffRoleIds = uniqIds(out.staffRoleIds);
   out.playerRoleIds = uniqIds(out.playerRoleIds);
 
+  // compat anciennes clés
   if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
   if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
 
+  // postes: source de vérité = postRoleIds, sinon conversion depuis posts legacy
   const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
   const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
 
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
+
+  // posts legacy reconstruit
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
   return out;
@@ -148,12 +172,14 @@ function upsertGuildConfig(guildId, patch) {
     ...current,
     ...p,
     automations: { ...current.automations, ...(p.automations || {}) },
+
     staffRoleIds,
     playerRoleIds,
     postRoleIds,
   });
 
   merged.updatedAt = new Date().toISOString();
+
   data.guilds[gid] = merged;
   writeAll(data);
   return merged;
@@ -162,7 +188,11 @@ function upsertGuildConfig(guildId, patch) {
 function exportAllConfig() {
   const data = readAll();
   const out = { ...data, guilds: {} };
-  for (const [gid, cfg] of Object.entries(data.guilds || {})) out.guilds[gid] = normalizeGuild(cfg);
+
+  for (const [gid, cfg] of Object.entries(data.guilds || {})) {
+    out.guilds[gid] = normalizeGuild(cfg);
+  }
+
   return out;
 }
 
@@ -170,10 +200,14 @@ function importAllConfig(payload, { replace = false } = {}) {
   const data = readAll();
 
   const incoming = payload && typeof payload === "object" ? payload : {};
-  const incomingGuilds = incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
+  const incomingGuilds =
+    incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
 
   if (replace) data.guilds = {};
-  for (const [gid, cfg] of Object.entries(incomingGuilds)) data.guilds[String(gid)] = normalizeGuild(cfg);
+
+  for (const [gid, cfg] of Object.entries(incomingGuilds)) {
+    data.guilds[String(gid)] = normalizeGuild(cfg);
+  }
 
   if (!data.version) data.version = 1;
   writeAll(data);
@@ -183,12 +217,15 @@ function importAllConfig(payload, { replace = false } = {}) {
 function resetGuildConfig(guildId) {
   if (!guildId) return null;
   const data = readAll();
-  delete data.guilds[String(guildId)];
+  const gid = String(guildId);
+
+  delete data.guilds[gid];
   writeAll(data);
   return true;
 }
 
 module.exports = {
+  ROOT_DIR,
   DATA_DIR,
   CONFIG_PATH,
 
