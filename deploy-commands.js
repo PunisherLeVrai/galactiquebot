@@ -1,32 +1,28 @@
+// deploy-commands.js
 require("dotenv").config();
 const { REST, Routes } = require("discord.js");
 const fs = require("fs");
-const path = require("path");
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+if (!TOKEN || !CLIENT_ID) {
+  console.error("TOKEN ou CLIENT_ID manquant");
+  process.exit(1);
+}
 
-async function loadCommands() {
-  const cmds = [];
-  const dir = path.join(__dirname, "src", "commands");
-  for (const file of fs.readdirSync(dir)) {
-    if (!file.endsWith(".js")) continue;
-    const cmd = require(path.join(dir, file));
-    cmds.push(cmd.data.toJSON());
-  }
-  return cmds;
+const commands = [];
+const cmdFiles = fs.readdirSync("./src/commands").filter(f => f.endsWith(".js"));
+
+for (const file of cmdFiles) {
+  const cmd = require(`./src/commands/${file}`);
+  commands.push(cmd.data.toJSON());
 }
 
 (async () => {
-  const commands = await loadCommands();
-  const route = GUILD_ID
-    ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
-    : Routes.applicationCommands(CLIENT_ID);
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-  console.log("Déploiement des commandes…");
-  await rest.put(route, { body: commands });
-  console.log("OK.");
+  console.log("Déploiement global des commandes...");
+  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+  console.log("Déploiement terminé.");
 })();
