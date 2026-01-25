@@ -34,7 +34,7 @@ module.exports = {
         files: [{ attachment: buffer, name: `servers_${yyyy}-${mm}-${dd}_${hh}-${mi}.json` }],
         ephemeral: true,
       });
-    } catch (e) {
+    } catch {
       try {
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ content: "⚠️", ephemeral: true });
