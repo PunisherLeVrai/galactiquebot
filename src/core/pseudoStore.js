@@ -2,20 +2,18 @@
 // Stockage pseudos multi-serveur — CommonJS
 // ✅ psn/xbox/ea
 // ✅ nettoyage (retire ` et |), trim, max length
-// ✅ strip du préfixe (psn:/xbox:/ea:) au stockage (le rendu n'affiche pas le préfixe si tu le veux)
-// ✅ utilitaires export/import/reset — import batché (1 seul write)
-// ✅ DATA_DIR (Railway /data) sinon ./config (racine projet)
+// ✅ strip du préfixe (psn:/xbox:/ea:) au stockage
+// ✅ import batché (1 seul write)
 
 const fs = require("fs");
 const path = require("path");
 
-// Racine projet: src/core -> src -> (racine)
-const PROJECT_ROOT = path.join(__dirname, "..", "..", "..");
+// Même logique que guildConfig: ROOT_DIR stable
+const ROOT_DIR = path.join(__dirname, "..", "..");
 
-// Dossier de data persistant (Railway: DATA_DIR=/data + volume monté)
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(PROJECT_ROOT, "config");
+  : path.join(ROOT_DIR, "config");
 
 const STORE_PATH = path.join(DATA_DIR, "pseudos.json");
 
@@ -23,7 +21,6 @@ const DEFAULT_DATA = { version: 1, guilds: {} };
 
 function ensureFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
   if (!fs.existsSync(STORE_PATH)) {
     fs.writeFileSync(STORE_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
   }
@@ -41,7 +38,6 @@ function safeReadJson(filePath, fallback) {
 
 function readAll() {
   ensureFile();
-
   const data = safeReadJson(STORE_PATH, { ...DEFAULT_DATA });
 
   if (!data || typeof data !== "object") return { ...DEFAULT_DATA };
@@ -59,17 +55,12 @@ function writeAll(data) {
 function normalizeValue(v, max = 40) {
   if (v === null || v === undefined) return "";
   return String(v)
-    .replace(/[`|]/g, "") // "|" casse le format "PSEUDO | ROLE | POSTES"
+    .replace(/[`|]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 }
 
-/**
- * Retire les mentions "psn/xbox/ea" au stockage :
- * Accepte: "psn:xxx", "psn:/xxx", "psn xxx", "/xxx", "xxx" -> stocke "xxx"
- * (le rendu décidera d'afficher ou non un préfixe)
- */
 function stripPlatformPrefix(platform, value) {
   const v = normalizeValue(value, 60);
   if (!v) return "";
@@ -77,12 +68,8 @@ function stripPlatformPrefix(platform, value) {
   const p = String(platform || "").toLowerCase();
   if (!["psn", "xbox", "ea"].includes(p)) return normalizeValue(v, 40);
 
-  // enlève "psn:" / "psn:/" / "psn " / "psn/" (case-insensitive), tolère espaces
-  const re = new RegExp(`^\\s*${p}\\s*[:\\s/]+\\s*`, "i");
-  let cleaned = v.replace(re, "").trim();
-
-  // enlève un slash résiduel "/xxx"
-  cleaned = cleaned.replace(/^\/+/, "").trim();
+  const re = new RegExp(`^\\s*${p}\\s*:\\s*\\/?\\s*`, "i");
+  const cleaned = v.replace(re, "").trim();
 
   return normalizeValue(cleaned, 40);
 }
@@ -108,11 +95,6 @@ function getUserPseudos(guildId, userId) {
   return data.guilds?.[String(guildId)]?.users?.[String(userId)] || null;
 }
 
-/**
- * setUserPseudos(guildId, userId, patch, opts?)
- * - patch: { psn?, xbox?, ea? }
- * - opts.write (default true): permet d'updater en batch sans écrire à chaque appel
- */
 function setUserPseudos(guildId, userId, patch, opts = {}) {
   if (!guildId || !userId) return null;
 
@@ -137,11 +119,8 @@ function setUserPseudos(guildId, userId, patch, opts = {}) {
   return next;
 }
 
-// --- utilitaires ---
-
 function exportAllPseudos() {
   const data = readAll();
-
   const out = { version: data.version || 1, guilds: {} };
 
   for (const [gid, g] of Object.entries(data.guilds || {})) {
@@ -161,12 +140,6 @@ function exportAllPseudos() {
   return out;
 }
 
-/**
- * Import payload (exportAllPseudos ou structure compatible)
- * - replace=false: merge
- * - replace=true: remplace data.guilds complètement
- * Batché => 1 seul writeAll()
- */
 function importAllPseudos(payload, { replace = false } = {}) {
   const data = readAll();
 
@@ -207,6 +180,7 @@ function resetGuildPseudos(guildId) {
 }
 
 module.exports = {
+  ROOT_DIR,
   DATA_DIR,
   STORE_PATH,
 
