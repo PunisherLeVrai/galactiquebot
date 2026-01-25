@@ -1,9 +1,18 @@
 // src/commands/export_config.js
-// Export complet servers.json en PJ — admin only — ephemeral
+// Export complet servers.json — STAFF ONLY — ephemeral
 // CommonJS — discord.js v14
 
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 const { exportAllConfig, CONFIG_PATH } = require("../core/guildConfig");
+
+// Même helper que pseudo.js
+function isStaff(member, cfg) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
+
+  const ids = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
+  return ids.some((id) => id && member.roles.cache.has(String(id)));
+}
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -21,8 +30,8 @@ function stamp(d = new Date()) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
-    .setDescription("Export de la config (servers.json).")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDescription("Export de la configuration du serveur (servers.json).")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // garde-fou minimal
 
   async execute(interaction) {
     try {
@@ -30,11 +39,15 @@ module.exports = {
         return interaction.reply({ content: "⛔", ephemeral: true });
       }
 
-      if (!interaction.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({ content: "⛔", ephemeral: true });
+      const { getGuildConfig } = require("../core/guildConfig");
+      const cfg = getGuildConfig(interaction.guildId) || {};
+
+      // ----- STAFF ONLY -----
+      if (!isStaff(interaction.member, cfg)) {
+        return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const data = exportAllConfig(); // déjà normalisé côté guildConfig.js
+      const data = exportAllConfig();
       const json = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(json, "utf8");
 
@@ -42,7 +55,7 @@ module.exports = {
       const filename = `servers_${ts}.json`;
 
       return interaction.reply({
-        content: `✅ \`${ts}\`\n📄 \`${filename}\`\n🗂️ \`${CONFIG_PATH}\``,
+        content: `✅ Export effectué.\nFichier : \`${filename}\`\nChemin interne : \`${CONFIG_PATH}\``,
         files: [{ attachment: buffer, name: filename }],
         ephemeral: true,
       });
