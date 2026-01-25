@@ -7,7 +7,7 @@ const { REST, Routes } = require("discord.js");
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID || null; // optionnel
+const GUILD_ID = process.env.GUILD_ID || null; // facultatif
 
 if (!TOKEN || !CLIENT_ID) {
   console.error("TOKEN ou CLIENT_ID manquant");
@@ -24,9 +24,12 @@ if (!TOKEN || !CLIENT_ID) {
   const scopeLabel = GUILD_ID ? `GUILD ${GUILD_ID}` : "GLOBAL";
 
   console.log(`[NUKE] Suppression de TOUTES les commandes (${scopeLabel})...`);
-  await rest.put(route, { body: [] });
-  console.log(`[NUKE] OK (${scopeLabel}).`);
-})().catch((e) => {
-  console.error("[NUKE_ERROR]", e);
-  process.exit(1);
-});
+
+  try {
+    await rest.put(route, { body: [] });
+    console.log(`[NUKE] OK — Toutes les commandes ${scopeLabel} ont été supprimées.`);
+  } catch (e) {
+    console.error("[NUKE_ERROR]", e);
+    process.exit(1);
+  }
+})();
