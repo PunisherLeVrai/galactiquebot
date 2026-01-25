@@ -2,16 +2,23 @@
 // Format: "PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3"
 //
 // PSEUDO priorité: PSN > XBOX > EA > username Discord
-// ✅ Affichage PSEUDO: sans "psn/xbox/ea" (on affiche l'ID pur)
+// ✅ Affichage PSEUDO: sans "psn/xbox/ea" (ID pur)
 // ✅ Username fallback: supprime chiffres + caractères spéciaux + espaces (garde uniquement A-Z)
-// ✅ Rôle: prend le rôle le plus haut hiérarchiquement (position Discord), hors @everyone
-// ✅ Postes: max 3, ordre cfg.postRoleIds (0..25), libellé = nom du rôle Discord (pas de label)
+// ✅ RÔLE (staff only): Président > Fondateur > GM > coGM > STAFF
+//    - détection par NOM des rôles (Président, Fondateur, GM, coGM, Staff)
+//    - fallback: si membre a un des cfg.staffRoleIds => "STAFF"
+// ✅ Postes: max 3, ordre cfg.postRoleIds (0..25), libellé = nom du rôle Discord (entier)
+// ✅ Nickname final: max 32 caractères (Discord)
 
+const { PermissionFlagsBits } = require("discord.js");
 const { getUserPseudos } = require("./pseudoStore");
 
-function cleanValue(v, max = 64) {
+// --------------------
+// Utils
+// --------------------
+function cleanValue(v, max = 200) {
   return String(v ?? "")
-    .replace(/[`|]/g, "")
+    .replace(/[`|]/g, "") // "|" casse le format
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
@@ -21,35 +28,26 @@ function cleanValue(v, max = 64) {
 // USERNAME fallback
 // --------------------
 // - retire accents
-// - retire tout sauf A-Z
-// - retire espaces (donc concatène)
+// - garde uniquement A-Z
+// - supprime espaces/chiffres/symboles (concatène)
 // - si vide => "User"
 function normalizeUsernameStrict(username) {
   const raw = String(username || "");
-
   const noAccents = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-
-  // garde uniquement A-Z
   const lettersOnly = noAccents.replace(/[^a-zA-Z]/g, "");
   if (!lettersOnly) return "User";
-
-  // option: on normalise la casse (première majuscule, reste minuscule)
   return lettersOnly.charAt(0).toUpperCase() + lettersOnly.slice(1).toLowerCase();
 }
 
 // --------------------
 // PSEUDO (PSN/XBOX/EA)
 // --------------------
-// Stockage: pseudos.json peut contenir "psn:xxx" ou "xxx"
-// Affichage: on enlève le préfixe quoi qu'il arrive.
+// Stockage possible: "psn:xxx" ou "xxx"
+// Affichage: on enlève le préfixe quoi qu'il arrive (ID pur)
 function stripAnyPlatformPrefix(value) {
   const v = cleanValue(value, 80);
   if (!v) return "";
-
-  // enlève "psn:" "psn:/" "xbox:" "ea:" + espaces
-  return v
-    .replace(/^\s*(psn|xbox|ea)\s*:\s*\/?\s*/i, "")
-    .trim();
+  return v.replace(/^\s*(psn|xbox|ea)\s*:\s*\/?\s*/i, "").trim();
 }
 
 function pickBestPseudo(member) {
@@ -67,36 +65,62 @@ function pickBestPseudo(member) {
 }
 
 // --------------------
-// ROLE = plus haut hiérarchiquement
+// STAFF ROLE (Président/Fondateur/GM/coGM/STAFF)
 // --------------------
-function cleanRoleName(name, max = 16) {
-  return String(name || "")
-    .replace(/[`|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+function roleNameMatches(roleName, keywords) {
+  const n = String(roleName || "").toLowerCase();
+  return keywords.some((k) => {
+    const kk = String(k).toLowerCase();
+    return n === kk || n.includes(kk);
+  });
 }
 
-function resolveMainRole(member) {
+function hasAnyRoleId(member, roleIds) {
+  const ids = Array.isArray(roleIds) ? roleIds : [];
+  return ids.some((id) => id && member.roles.cache.has(String(id)));
+}
+
+/**
+ * resolveMainRole(member, cfg)
+ * Retourne UNIQUEMENT un rôle "staff" au format demandé.
+ * Priorité: Président > Fondateur > GM > coGM > STAFF
+ */
+function resolveMainRole(member, cfg) {
   if (!member) return null;
 
   const roles = member.roles?.cache;
-  if (!roles || roles.size === 0) return null;
+  const isAdmin = member.permissions?.has?.(PermissionFlagsBits.Administrator);
 
-  // retire @everyone (id == guild.id)
-  const filtered = roles.filter((r) => r && r.id !== member.guild?.id);
-  if (filtered.size === 0) return null;
+  // 1) Détection par NOM de rôle (priorité stricte)
+  //    (on ne renvoie PAS le nom du rôle, mais le libellé standard)
+  const order = [
+    { label: "Président", keywords: ["président", "president"] },
+    { label: "Fondateur", keywords: ["fondateur", "founder"] },
+    // ⚠️ GM avant coGM
+    { label: "GM", keywords: ["gm"] },
+    { label: "coGM", keywords: ["cogm", "co gm", "co-gm", "co_gm"] },
+    { label: "STAFF", keywords: ["staff"] },
+  ];
 
-  // rôle le plus haut (position max)
-  const top = filtered.sort((a, b) => b.position - a.position).first();
-  if (!top) return null;
+  if (roles && roles.size) {
+    for (const it of order) {
+      const found = roles.find((r) => r && roleNameMatches(r.name, it.keywords));
+      if (found) return it.label;
+    }
+  }
 
-  return cleanRoleName(top.name, 16) || null;
+  // 2) Fallback: si admin ou si membre a un des rôles staff configurés dans /setup
+  const staffRoleIds = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
+  if (isAdmin || hasAnyRoleId(member, staffRoleIds)) return "STAFF";
+
+  return null;
 }
 
 // --------------------
 // POSTES (max 3)
 // --------------------
+// - ordre cfg.postRoleIds
+// - libellé = nom du rôle Discord entier (nettoyé), pas de label poste
 function resolvePosts(member, cfg) {
   if (!member) return [];
 
@@ -112,11 +136,10 @@ function resolvePosts(member, cfg) {
   for (const roleId of ordered) {
     if (!member.roles.cache.has(roleId)) continue;
 
-    // nom du rôle depuis le cache serveur
     const guildRole = member.guild?.roles?.cache?.get(roleId);
-    const name = cleanRoleName(guildRole?.name || member.roles.cache.get(roleId)?.name, 16);
+    const roleName = cleanValue(guildRole?.name || member.roles.cache.get(roleId)?.name, 80);
 
-    out.push(name || "POSTE");
+    if (roleName) out.push(roleName);
     if (out.length >= 3) break;
   }
 
@@ -124,7 +147,7 @@ function resolvePosts(member, cfg) {
 }
 
 // --------------------
-// BUILD LINE
+// BUILD LINE (max 32 chars)
 // --------------------
 function buildMemberLine(member, cfg) {
   const pseudo = pickBestPseudo(member);
@@ -135,7 +158,8 @@ function buildMemberLine(member, cfg) {
   if (role) parts.push(role);
   if (posts.length) parts.push(posts.join("/"));
 
-  return parts.join(" | ");
+  // Discord nickname max 32
+  return parts.join(" | ").slice(0, 32);
 }
 
 module.exports = {
