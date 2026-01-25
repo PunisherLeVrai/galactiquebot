@@ -1,8 +1,9 @@
 // src/core/guildConfig.js
 // Config multi-serveur minimal (servers.json) — CommonJS
-// ✅ staffRoleIds (multi) + playerRoleIds (multi) + posts (multi)
-// ✅ compat anciennes clés (staffRoleId, playerRoleId)
-// ✅ fonctions utilitaires (export/import/reset) utiles pour la suite
+// ✅ staffRoleIds (multi) + playerRoleIds (multi)
+// ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
+// ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
+// ✅ utilitaires export/import/reset
 
 const fs = require("fs");
 const path = require("path");
@@ -25,8 +26,10 @@ const DEFAULT_GUILD = {
   // rôles joueurs (1..n) : filtre + /pseudo
   playerRoleIds: [],
 
-  // postes (1..n) : utilisés par /pseudo (ex: MDC, BU, DD...)
-  // [{ roleId, label }]
+  // ✅ postes (0..25) : utilisés par /pseudo (sans label)
+  postRoleIds: [],
+
+  // compat legacy : [{ roleId, label }]
   posts: [],
 
   // auto minimal
@@ -72,55 +75,67 @@ function writeAll(data) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), "utf8");
 }
 
-function normalizePosts(posts) {
-  if (!Array.isArray(posts)) return [];
-
+function uniqIds(arr, { max = null } = {}) {
   const out = [];
   const seen = new Set();
 
-  for (const p of posts) {
-    if (!p || typeof p !== "object") continue;
-    if (!p.roleId) continue;
-
-    const roleId = String(p.roleId);
-    if (seen.has(roleId)) continue;
-
-    const label = String(p.label || "POSTE")
-      .replace(/[`|]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 16);
-
-    out.push({ roleId, label: label || "POSTE" });
-    seen.add(roleId);
+  for (const v of Array.isArray(arr) ? arr : []) {
+    const id = String(v || "").trim();
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (typeof max === "number" && out.length >= max) break;
   }
 
   return out;
 }
 
+// legacy posts -> ids
+function extractPostRoleIdsFromLegacyPosts(posts) {
+  if (!Array.isArray(posts)) return [];
+  return uniqIds(
+    posts
+      .filter((p) => p && typeof p === "object" && p.roleId)
+      .map((p) => p.roleId),
+    { max: 25 }
+  );
+}
+
+// ids -> legacy posts (label neutre, pour compat)
+function buildLegacyPostsFromIds(postRoleIds) {
+  const ids = uniqIds(postRoleIds, { max: 25 });
+  return ids.map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
+}
+
 function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
 
+  // base
   const out = {
     ...DEFAULT_GUILD,
     ...c,
     automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
-
-    staffRoleIds: Array.isArray(c.staffRoleIds) ? c.staffRoleIds.filter(Boolean) : [],
-    playerRoleIds: Array.isArray(c.playerRoleIds) ? c.playerRoleIds.filter(Boolean) : [],
-    posts: normalizePosts(c.posts),
   };
 
+  // roles arrays
+  out.staffRoleIds = uniqIds(out.staffRoleIds);
+  out.playerRoleIds = uniqIds(out.playerRoleIds);
+
   // ----- compat anciennes clés -----
-  // staffRoleId (single) -> staffRoleIds
-  if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = [String(c.staffRoleId)];
+  if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
+  if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
 
-  // playerRoleId (single) -> playerRoleIds
-  if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = [String(c.playerRoleId)];
+  // ----- postes : source de vérité = postRoleIds -----
+  // 1) si postRoleIds existe -> on l'utilise
+  // 2) sinon, on convertit depuis l'ancien posts[]
+  const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
+  const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
 
-  // dédoublonnage final
-  out.staffRoleIds = Array.from(new Set(out.staffRoleIds.map(String))).filter(Boolean);
-  out.playerRoleIds = Array.from(new Set(out.playerRoleIds.map(String))).filter(Boolean);
+  out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
+
+  // legacy posts reconstruit (compat), même si vide
+  out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
   return out;
 }
@@ -141,15 +156,32 @@ function upsertGuildConfig(guildId, patch) {
   const current = normalizeGuild(data.guilds[gid] || {});
   const p = patch && typeof patch === "object" ? patch : {};
 
+  // staff/player : si patch fournit explicitement des arrays, on prend, sinon current
+  const staffRoleIds = Array.isArray(p.staffRoleIds) ? p.staffRoleIds : current.staffRoleIds;
+  const playerRoleIds = Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds;
+
+  // postes :
+  // priorité patch.postRoleIds (nouveau format)
+  // sinon, si patch.posts (legacy) est fourni, on convertit
+  // sinon current.postRoleIds
+  let postRoleIds = current.postRoleIds;
+
+  if (Array.isArray(p.postRoleIds)) {
+    postRoleIds = p.postRoleIds;
+  } else if (Array.isArray(p.posts)) {
+    postRoleIds = extractPostRoleIdsFromLegacyPosts(p.posts);
+  }
+
   const merged = normalizeGuild({
     ...current,
     ...p,
     automations: { ...current.automations, ...(p.automations || {}) },
 
-    // si patch fournit explicitement des arrays, on les prend, sinon on garde current
-    staffRoleIds: Array.isArray(p.staffRoleIds) ? p.staffRoleIds : current.staffRoleIds,
-    playerRoleIds: Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds,
-    posts: Array.isArray(p.posts) ? p.posts : current.posts,
+    staffRoleIds,
+    playerRoleIds,
+
+    // ✅ nouveau format
+    postRoleIds,
   });
 
   merged.updatedAt = new Date().toISOString();
@@ -170,7 +202,7 @@ function exportAllConfig() {
   return out;
 }
 
-// Optionnel mais utile pour la suite (ex: importer un export_config)
+// Optionnel (utile pour importer un export_config)
 function importAllConfig(payload, { replace = false } = {}) {
   const data = readAll();
 
