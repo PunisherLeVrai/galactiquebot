@@ -1,6 +1,5 @@
 // src/core/guildConfig.js
-// Config multi-serveur (servers.json) — minimal + safe
-// Champs utiles pour setup + export_config
+// Config multi-serveur minimal (servers.json) — CommonJS
 
 const fs = require("fs");
 const path = require("path");
@@ -15,14 +14,19 @@ const DEFAULT_GUILD = {
   // salons
   disposChannelId: null,
   staffReportsChannelId: null,
-  pseudoScanChannelId: null, // ✅ pour la suite si tu veux
+  pseudoScanChannelId: null,
 
   // rôles
   staffRoleId: null,
-  playerRoleId: null,
-  trialRoleId: null,
 
-  // automations (juste ON/OFF ici)
+  // filtre joueurs (1..n rôles)
+  playerRoleIds: [],
+
+  // postes (1..n) : utilisés par /pseudo (ex: MDC, BU, DD...)
+  // [{ roleId, label }]
+  posts: [],
+
+  // auto minimal
   automations: { enabled: false },
 
   setupBy: null,
@@ -33,6 +37,7 @@ const DEFAULT_GUILD = {
 function ensureFile() {
   const dir = path.dirname(CONFIG_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
   if (!fs.existsSync(CONFIG_PATH)) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
   }
@@ -57,38 +62,44 @@ function writeAll(data) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), "utf8");
 }
 
-function mergeGuild(cfg) {
+function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
-  return {
+  const out = {
     ...DEFAULT_GUILD,
     ...c,
-    automations: {
-      ...DEFAULT_GUILD.automations,
-      ...(c.automations || {}),
-    },
+    automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
+    playerRoleIds: Array.isArray(c.playerRoleIds) ? c.playerRoleIds.filter(Boolean) : [],
+    posts: Array.isArray(c.posts) ? c.posts.filter((p) => p && p.roleId) : [],
   };
+
+  // compat : si tu avais encore playerRoleId
+  if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = [c.playerRoleId];
+
+  return out;
 }
 
 function getGuildConfig(guildId) {
   const data = readAll();
   const cfg = data.guilds[guildId];
-  return cfg ? mergeGuild(cfg) : null;
+  return cfg ? normalizeGuild(cfg) : null;
 }
 
 function upsertGuildConfig(guildId, patch) {
   const data = readAll();
-  const current = mergeGuild(data.guilds[guildId] || {});
+  const current = normalizeGuild(data.guilds[guildId] || {});
   const p = patch && typeof patch === "object" ? patch : {};
 
-  const merged = mergeGuild({
+  const merged = normalizeGuild({
     ...current,
     ...p,
     automations: { ...current.automations, ...(p.automations || {}) },
+    playerRoleIds: Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds,
+    posts: Array.isArray(p.posts) ? p.posts : current.posts,
   });
 
   merged.updatedAt = new Date().toISOString();
-  data.guilds[guildId] = merged;
 
+  data.guilds[guildId] = merged;
   writeAll(data);
   return merged;
 }
@@ -97,7 +108,7 @@ function exportAllConfig() {
   const data = readAll();
   const out = { ...data, guilds: {} };
   for (const [gid, cfg] of Object.entries(data.guilds || {})) {
-    out.guilds[gid] = mergeGuild(cfg);
+    out.guilds[gid] = normalizeGuild(cfg);
   }
   return out;
 }
