@@ -1,5 +1,7 @@
 // src/core/guildConfig.js
 // Config multi-serveur minimal (servers.json) — CommonJS
+// ✅ staffRoleIds (multi) + playerRoleIds (multi) + posts (multi)
+// + compat anciennes clés (staffRoleId, playerRoleId)
 
 const fs = require("fs");
 const path = require("path");
@@ -16,10 +18,10 @@ const DEFAULT_GUILD = {
   staffReportsChannelId: null,
   pseudoScanChannelId: null,
 
-  // rôles
-  staffRoleId: null,
+  // rôles staff (1..n) : droits commandes + /pseudo
+  staffRoleIds: [],
 
-  // filtre joueurs (1..n rôles)
+  // rôles joueurs (1..n) : filtre + /pseudo
   playerRoleIds: [],
 
   // postes (1..n) : utilisés par /pseudo (ex: MDC, BU, DD...)
@@ -64,15 +66,22 @@ function writeAll(data) {
 
 function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
+
   const out = {
     ...DEFAULT_GUILD,
     ...c,
     automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
+
+    staffRoleIds: Array.isArray(c.staffRoleIds) ? c.staffRoleIds.filter(Boolean) : [],
     playerRoleIds: Array.isArray(c.playerRoleIds) ? c.playerRoleIds.filter(Boolean) : [],
     posts: Array.isArray(c.posts) ? c.posts.filter((p) => p && p.roleId) : [],
   };
 
-  // compat : si tu avais encore playerRoleId
+  // ----- compat anciennes clés -----
+  // staffRoleId (single) -> staffRoleIds
+  if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = [c.staffRoleId];
+
+  // playerRoleId (single) -> playerRoleIds
   if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = [c.playerRoleId];
 
   return out;
@@ -93,6 +102,9 @@ function upsertGuildConfig(guildId, patch) {
     ...current,
     ...p,
     automations: { ...current.automations, ...(p.automations || {}) },
+
+    // si patch fournit explicitement des arrays, on les prend, sinon on garde current
+    staffRoleIds: Array.isArray(p.staffRoleIds) ? p.staffRoleIds : current.staffRoleIds,
     playerRoleIds: Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds,
     posts: Array.isArray(p.posts) ? p.posts : current.posts,
   });
