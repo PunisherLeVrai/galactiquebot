@@ -40,7 +40,7 @@ const ICON = {
   autoOff: "🛑",
 };
 
-// ✅ même helper que pseudo/export_config
+// ✅ STAFF ONLY (même logique que /pseudo /export_config)
 function isStaff(member, cfg) {
   if (!member) return false;
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
@@ -88,7 +88,7 @@ function buildEmbed(guild, draft, autoEnabled) {
         "",
         "Requis : 📅 Dispos + 📊 Staff + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)",
         "",
-        "Ces réglages servent aux commandes et à /pseudo (export_config ensuite).",
+        "Ces réglages servent aux commandes et à /pseudo.",
       ].join("\n")
     )
     .addFields(
@@ -105,7 +105,7 @@ function buildEmbed(guild, draft, autoEnabled) {
         name: "Rôles",
         value: [
           `${ICON.staff} ${fmtRoles(draft.staffRoleIds)} — Staff (commandes + /pseudo)`,
-          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs (filtre + /pseudo)`,
+          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs`,
         ].join("\n"),
         inline: false,
       },
@@ -131,7 +131,8 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
     .setDescription("Configurer salons + rôles (multi) + postes + automations.")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // garde-fou minimal
+    // garde-fou minimal côté Discord; le vrai contrôle est STAFF ONLY ci-dessous
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
     try {
@@ -140,9 +141,10 @@ module.exports = {
       const guild = interaction.guild;
       const guildId = guild.id;
 
+      // on lit la config actuelle pour vérifier le staff
       const saved = getGuildConfig(guildId) || {};
 
-      // ✅ STAFF ONLY (au lieu de "admin only")
+      // ✅ STAFF ONLY
       if (!isStaff(interaction.member, saved)) {
         return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, ephemeral: true });
       }
@@ -169,7 +171,7 @@ module.exports = {
         ),
         playerRoleIds: uniqIds(Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [], 25),
 
-        // postes (0..25) SANS label
+        // postes (0..25)
         postRoleIds: uniqIds(
           Array.isArray(saved.postRoleIds) ? saved.postRoleIds : legacyPostRoleIds,
           25
@@ -197,7 +199,7 @@ module.exports = {
         auto: `setup:auto:${scope}`,
       };
 
-      // ---------- Message 1 (channels + save/reset) ----------
+      // ---------- Message 1 ----------
       const rowDispos = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.dispos)
@@ -243,7 +245,7 @@ module.exports = {
         ephemeral: true,
       });
 
-      // ---------- Message 2 (roles + postes + auto/cancel) ----------
+      // ---------- Message 2 ----------
       const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
@@ -375,7 +377,7 @@ module.exports = {
 
               if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
-              // compat: ancien format "posts" (label neutre)
+              // compat: ancien format posts (label neutre)
               const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({
                 roleId: String(roleId),
                 label: "POSTE",
