@@ -1,14 +1,23 @@
 // src/core/guildConfig.js
-// Config multi-serveur (servers.json) — CommonJS
+// Config multi-serveur minimal (servers.json) — CommonJS
 // ✅ staffRoleIds (multi) + playerRoleIds (multi)
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
+//
+// ✅ FIX IMPORTANT : chemin de stockage unique via DATA_DIR
+// - Par défaut: <root>/config/servers.json
+// - Override: DATA_DIR=/chemin/persistant (ex: Railway volume)
 
 const fs = require("fs");
 const path = require("path");
 
-const CONFIG_PATH = path.join(__dirname, "..", "..", "config", "servers.json");
+// Dossier de data (persistant si DATA_DIR défini)
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(process.cwd(), "config");
+
+const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
 const DEFAULT_DATA = { version: 1, guilds: {} };
 
@@ -26,11 +35,10 @@ const DEFAULT_GUILD = {
   // rôles joueurs (1..n) : filtre + /pseudo
   playerRoleIds: [],
 
-  // postes (0..25) : utilisés par /pseudo (sans label)
+  // ✅ postes (0..25) : utilisés par /pseudo (sans label)
   postRoleIds: [],
 
   // compat legacy : [{ roleId, label }]
-  // (conservé uniquement pour compat avec d'anciens modules)
   posts: [],
 
   // auto minimal
@@ -53,7 +61,8 @@ function ensureFile() {
 function safeReadJson(filePath, fallback) {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
-    return JSON.parse(raw);
+    const data = JSON.parse(raw);
+    return data && typeof data === "object" ? data : fallback;
   } catch {
     return fallback;
   }
@@ -112,22 +121,19 @@ function buildLegacyPostsFromIds(postRoleIds) {
 function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
 
-  // base
   const out = {
     ...DEFAULT_GUILD,
     ...c,
     automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
   };
 
-  // ----- roles arrays -----
-  // Priorité aux nouvelles clés, mais compat si anciennes
-  const staffFromNew = Array.isArray(c.staffRoleIds) ? c.staffRoleIds : null;
-  const staffFromOld = c.staffRoleId ? [c.staffRoleId] : [];
-  out.staffRoleIds = uniqIds(staffFromNew ?? staffFromOld);
+  // roles arrays
+  out.staffRoleIds = uniqIds(out.staffRoleIds);
+  out.playerRoleIds = uniqIds(out.playerRoleIds);
 
-  const playersFromNew = Array.isArray(c.playerRoleIds) ? c.playerRoleIds : null;
-  const playersFromOld = c.playerRoleId ? [c.playerRoleId] : [];
-  out.playerRoleIds = uniqIds(playersFromNew ?? playersFromOld);
+  // ----- compat anciennes clés -----
+  if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
+  if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
 
   // ----- postes : source de vérité = postRoleIds -----
   // 1) si postRoleIds existe -> on l'utilise
@@ -137,8 +143,13 @@ function normalizeGuild(cfg) {
 
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
 
-  // ----- compat : posts reconstruit depuis postRoleIds -----
+  // legacy posts reconstruit (compat)
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
+
+  // sanitation finale
+  out.staffRoleIds = uniqIds(out.staffRoleIds);
+  out.playerRoleIds = uniqIds(out.playerRoleIds);
+  out.postRoleIds = uniqIds(out.postRoleIds, { max: 25 });
 
   return out;
 }
@@ -180,10 +191,9 @@ function upsertGuildConfig(guildId, patch) {
     ...p,
     automations: { ...current.automations, ...(p.automations || {}) },
 
-    staffRoleIds: uniqIds(staffRoleIds),
-    playerRoleIds: uniqIds(playerRoleIds),
-
-    postRoleIds: uniqIds(postRoleIds, { max: 25 }),
+    staffRoleIds,
+    playerRoleIds,
+    postRoleIds,
   });
 
   merged.updatedAt = new Date().toISOString();
@@ -209,7 +219,8 @@ function importAllConfig(payload, { replace = false } = {}) {
   const data = readAll();
 
   const incoming = payload && typeof payload === "object" ? payload : {};
-  const incomingGuilds = incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
+  const incomingGuilds =
+    incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
 
   if (replace) data.guilds = {};
 
@@ -233,11 +244,15 @@ function resetGuildConfig(guildId) {
 }
 
 module.exports = {
+  // chemins
+  DATA_DIR,
   CONFIG_PATH,
 
+  // defaults
   DEFAULT_DATA,
   DEFAULT_GUILD,
 
+  // CRUD
   getGuildConfig,
   upsertGuildConfig,
   exportAllConfig,
@@ -245,9 +260,4 @@ module.exports = {
   // utilitaires
   importAllConfig,
   resetGuildConfig,
-
-  // helpers (si besoin ailleurs)
-  uniqIds,
-  extractPostRoleIdsFromLegacyPosts,
-  buildLegacyPostsFromIds,
 };
