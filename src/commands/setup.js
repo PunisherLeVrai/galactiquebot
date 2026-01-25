@@ -1,6 +1,7 @@
 // src/commands/setup.js
-// Setup minimal — 2 messages — emoji + mot-clé — multi-serveur
-// Requis: 📅 + 📊 + 🛡️ + 👟
+// Setup minimal — 2 messages — multi-serveur
+// Requis: 📅 + 📊 + 🛡️ + (au moins 1 rôle joueur)
+// + Postes (rôles) configurables pour /pseudo
 // CommonJS — discord.js v14
 
 const {
@@ -10,6 +11,7 @@ const {
   ActionRowBuilder,
   ChannelSelectMenuBuilder,
   RoleSelectMenuBuilder,
+  StringSelectMenuBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -22,25 +24,28 @@ const ICON = {
   warn: "⚠️",
   ok: "✅",
   time: "⏳",
-
   title: "⚙️",
-  ch: "📂",
-  roles: "🧩",
-  auto: "🤖",
 
+  // salons
   dispos: "📅",
   staffReports: "📊",
   pseudoScan: "🎮",
 
+  // rôles
   staff: "🛡️",
-  player: "👟",
-  trial: "🧪",
+  players: "👟",
 
+  // postes
+  postes: "📌",
+
+  // actions
   save: "💾",
   reset: "🔄",
   cancel: "❎",
   autoOn: "🤖",
   autoOff: "🛑",
+  addPost: "➕",
+  resetPosts: "🧹",
 };
 
 function fmtCh(id) {
@@ -49,29 +54,37 @@ function fmtCh(id) {
 function fmtRole(id) {
   return id ? `<@&${id}>` : "—";
 }
+function fmtRoles(ids) {
+  const arr = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  return arr.length ? arr.map((id) => `<@&${id}>`).join(" ") : "—";
+}
 
 function buildEmbed(guild, draft, autoEnabled) {
   const requiredOk =
     !!draft.disposChannelId &&
     !!draft.staffReportsChannelId &&
     !!draft.staffRoleId &&
-    !!draft.playerRoleId;
+    Array.isArray(draft.playerRoleIds) &&
+    draft.playerRoleIds.length > 0;
+
+  const postsPreview = (draft.posts || [])
+    .slice(0, 8)
+    .map((p) => `${p.label || "POSTE"}: <@&${p.roleId}>`)
+    .join("\n");
 
   return new EmbedBuilder()
     .setTitle(`${ICON.title} Setup — ${guild.name}`)
     .setColor(0x5865f2)
     .setDescription(
       [
-        `${ICON.ch} Salons • ${ICON.roles} Rôles • ${ICON.auto} Auto`,
-        "",
         requiredOk ? `${ICON.ok} OK` : `${ICON.warn} Incomplet`,
         "",
-        "Requis : 📅 Dispos + 📊 Staff + 🛡️ Staff + 👟 Joueur",
+        "Requis : 📅 Dispos + 📊 Staff + 🛡️ Staff + 👟 (≥1 rôle joueur)",
       ].join("\n")
     )
     .addFields(
       {
-        name: `${ICON.ch} Salons`,
+        name: "Salons",
         value: [
           `${ICON.dispos} ${fmtCh(draft.disposChannelId)} — Dispos`,
           `${ICON.staffReports} ${fmtCh(draft.staffReportsChannelId)} — Staff`,
@@ -80,16 +93,20 @@ function buildEmbed(guild, draft, autoEnabled) {
         inline: false,
       },
       {
-        name: `${ICON.roles} Rôles`,
+        name: "Rôles",
         value: [
           `${ICON.staff} ${fmtRole(draft.staffRoleId)} — Staff`,
-          `${ICON.player} ${fmtRole(draft.playerRoleId)} — Joueur`,
-          `${ICON.trial} ${fmtRole(draft.trialRoleId)} — Essai (opt)`,
+          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs (filtre)`,
         ].join("\n"),
         inline: false,
       },
       {
-        name: `${ICON.auto} Automations`,
+        name: `${ICON.postes} Postes (/pseudo)`,
+        value: postsPreview ? postsPreview : "—",
+        inline: false,
+      },
+      {
+        name: "Automations",
         value: `État: **${autoEnabled ? "ON" : "OFF"}**`,
         inline: false,
       }
@@ -101,10 +118,19 @@ function inScope(i, scope) {
   return typeof i.customId === "string" && i.customId.endsWith(scope);
 }
 
+function cleanLabel(s) {
+  const t = String(s || "")
+    .replace(/[`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 16);
+  return t;
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Configurer salons + rôles + automations.")
+    .setDescription("Configurer salons + rôles (multi) + postes + automations.")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
@@ -118,14 +144,23 @@ module.exports = {
       const guildId = guild.id;
 
       const saved = getGuildConfig(guildId) || {};
+
       const draft = {
+        // salons
         disposChannelId: saved.disposChannelId || null,
         staffReportsChannelId: saved.staffReportsChannelId || null,
-        pseudoScanChannelId: saved.pseudoScanChannelId || saved.pseudo?.scanChannelId || null,
+        pseudoScanChannelId: saved.pseudoScanChannelId || null,
 
+        // rôles
         staffRoleId: saved.staffRoleId || null,
-        playerRoleId: saved.playerRoleId || null,
-        trialRoleId: saved.trialRoleId || null,
+        playerRoleIds: Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [],
+
+        // postes
+        posts: Array.isArray(saved.posts) ? saved.posts : [],
+
+        // UI temporaire (non stocké)
+        pendingPostRoleId: null,
+        pendingPostLabel: "MDC", // valeur par défaut modifiable via menu
       };
 
       let autoEnabled = !!saved?.automations?.enabled;
@@ -139,8 +174,13 @@ module.exports = {
 
         // roles
         staff: `setup:staff:${scope}`,
-        player: `setup:player:${scope}`,
-        trial: `setup:trial:${scope}`,
+        players: `setup:players:${scope}`,
+
+        // postes
+        postRole: `setup:postRole:${scope}`,
+        postLabel: `setup:postLabel:${scope}`,
+        addPost: `setup:addPost:${scope}`,
+        resetPosts: `setup:resetPosts:${scope}`,
 
         // actions
         save: `setup:save:${scope}`,
@@ -188,7 +228,8 @@ module.exports = {
         ephemeral: true,
       });
 
-      // ---------- Message 2 (roles + auto/cancel) ----------
+      // ---------- Message 2 (roles + postes + auto/cancel) ----------
+      // Row 1: Staff role
       const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
@@ -197,40 +238,71 @@ module.exports = {
           .setMaxValues(1)
       );
 
-      const rowRolePlayer = new ActionRowBuilder().addComponents(
+      // Row 2: Players roles (multi)
+      const rowRolePlayers = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
-          .setCustomId(CID.player)
-          .setPlaceholder(`${ICON.player} Role Joueur`)
+          .setCustomId(CID.players)
+          .setPlaceholder(`${ICON.players} Rôles Joueurs (multi)`)
+          .setMinValues(0)
+          .setMaxValues(10)
+      );
+
+      // Row 3: Post role (single) to bind
+      const rowPostRole = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.postRole)
+          .setPlaceholder(`${ICON.postes} Rôle Poste (à lier)`)
           .setMinValues(0)
           .setMaxValues(1)
       );
 
-      const rowRoleTrial = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder()
-          .setCustomId(CID.trial)
-          .setPlaceholder(`${ICON.trial} Role Essai (opt)`)
-          .setMinValues(0)
-          .setMaxValues(1)
+      // Row 4: Post label quick-pick (string select)
+      const rowPostLabel = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(CID.postLabel)
+          .setPlaceholder(`${ICON.postes} Label Poste`)
+          .addOptions(
+            { label: "MDC", value: "MDC" },
+            { label: "BU", value: "BU" },
+            { label: "MOC", value: "MOC" },
+            { label: "MC", value: "MC" },
+            { label: "DG", value: "DG" },
+            { label: "DD", value: "DD" },
+            { label: "DC", value: "DC" },
+            { label: "GB", value: "GB" }
+          )
       );
 
+      // Row 5: actions2 (auto/cancel + add/resetPosts)
       const rowActions2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(CID.addPost)
+          .setLabel(`${ICON.addPost} Ajouter Poste`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.resetPosts)
+          .setLabel(`${ICON.resetPosts} Reset Postes`)
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(CID.auto)
           .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Cancel`).setStyle(ButtonStyle.Danger)
+        new ButtonBuilder()
+          .setCustomId(CID.cancel)
+          .setLabel(`${ICON.cancel} Cancel`)
+          .setStyle(ButtonStyle.Danger)
       );
 
       const msg2 = await interaction.followUp({
-        content: `${ICON.roles} Roles`,
-        components: [rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
+        content: "🧩 Rôles / 📌 Postes",
+        components: [rowRoleStaff, rowRolePlayers, rowPostRole, rowPostLabel, rowActions2],
         ephemeral: true,
       });
 
       const mainMsg = await interaction.fetchReply();
 
       const refresh = async () => {
-        rowActions2.components[0]
+        rowActions2.components[2]
           .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
@@ -241,8 +313,8 @@ module.exports = {
 
         await msg2
           .edit({
-            content: `${ICON.roles} Roles`,
-            components: [rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
+            content: "🧩 Rôles / 📌 Postes",
+            components: [rowRoleStaff, rowRolePlayers, rowPostRole, rowPostLabel, rowActions2],
           })
           .catch(() => {});
       };
@@ -255,6 +327,7 @@ module.exports = {
         try { col2.stop(); } catch {}
       };
 
+      // ---- Collect Message 1
       col1.on("collect", async (i) => {
         try {
           if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
@@ -279,8 +352,11 @@ module.exports = {
               draft.pseudoScanChannelId = null;
 
               draft.staffRoleId = null;
-              draft.playerRoleId = null;
-              draft.trialRoleId = null;
+              draft.playerRoleIds = [];
+
+              draft.posts = [];
+              draft.pendingPostRoleId = null;
+              draft.pendingPostLabel = "MDC";
 
               autoEnabled = false;
 
@@ -293,7 +369,8 @@ module.exports = {
                 !!draft.disposChannelId &&
                 !!draft.staffReportsChannelId &&
                 !!draft.staffRoleId &&
-                !!draft.playerRoleId;
+                Array.isArray(draft.playerRoleIds) &&
+                draft.playerRoleIds.length > 0;
 
               if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
@@ -305,14 +382,11 @@ module.exports = {
                 pseudoScanChannelId: draft.pseudoScanChannelId,
 
                 staffRoleId: draft.staffRoleId,
-                playerRoleId: draft.playerRoleId,
-                trialRoleId: draft.trialRoleId,
+                playerRoleIds: draft.playerRoleIds,
 
-                // minimal: ON/OFF
+                posts: draft.posts,
+
                 automations: { enabled: !!autoEnabled },
-
-                // (optionnel) compat pseudo store
-                pseudo: { scanChannelId: draft.pseudoScanChannelId },
 
                 setupBy: interaction.user.id,
                 setupAt: new Date().toISOString(),
@@ -334,6 +408,7 @@ module.exports = {
         }
       });
 
+      // ---- Collect Message 2
       col2.on("collect", async (i) => {
         try {
           if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
@@ -341,17 +416,67 @@ module.exports = {
           }
 
           if (i.isRoleSelectMenu()) {
-            const v = i.values?.[0] || null;
+            // Staff
+            if (i.customId === CID.staff) {
+              draft.staffRoleId = i.values?.[0] || null;
+              await i.deferUpdate();
+              return refresh();
+            }
 
-            if (i.customId === CID.staff) draft.staffRoleId = v;
-            if (i.customId === CID.player) draft.playerRoleId = v;
-            if (i.customId === CID.trial) draft.trialRoleId = v;
+            // Players multi
+            if (i.customId === CID.players) {
+              draft.playerRoleIds = Array.isArray(i.values) ? i.values : [];
+              await i.deferUpdate();
+              return refresh();
+            }
 
-            await i.deferUpdate();
-            return refresh();
+            // Post role to bind
+            if (i.customId === CID.postRole) {
+              draft.pendingPostRoleId = i.values?.[0] || null;
+              await i.deferUpdate();
+              return refresh();
+            }
+          }
+
+          if (i.isStringSelectMenu()) {
+            if (i.customId === CID.postLabel) {
+              draft.pendingPostLabel = cleanLabel(i.values?.[0] || "MDC") || "MDC";
+              await i.deferUpdate();
+              return refresh();
+            }
           }
 
           if (i.isButton()) {
+            if (i.customId === CID.addPost) {
+              // nécessite un rôle poste sélectionné
+              if (!draft.pendingPostRoleId) {
+                await i.reply({ content: ICON.warn, ephemeral: true });
+                return;
+              }
+
+              const label = cleanLabel(draft.pendingPostLabel) || "POSTE";
+              const roleId = draft.pendingPostRoleId;
+
+              // upsert : si roleId déjà présent, on met à jour le label
+              const next = (draft.posts || []).filter((p) => p && p.roleId);
+              const idx = next.findIndex((p) => p.roleId === roleId);
+              if (idx >= 0) next[idx] = { roleId, label };
+              else next.push({ roleId, label });
+
+              draft.posts = next;
+
+              await i.deferUpdate();
+              return refresh();
+            }
+
+            if (i.customId === CID.resetPosts) {
+              draft.posts = [];
+              draft.pendingPostRoleId = null;
+              draft.pendingPostLabel = "MDC";
+              await i.deferUpdate();
+              return refresh();
+            }
+
             if (i.customId === CID.auto) {
               autoEnabled = !autoEnabled;
               await i.deferUpdate();
