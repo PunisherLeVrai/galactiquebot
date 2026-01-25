@@ -1,7 +1,7 @@
 // src/commands/setup.js
 // Setup minimal — 2 messages — multi-serveur
 // Requis: 📅 + 📊 + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)
-// + Postes (rôles) configurables pour /pseudo (multi postes)
+// + Postes (rôles) configurables pour /pseudo (multi rôles postes)
 // CommonJS — discord.js v14
 
 const {
@@ -171,7 +171,7 @@ module.exports = {
         posts: normalizePosts(saved.posts),
 
         // UI temporaire
-        pendingPostRoleId: null,
+        pendingPostRoleIds: [], // ✅ multi
         pendingPostLabel: "MDC",
       };
 
@@ -188,8 +188,8 @@ module.exports = {
         staff: `setup:staff:${scope}`,
         players: `setup:players:${scope}`,
 
-        // postes
-        postRole: `setup:postRole:${scope}`,
+        // postes (multi)
+        postRoles: `setup:postRoles:${scope}`,
         postLabel: `setup:postLabel:${scope}`,
         addPost: `setup:addPost:${scope}`,
         resetPosts: `setup:resetPosts:${scope}`,
@@ -227,7 +227,7 @@ module.exports = {
           .addChannelTypes(ChannelType.GuildText)
       );
 
-      // defaults (si supportés)
+      // defaults salons (best-effort)
       try {
         if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
         if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
@@ -262,19 +262,20 @@ module.exports = {
           .setMaxValues(10)
       );
 
-      // defaults rôles (si supportés)
+      // ✅ Postes: multi rôles à ajouter en une fois
+      const rowPostRoles = new ActionRowBuilder().addComponents(
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.postRoles)
+          .setPlaceholder(`${ICON.postes} Rôles Postes (multi)`)
+          .setMinValues(0)
+          .setMaxValues(10)
+      );
+
+      // defaults rôles (best-effort)
       try {
         if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 10));
         if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 10));
       } catch {}
-
-      const rowPostRole = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder()
-          .setCustomId(CID.postRole)
-          .setPlaceholder(`${ICON.postes} Rôle Poste (à lier)`)
-          .setMinValues(0)
-          .setMaxValues(1)
-      );
 
       const rowPostLabel = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -293,7 +294,7 @@ module.exports = {
       );
 
       const rowActions2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.addPost).setLabel(`${ICON.addPost} Ajouter Poste`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.addPost).setLabel(`${ICON.addPost} Ajouter Postes`).setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(CID.resetPosts).setLabel(`${ICON.resetPosts} Reset Postes`).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(CID.auto)
@@ -304,7 +305,7 @@ module.exports = {
 
       const msg2 = await interaction.followUp({
         content: "🧩 Rôles / 📌 Postes",
-        components: [rowRoleStaff, rowRolePlayers, rowPostRole, rowPostLabel, rowActions2],
+        components: [rowRoleStaff, rowRolePlayers, rowPostRoles, rowPostLabel, rowActions2],
         ephemeral: true,
       });
 
@@ -336,7 +337,7 @@ module.exports = {
         await msg2
           .edit({
             content: "🧩 Rôles / 📌 Postes",
-            components: [rowRoleStaff, rowRolePlayers, rowPostRole, rowPostLabel, rowActions2],
+            components: [rowRoleStaff, rowRolePlayers, rowPostRoles, rowPostLabel, rowActions2],
           })
           .catch(() => {});
       };
@@ -377,7 +378,7 @@ module.exports = {
               draft.playerRoleIds = [];
 
               draft.posts = [];
-              draft.pendingPostRoleId = null;
+              draft.pendingPostRoleIds = [];
               draft.pendingPostLabel = "MDC";
 
               autoEnabled = false;
@@ -411,7 +412,7 @@ module.exports = {
                 staffRoleIds: draft.staffRoleIds,
                 playerRoleIds: draft.playerRoleIds,
 
-                // compat (si tu as d'autres commandes qui lisent encore staffRoleId)
+                // compat si d'autres codes lisent encore staffRoleId
                 staffRoleId: draft.staffRoleIds[0] || null,
 
                 // postes /pseudo
@@ -460,8 +461,9 @@ module.exports = {
               return refresh();
             }
 
-            if (i.customId === CID.postRole) {
-              draft.pendingPostRoleId = i.values?.[0] || null;
+            // ✅ postes multi
+            if (i.customId === CID.postRoles) {
+              draft.pendingPostRoleIds = Array.isArray(i.values) ? i.values : [];
               await i.deferUpdate();
               return refresh();
             }
@@ -477,20 +479,21 @@ module.exports = {
 
           if (i.isButton()) {
             if (i.customId === CID.addPost) {
-              if (!draft.pendingPostRoleId) {
+              const roleIds = Array.isArray(draft.pendingPostRoleIds) ? draft.pendingPostRoleIds.filter(Boolean) : [];
+              if (!roleIds.length) {
                 await i.reply({ content: ICON.warn, ephemeral: true });
                 return;
               }
 
               const label = cleanLabel(draft.pendingPostLabel) || "POSTE";
-              const roleId = String(draft.pendingPostRoleId);
 
-              const next = normalizePosts([
+              // ajoute / update tous les rôles sélectionnés avec le label courant
+              const merged = [
                 ...(draft.posts || []),
-                { roleId, label }, // upsert par normalizePosts()
-              ]);
+                ...roleIds.map((roleId) => ({ roleId: String(roleId), label })),
+              ];
 
-              draft.posts = next;
+              draft.posts = normalizePosts(merged);
 
               await i.deferUpdate();
               return refresh();
@@ -498,7 +501,7 @@ module.exports = {
 
             if (i.customId === CID.resetPosts) {
               draft.posts = [];
-              draft.pendingPostRoleId = null;
+              draft.pendingPostRoleIds = [];
               draft.pendingPostLabel = "MDC";
               await i.deferUpdate();
               return refresh();
