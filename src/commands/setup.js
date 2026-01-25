@@ -1,7 +1,7 @@
 // src/commands/setup.js
 // Setup minimal — 2 messages — multi-serveur
-// Requis: 📅 + 📊 + 🛡️ + (au moins 1 rôle joueur)
-// + Postes (rôles) configurables pour /pseudo
+// Requis: 📅 + 📊 + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)
+// + Postes (rôles) configurables pour /pseudo (multi postes)
 // CommonJS — discord.js v14
 
 const {
@@ -51,24 +51,30 @@ const ICON = {
 function fmtCh(id) {
   return id ? `<#${id}>` : "—";
 }
-function fmtRole(id) {
-  return id ? `<@&${id}>` : "—";
-}
 function fmtRoles(ids) {
   const arr = Array.isArray(ids) ? ids.filter(Boolean) : [];
   return arr.length ? arr.map((id) => `<@&${id}>`).join(" ") : "—";
+}
+
+function cleanLabel(s) {
+  return String(s || "")
+    .replace(/[`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 16);
 }
 
 function buildEmbed(guild, draft, autoEnabled) {
   const requiredOk =
     !!draft.disposChannelId &&
     !!draft.staffReportsChannelId &&
-    !!draft.staffRoleId &&
+    Array.isArray(draft.staffRoleIds) &&
+    draft.staffRoleIds.length > 0 &&
     Array.isArray(draft.playerRoleIds) &&
     draft.playerRoleIds.length > 0;
 
   const postsPreview = (draft.posts || [])
-    .slice(0, 8)
+    .slice(0, 10)
     .map((p) => `${p.label || "POSTE"}: <@&${p.roleId}>`)
     .join("\n");
 
@@ -79,7 +85,9 @@ function buildEmbed(guild, draft, autoEnabled) {
       [
         requiredOk ? `${ICON.ok} OK` : `${ICON.warn} Incomplet`,
         "",
-        "Requis : 📅 Dispos + 📊 Staff + 🛡️ Staff + 👟 (≥1 rôle joueur)",
+        "Requis : 📅 Dispos + 📊 Staff + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)",
+        "",
+        "Ces réglages servent aux commandes et à /pseudo (export_config ensuite).",
       ].join("\n")
     )
     .addFields(
@@ -95,8 +103,8 @@ function buildEmbed(guild, draft, autoEnabled) {
       {
         name: "Rôles",
         value: [
-          `${ICON.staff} ${fmtRole(draft.staffRoleId)} — Staff`,
-          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs (filtre)`,
+          `${ICON.staff} ${fmtRoles(draft.staffRoleIds)} — Staff (commandes + /pseudo)`,
+          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs (filtre + /pseudo)`,
         ].join("\n"),
         inline: false,
       },
@@ -116,15 +124,6 @@ function buildEmbed(guild, draft, autoEnabled) {
 
 function inScope(i, scope) {
   return typeof i.customId === "string" && i.customId.endsWith(scope);
-}
-
-function cleanLabel(s) {
-  const t = String(s || "")
-    .replace(/[`]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 16);
-  return t;
 }
 
 module.exports = {
@@ -151,16 +150,22 @@ module.exports = {
         staffReportsChannelId: saved.staffReportsChannelId || null,
         pseudoScanChannelId: saved.pseudoScanChannelId || null,
 
-        // rôles
-        staffRoleId: saved.staffRoleId || null,
-        playerRoleIds: Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [],
+        // rôles (multi)
+        // compat: si ancien staffRoleId existe, on le convertit en tableau
+        staffRoleIds: Array.isArray(saved.staffRoleIds)
+          ? saved.staffRoleIds.filter(Boolean)
+          : (saved.staffRoleId ? [saved.staffRoleId] : []),
 
-        // postes
-        posts: Array.isArray(saved.posts) ? saved.posts : [],
+        playerRoleIds: Array.isArray(saved.playerRoleIds)
+          ? saved.playerRoleIds.filter(Boolean)
+          : [],
+
+        // postes (multi)
+        posts: Array.isArray(saved.posts) ? saved.posts.filter((p) => p?.roleId) : [],
 
         // UI temporaire (non stocké)
         pendingPostRoleId: null,
-        pendingPostLabel: "MDC", // valeur par défaut modifiable via menu
+        pendingPostLabel: "MDC",
       };
 
       let autoEnabled = !!saved?.automations?.enabled;
@@ -229,13 +234,13 @@ module.exports = {
       });
 
       // ---------- Message 2 (roles + postes + auto/cancel) ----------
-      // Row 1: Staff role
+      // Row 1: Staff roles (multi)
       const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
-          .setPlaceholder(`${ICON.staff} Role Staff`)
+          .setPlaceholder(`${ICON.staff} Rôles Staff (multi)`)
           .setMinValues(0)
-          .setMaxValues(1)
+          .setMaxValues(10)
       );
 
       // Row 2: Players roles (multi)
@@ -273,7 +278,7 @@ module.exports = {
           )
       );
 
-      // Row 5: actions2 (auto/cancel + add/resetPosts)
+      // Row 5: actions2 (add/resetPosts + auto/cancel)
       const rowActions2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(CID.addPost)
@@ -351,7 +356,7 @@ module.exports = {
               draft.staffReportsChannelId = null;
               draft.pseudoScanChannelId = null;
 
-              draft.staffRoleId = null;
+              draft.staffRoleIds = [];
               draft.playerRoleIds = [];
 
               draft.posts = [];
@@ -368,7 +373,8 @@ module.exports = {
               const requiredOk =
                 !!draft.disposChannelId &&
                 !!draft.staffReportsChannelId &&
-                !!draft.staffRoleId &&
+                Array.isArray(draft.staffRoleIds) &&
+                draft.staffRoleIds.length > 0 &&
                 Array.isArray(draft.playerRoleIds) &&
                 draft.playerRoleIds.length > 0;
 
@@ -381,9 +387,11 @@ module.exports = {
                 staffReportsChannelId: draft.staffReportsChannelId,
                 pseudoScanChannelId: draft.pseudoScanChannelId,
 
-                staffRoleId: draft.staffRoleId,
+                // multi rôles (commandes + /pseudo)
+                staffRoleIds: draft.staffRoleIds,
                 playerRoleIds: draft.playerRoleIds,
 
+                // /pseudo postes
                 posts: draft.posts,
 
                 automations: { enabled: !!autoEnabled },
@@ -416,14 +424,14 @@ module.exports = {
           }
 
           if (i.isRoleSelectMenu()) {
-            // Staff
+            // Staff (multi)
             if (i.customId === CID.staff) {
-              draft.staffRoleId = i.values?.[0] || null;
+              draft.staffRoleIds = Array.isArray(i.values) ? i.values : [];
               await i.deferUpdate();
               return refresh();
             }
 
-            // Players multi
+            // Players (multi)
             if (i.customId === CID.players) {
               draft.playerRoleIds = Array.isArray(i.values) ? i.values : [];
               await i.deferUpdate();
@@ -448,7 +456,6 @@ module.exports = {
 
           if (i.isButton()) {
             if (i.customId === CID.addPost) {
-              // nécessite un rôle poste sélectionné
               if (!draft.pendingPostRoleId) {
                 await i.reply({ content: ICON.warn, ephemeral: true });
                 return;
@@ -457,7 +464,7 @@ module.exports = {
               const label = cleanLabel(draft.pendingPostLabel) || "POSTE";
               const roleId = draft.pendingPostRoleId;
 
-              // upsert : si roleId déjà présent, on met à jour le label
+              // upsert : si roleId déjà présent, update label
               const next = (draft.posts || []).filter((p) => p && p.roleId);
               const idx = next.findIndex((p) => p.roleId === roleId);
               if (idx >= 0) next[idx] = { roleId, label };
