@@ -1,5 +1,5 @@
 // src/commands/setup.js
-// Setup minimal — 2 messages — emoji-only — multi-serveur
+// Setup minimal — 2 messages — emoji + mot-clé — multi-serveur
 // Requis: 📅 + 📊 + 🛡️ + 👟
 // CommonJS — discord.js v14
 
@@ -58,39 +58,39 @@ function buildEmbed(guild, draft, autoEnabled) {
     !!draft.playerRoleId;
 
   return new EmbedBuilder()
-    .setTitle(`${ICON.title} ${guild.name}`)
+    .setTitle(`${ICON.title} Setup — ${guild.name}`)
     .setColor(0x5865f2)
     .setDescription(
       [
-        `${ICON.ch} ${ICON.roles} ${ICON.auto}`,
+        `${ICON.ch} Salons • ${ICON.roles} Rôles • ${ICON.auto} Auto`,
         "",
-        requiredOk ? ICON.ok : ICON.warn,
+        requiredOk ? `${ICON.ok} OK` : `${ICON.warn} Incomplet`,
         "",
-        "Requis : 📅 + 📊 + 🛡️ + 👟",
+        "Requis : 📅 Dispos + 📊 Staff + 🛡️ Staff + 👟 Joueur",
       ].join("\n")
     )
     .addFields(
       {
-        name: ICON.ch,
+        name: `${ICON.ch} Salons`,
         value: [
-          `${ICON.dispos} ${fmtCh(draft.disposChannelId)}`,
-          `${ICON.staffReports} ${fmtCh(draft.staffReportsChannelId)}`,
-          `${ICON.pseudoScan} ${fmtCh(draft.pseudoScanChannelId)} (opt)`,
+          `${ICON.dispos} ${fmtCh(draft.disposChannelId)} — Dispos`,
+          `${ICON.staffReports} ${fmtCh(draft.staffReportsChannelId)} — Staff`,
+          `${ICON.pseudoScan} ${fmtCh(draft.pseudoScanChannelId)} — Pseudos (opt)`,
         ].join("\n"),
         inline: false,
       },
       {
-        name: ICON.roles,
+        name: `${ICON.roles} Rôles`,
         value: [
-          `${ICON.staff} ${fmtRole(draft.staffRoleId)}`,
-          `${ICON.player} ${fmtRole(draft.playerRoleId)}`,
-          `${ICON.trial} ${fmtRole(draft.trialRoleId)} (opt)`,
+          `${ICON.staff} ${fmtRole(draft.staffRoleId)} — Staff`,
+          `${ICON.player} ${fmtRole(draft.playerRoleId)} — Joueur`,
+          `${ICON.trial} ${fmtRole(draft.trialRoleId)} — Essai (opt)`,
         ].join("\n"),
         inline: false,
       },
       {
-        name: ICON.auto,
-        value: `**${autoEnabled ? "ON" : "OFF"}**`,
+        name: `${ICON.auto} Automations`,
+        value: `État: **${autoEnabled ? "ON" : "OFF"}**`,
         inline: false,
       }
     )
@@ -153,7 +153,7 @@ module.exports = {
       const rowDispos = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.dispos)
-          .setPlaceholder(ICON.dispos)
+          .setPlaceholder(`${ICON.dispos} Dispos`)
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
@@ -162,7 +162,7 @@ module.exports = {
       const rowStaffReports = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.staffReports)
-          .setPlaceholder(ICON.staffReports)
+          .setPlaceholder(`${ICON.staffReports} Staff`)
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
@@ -171,15 +171,15 @@ module.exports = {
       const rowPseudoScan = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.pseudoScan)
-          .setPlaceholder(ICON.pseudoScan)
+          .setPlaceholder(`${ICON.pseudoScan} Pseudos (opt)`)
           .setMinValues(0)
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
 
       const rowActions1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.save).setLabel(ICON.save).setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(CID.reset).setLabel(ICON.reset).setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(CID.save).setLabel(`${ICON.save} Save`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(CID.reset).setLabel(`${ICON.reset} Reset`).setStyle(ButtonStyle.Secondary)
       );
 
       await interaction.reply({
@@ -190,27 +190,39 @@ module.exports = {
 
       // ---------- Message 2 (roles + auto/cancel) ----------
       const rowRoleStaff = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.staff).setPlaceholder(ICON.staff).setMinValues(0).setMaxValues(1)
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.staff)
+          .setPlaceholder(`${ICON.staff} Role Staff`)
+          .setMinValues(0)
+          .setMaxValues(1)
       );
 
       const rowRolePlayer = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.player).setPlaceholder(ICON.player).setMinValues(0).setMaxValues(1)
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.player)
+          .setPlaceholder(`${ICON.player} Role Joueur`)
+          .setMinValues(0)
+          .setMaxValues(1)
       );
 
       const rowRoleTrial = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.trial).setPlaceholder(ICON.trial).setMinValues(0).setMaxValues(1)
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.trial)
+          .setPlaceholder(`${ICON.trial} Role Essai (opt)`)
+          .setMinValues(0)
+          .setMaxValues(1)
       );
 
       const rowActions2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(CID.auto)
-          .setLabel(autoEnabled ? ICON.autoOn : ICON.autoOff)
+          .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.cancel).setLabel(ICON.cancel).setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Cancel`).setStyle(ButtonStyle.Danger)
       );
 
       const msg2 = await interaction.followUp({
-        content: ICON.roles,
+        content: `${ICON.roles} Roles`,
         components: [rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
         ephemeral: true,
       });
@@ -219,7 +231,7 @@ module.exports = {
 
       const refresh = async () => {
         rowActions2.components[0]
-          .setLabel(autoEnabled ? ICON.autoOn : ICON.autoOff)
+          .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
         await interaction.editReply({
@@ -227,10 +239,12 @@ module.exports = {
           components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
         });
 
-        await msg2.edit({
-          content: ICON.roles,
-          components: [rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
-        }).catch(() => {});
+        await msg2
+          .edit({
+            content: `${ICON.roles} Roles`,
+            components: [rowRoleStaff, rowRolePlayer, rowRoleTrial, rowActions2],
+          })
+          .catch(() => {});
       };
 
       const col1 = mainMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 });
@@ -243,7 +257,9 @@ module.exports = {
 
       col1.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true });
+          }
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -292,15 +308,25 @@ module.exports = {
                 playerRoleId: draft.playerRoleId,
                 trialRoleId: draft.trialRoleId,
 
+                // minimal: ON/OFF
                 automations: { enabled: !!autoEnabled },
+
+                // (optionnel) compat pseudo store
+                pseudo: { scanChannelId: draft.pseudoScanChannelId },
 
                 setupBy: interaction.user.id,
                 setupAt: new Date().toISOString(),
               });
 
               stopAll();
-              await i.update({ content: ICON.save, embeds: [buildEmbed(guild, draft, autoEnabled)], components: [] }).catch(() => {});
-              await msg2.edit({ content: ICON.save, components: [] }).catch(() => {});
+              await i
+                .update({
+                  content: `${ICON.save} Saved`,
+                  embeds: [buildEmbed(guild, draft, autoEnabled)],
+                  components: [],
+                })
+                .catch(() => {});
+              await msg2.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
             }
           }
         } catch {
@@ -310,7 +336,9 @@ module.exports = {
 
       col2.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true });
+          }
 
           if (i.isRoleSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -332,9 +360,9 @@ module.exports = {
 
             if (i.customId === CID.cancel) {
               stopAll();
-              await i.update({ content: ICON.cancel, components: [] }).catch(() => {});
-              try { await interaction.editReply({ content: ICON.cancel, embeds: [], components: [] }); } catch {}
-              try { await msg2.edit({ content: ICON.cancel, components: [] }); } catch {}
+              await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
+              try { await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] }); } catch {}
+              try { await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
             }
           }
         } catch {
