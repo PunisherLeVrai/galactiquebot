@@ -5,21 +5,22 @@
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
 //
-// ✅ FIX : chemin stable basé sur ROOT_DIR (pas process.cwd())
-// - Par défaut: <root>/config/servers.json
-// - Override: DATA_DIR=/chemin/persistant (Railway volume, etc.)
+// ✅ Chemin FORCÉ : src/config/servers.json
+// - Par défaut: <projet>/src/config/servers.json
+// - Override (si tu veux persistance Railway): DATA_DIR=/chemin/persistant  (dans ce cas: /chemin/persistant/servers.json)
 
 const fs = require("fs");
 const path = require("path");
 
-// ROOT_DIR = racine du projet (car ce fichier est dans src/core)
-const ROOT_DIR = path.join(__dirname, "..", "..");
+// SRC_DIR = dossier src (car ce fichier est dans src/core)
+const SRC_DIR = path.join(__dirname, "..");
 
 // Dossier de data (persistant si DATA_DIR défini)
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(ROOT_DIR, "config");
+  : path.join(SRC_DIR, "config");
 
+// ✅ FORCÉ
 const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
 const DEFAULT_DATA = { version: 1, guilds: {} };
@@ -225,17 +226,21 @@ function resetGuildConfig(guildId) {
 }
 
 module.exports = {
-  ROOT_DIR,
+  // chemins
+  SRC_DIR,
   DATA_DIR,
   CONFIG_PATH,
 
+  // defaults
   DEFAULT_DATA,
   DEFAULT_GUILD,
 
+  // CRUD
   getGuildConfig,
   upsertGuildConfig,
   exportAllConfig,
 
+  // utilitaires
   importAllConfig,
   resetGuildConfig,
 };
