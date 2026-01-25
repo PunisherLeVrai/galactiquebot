@@ -2,15 +2,18 @@
 // Format: "PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3"
 //
 // PSEUDO priorité: PSN > XBOX > EA > username Discord
-// ✅ Préfixe obligatoire: psn:/xbox:/ea:
+// ✅ Préfixe obligatoire (sortie): psn:/  xbox:/  ea:/
 // RÔLE priorité: Président > Fondateur > GM > coGM > STAFF
 // ✅ Rôle: détection par NOM des rôles (Président, Fondateur, GM, coGM, Staff)
 // ✅ Staff fallback: si membre a un des cfg.staffRoleIds (setup) -> "STAFF" (ou admin)
 // POSTES: max 3, ordre cfg.postRoleIds (0..25)
 // ✅ Postes: libellé = nom du rôle Discord (pas de label poste)
+// ✅ Sécurités: retire ` et |, ignore @everyone, limite nickname à 32
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getUserPseudos } = require("./pseudoStore");
+
+const MAX_NICK = 32;
 
 function normalizeUsername(username) {
   const raw = String(username || "");
@@ -26,38 +29,46 @@ function normalizeUsername(username) {
 
 function cleanValue(v, max = 40) {
   return String(v || "")
-    .replace(/[`|]/g, "")
+    .replace(/[`|]/g, "") // " | " casse le format
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 }
 
 function ensurePrefix(platform, value) {
-  const v = cleanValue(value);
+  const v = cleanValue(value, 40);
   if (!v) return "";
 
   const p = String(platform || "").toLowerCase();
-  const wanted = `${p}:`;
+  const wanted = `${p}:/`; // ✅ sortie canonique demandée
+
   const lowered = v.toLowerCase();
 
-  // déjà OK: "psn:xxxx" ou "psn:/xxxx"
+  // Déjà OK: "psn:/xxxx"
   if (lowered.startsWith(wanted)) {
     const rest = v.slice(wanted.length).trim().replace(/^\/+/, "");
     return `${wanted}${rest}`.trim();
   }
 
-  // tolère "/xxxx" -> on ajoute le préfixe
+  // "psn:xxxx" -> "psn:/xxxx"
+  if (lowered.startsWith(`${p}:`)) {
+    const rest = v.slice((p + ":").length).trim().replace(/^\/+/, "");
+    return `${wanted}${rest}`.trim();
+  }
+
+  // "/xxxx" -> "psn:/xxxx"
   if (lowered.startsWith("/")) {
     const rest = v.replace(/^\/+/, "").trim();
     return `${wanted}${rest}`.trim();
   }
 
-  // tolère "psn / xxxx" (espaces) -> on normalise
+  // "psn / xxxx" ou "psn xxxx" -> "psn:/xxxx"
   if (lowered.startsWith(`${p} `) || lowered.startsWith(`${p}/`)) {
     const rest = v.slice(p.length).replace(/^[:\s/]+/, "").trim();
     return `${wanted}${rest}`.trim();
   }
 
+  // "xxxx" -> "psn:/xxxx"
   return `${wanted}${v}`.trim();
 }
 
@@ -68,7 +79,6 @@ function pickBestPseudo(member) {
   const xbox = cleanValue(entry.xbox);
   const ea = cleanValue(entry.ea);
 
-  // priorité PSN > XBOX > EA
   if (psn) return ensurePrefix("psn", psn);
   if (xbox) return ensurePrefix("xbox", xbox);
   if (ea) return ensurePrefix("ea", ea);
@@ -132,18 +142,32 @@ function resolvePosts(member, cfg) {
   const ordered = ids.map(String).filter(Boolean);
   const out = [];
 
+  const everyoneRoleId = String(member.guild?.id || "");
+
   for (const roleId of ordered) {
+    if (!roleId) continue;
+    if (roleId === everyoneRoleId) continue; // ignore @everyone
     if (!member.roles.cache.has(roleId)) continue;
 
-    // On récupère le nom du rôle depuis le cache du serveur (plus fiable que member.roles)
     const guildRole = member.guild?.roles?.cache?.get(roleId);
     const name = cleanValue(guildRole?.name || member.roles.cache.get(roleId)?.name, 16);
 
-    out.push(name || "POSTE");
+    if (name) out.push(name);
     if (out.length >= 3) break;
   }
 
   return out;
+}
+
+function clampNickname(s, max = MAX_NICK) {
+  const str = String(s || "").trim();
+  if (str.length <= max) return str;
+
+  // coupe dur + nettoyage de fin (évite " |" ou "/" pendants)
+  let cut = str.slice(0, max).trim();
+  cut = cut.replace(/[|/]\s*$/g, "").trim();
+  cut = cut.replace(/\|\s*$/g, "").trim();
+  return cut || str.slice(0, max);
 }
 
 function buildMemberLine(member, cfg) {
@@ -155,7 +179,7 @@ function buildMemberLine(member, cfg) {
   if (role) parts.push(role);
   if (posts.length) parts.push(posts.join("/"));
 
-  return parts.join(" | ");
+  return clampNickname(parts.join(" | "), MAX_NICK);
 }
 
 module.exports = {
