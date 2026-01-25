@@ -2,7 +2,8 @@
 // Stockage pseudos multi-serveur — CommonJS
 // ✅ psn/xbox/ea
 // ✅ nettoyage (retire ` et |), trim, max length
-// ✅ utilitaires export/import/reset (utile pour backup/restore)
+// ✅ strip du préfixe (psn:/xbox:/ea:) au stockage (le rendu impose le préfixe)
+// ✅ utilitaires export/import/reset (backup/restore) — import batché (1 seul write)
 
 const fs = require("fs");
 const path = require("path");
@@ -34,6 +35,7 @@ function readAll() {
 
   const data = safeReadJson(STORE_PATH, { ...DEFAULT_DATA });
 
+  if (!data || typeof data !== "object") return { ...DEFAULT_DATA };
   if (!data.guilds || typeof data.guilds !== "object") data.guilds = {};
   if (!data.version) data.version = 1;
 
@@ -48,14 +50,14 @@ function writeAll(data) {
 function normalizeValue(v, max = 40) {
   if (v === null || v === undefined) return "";
   return String(v)
-    .replace(/[`|]/g, "") // important: "|" casse "PSEUDO | ROLE | POSTES"
+    .replace(/[`|]/g, "") // "|" casse le format "PSEUDO | ROLE | POSTES"
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 }
 
 // Accepte "psn:xxx" / "psn:/xxx" / "xxx" -> stocke seulement "xxx" (sans le préfixe)
-// Le préfixe obligatoire est géré au rendu par memberDisplay.ensurePrefix()
+// Le préfixe obligatoire est imposé au rendu par memberDisplay.ensurePrefix()
 function stripPlatformPrefix(platform, value) {
   const v = normalizeValue(value, 60);
   if (!v) return "";
@@ -63,7 +65,7 @@ function stripPlatformPrefix(platform, value) {
   const p = String(platform || "").toLowerCase();
   if (!["psn", "xbox", "ea"].includes(p)) return normalizeValue(v, 40);
 
-  // enlève "psn:" ou "psn:/" (case-insensitive)
+  // enlève "psn:" ou "psn:/" (case-insensitive), tolère espaces
   const re = new RegExp(`^\\s*${p}\\s*:\\s*\\/?\\s*`, "i");
   const cleaned = v.replace(re, "").trim();
 
@@ -72,14 +74,16 @@ function stripPlatformPrefix(platform, value) {
 
 function ensureGuild(data, guildId) {
   const gid = String(guildId);
-  if (!data.guilds[gid]) data.guilds[gid] = { users: {} };
+  if (!data.guilds[gid] || typeof data.guilds[gid] !== "object") data.guilds[gid] = { users: {} };
   if (!data.guilds[gid].users || typeof data.guilds[gid].users !== "object") data.guilds[gid].users = {};
   return data.guilds[gid];
 }
 
 function ensureUser(guildObj, userId) {
   const uid = String(userId);
-  if (!guildObj.users[uid]) guildObj.users[uid] = { psn: "", xbox: "", ea: "", updatedAt: null };
+  if (!guildObj.users[uid] || typeof guildObj.users[uid] !== "object") {
+    guildObj.users[uid] = { psn: "", xbox: "", ea: "", updatedAt: null };
+  }
   return guildObj.users[uid];
 }
 
@@ -89,8 +93,15 @@ function getUserPseudos(guildId, userId) {
   return data.guilds?.[String(guildId)]?.users?.[String(userId)] || null;
 }
 
-function setUserPseudos(guildId, userId, patch) {
+/**
+ * setUserPseudos(guildId, userId, patch, opts?)
+ * - patch: { psn?, xbox?, ea? }
+ * - opts.write (default true): permet d'updater en batch sans écrire à chaque appel
+ */
+function setUserPseudos(guildId, userId, patch, opts = {}) {
   if (!guildId || !userId) return null;
+
+  const options = { write: opts.write !== false };
 
   const data = readAll();
   const g = ensureGuild(data, guildId);
@@ -106,7 +117,8 @@ function setUserPseudos(guildId, userId, patch) {
   };
 
   g.users[String(userId)] = next;
-  writeAll(data);
+
+  if (options.write) writeAll(data);
   return next;
 }
 
@@ -114,6 +126,7 @@ function setUserPseudos(guildId, userId, patch) {
 
 function exportAllPseudos() {
   const data = readAll();
+
   // copie "safe"
   const out = { version: data.version || 1, guilds: {} };
 
@@ -134,6 +147,12 @@ function exportAllPseudos() {
   return out;
 }
 
+/**
+ * Import payload (exportAllPseudos ou structure compatible)
+ * - replace=false: merge
+ * - replace=true: remplace data.guilds complètement
+ * Note: batché => 1 seul writeAll()
+ */
 function importAllPseudos(payload, { replace = false } = {}) {
   const data = readAll();
 
@@ -147,22 +166,22 @@ function importAllPseudos(payload, { replace = false } = {}) {
     const users = g?.users && typeof g.users === "object" ? g.users : {};
 
     for (const [uid, u] of Object.entries(users)) {
-      setUserPseudos(gid, uid, {
-        psn: u?.psn,
-        xbox: u?.xbox,
-        ea: u?.ea,
-      });
-      // setUserPseudos écrit déjà, mais on veut éviter 500 writes ? (option)
-      // Ici on reste simple; si tu veux optimiser, on peut batcher.
-    }
+      const cur = ensureUser(guildObj, uid);
 
-    // re-fetch après setUserPseudos, mais non nécessaire
-    guildObj.users = guildObj.users;
+      // merge "soft" (si champ manquant, on garde cur)
+      const next = {
+        psn: u?.psn !== undefined ? stripPlatformPrefix("psn", u.psn) : cur.psn,
+        xbox: u?.xbox !== undefined ? stripPlatformPrefix("xbox", u.xbox) : cur.xbox,
+        ea: u?.ea !== undefined ? stripPlatformPrefix("ea", u.ea) : cur.ea,
+        updatedAt: u?.updatedAt || new Date().toISOString(),
+      };
+
+      guildObj.users[String(uid)] = next;
+    }
   }
 
   if (!data.version) data.version = 1;
-  // setUserPseudos a déjà écrit; pour rester cohérent on réécrit une fois
-  writeAll(readAll());
+  writeAll(data);
   return exportAllPseudos();
 }
 
