@@ -1,5 +1,5 @@
 // src/commands/setup.js
-// Setup — 2 messages — multi-serveur
+// Setup — 2 messages — multi-serveur — STAFF ONLY
 // Requis: 📅 + 📊 + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)
 // + Postes configurables pour /pseudo : 0..25 rôles (SANS label)
 // CommonJS — discord.js v14
@@ -39,6 +39,15 @@ const ICON = {
   autoOn: "🤖",
   autoOff: "🛑",
 };
+
+// ✅ même helper que pseudo/export_config
+function isStaff(member, cfg) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
+
+  const staffRoleIds = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
+  return staffRoleIds.some((id) => id && member.roles.cache.has(String(id)));
+}
 
 function fmtCh(id) {
   return id ? `<#${id}>` : "—";
@@ -122,19 +131,21 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
     .setDescription("Configurer salons + rôles (multi) + postes + automations.")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // garde-fou minimal
 
   async execute(interaction) {
     try {
       if (!interaction.inGuild()) return interaction.reply({ content: ICON.no, ephemeral: true });
-      if (!interaction.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({ content: ICON.no, ephemeral: true });
-      }
 
       const guild = interaction.guild;
       const guildId = guild.id;
 
       const saved = getGuildConfig(guildId) || {};
+
+      // ✅ STAFF ONLY (au lieu de "admin only")
+      if (!isStaff(interaction.member, saved)) {
+        return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, ephemeral: true });
+      }
 
       // compat: ancien format posts [{roleId,label}] -> postRoleIds
       const legacyPostRoleIds = Array.isArray(saved.posts)
@@ -364,7 +375,7 @@ module.exports = {
 
               if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
-              // compat: ancien format "posts" (label neutre) pour les bouts de code pas migrés
+              // compat: ancien format "posts" (label neutre)
               const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({
                 roleId: String(roleId),
                 label: "POSTE",
@@ -380,10 +391,9 @@ module.exports = {
                 staffRoleIds: uniqIds(draft.staffRoleIds, 25),
                 playerRoleIds: uniqIds(draft.playerRoleIds, 25),
 
-                // ✅ nouveau format (sans label)
                 postRoleIds: uniqIds(draft.postRoleIds, 25),
 
-                // compat (si d'autres codes lisent encore staffRoleId / posts)
+                // compat
                 staffRoleId: draft.staffRoleIds[0] || null,
                 posts: legacyPosts,
 
