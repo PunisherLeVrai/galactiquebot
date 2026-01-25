@@ -1,8 +1,15 @@
 // src/commands/pseudo.js
 // /pseudo (STAFF ONLY) : scan salon pseudoScanChannelId + sync nickname de tout le monde
 // Format final: "PSEUDO (ou USERNAME) | RÔLE | POSTE1/POSTE2/POSTE3"
+//
 // - Scan: lit les derniers messages du salon pseudoScanChannelId et récupère psn:/xbox:/ea:
-// - Sync: applique le nickname à tous les membres (hors bots), avec un petit throttle anti rate-limit
+// - Store: met à jour pseudos.json (par auteur du message)
+// - Sync: applique le nickname à tous les membres (hors bots)
+//   (garde-fous: permissions + throttling + skip si identique)
+//
+// Requis côté bot:
+// - Intents: GuildMembers + GuildMessages + MessageContent (tu les as)
+// - Permission: ManageNicknames (+ rôle du bot au-dessus des rôles ciblés)
 
 const { SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require("discord.js");
 const { getGuildConfig } = require("../core/guildConfig");
@@ -29,13 +36,19 @@ function cleanText(s, max = 64) {
     .slice(0, max);
 }
 
-// Extrait un pseudo depuis un message
-// Accepte: "psn:ID", "psn:/ID", "xbox: ID", "ea:ID", même au milieu d'une phrase.
+/**
+ * Extrait une plateforme + ID depuis un message.
+ * Accepte:
+ *  - "psn:/ID", "psn:ID"
+ *  - "xbox:/ID", "xbox: ID"
+ *  - "ea:/ID", "ea:ID"
+ * Partout dans la phrase.
+ */
 function parsePlatformIdFromContent(content) {
   const txt = String(content || "");
 
-  // capture: psn:.... (jusqu'à espace / fin)
-  const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i;
+  // 2..40 caractères pour l'ID (sans espace ni |)
+  const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,40})/i;
   const m = txt.match(re);
   if (!m) return null;
 
@@ -43,15 +56,17 @@ function parsePlatformIdFromContent(content) {
   const value = cleanText(m[2], 40);
   if (!value) return null;
 
-  // On stocke la valeur brute, memberDisplay se charge d'imposer le préfixe au rendu
+  // On stocke sans forcer le préfixe ici.
+  // memberDisplay.js impose le format canonique (psn:/, xbox:/, ea:/) au rendu.
   return { platform, value };
 }
 
-async function scanPseudoChannel(channel, { limit = 200 } = {}) {
-  // Retour: Map<userId, { psn?, xbox?, ea? }> avec la valeur la plus récente trouvée
+async function scanPseudoChannel(channel, { limit = 300 } = {}) {
+  // Retour: Map<userId, { psn?, xbox?, ea? }>
+  // On conserve le plus récent trouvé par plateforme.
   const out = new Map();
 
-  let lastId = undefined;
+  let lastId;
   let fetched = 0;
 
   while (fetched < limit) {
@@ -59,7 +74,7 @@ async function scanPseudoChannel(channel, { limit = 200 } = {}) {
     const messages = await channel.messages.fetch({ limit: batchSize, before: lastId }).catch(() => null);
     if (!messages || messages.size === 0) break;
 
-    // messages est trié du + récent au + ancien
+    // messages: du + récent au + ancien
     for (const msg of messages.values()) {
       if (!msg?.author?.id) continue;
       if (msg.author.bot) continue;
@@ -69,7 +84,8 @@ async function scanPseudoChannel(channel, { limit = 200 } = {}) {
 
       const userId = msg.author.id;
       const cur = out.get(userId) || {};
-      // Le scan parcourt du récent vers ancien: on n’écrase pas si déjà trouvé pour cette plateforme
+
+      // scan du récent vers ancien: ne pas écraser si déjà trouvé pour cette plateforme
       if (!cur[parsed.platform]) {
         cur[parsed.platform] = parsed.value;
         out.set(userId, cur);
@@ -84,38 +100,60 @@ async function scanPseudoChannel(channel, { limit = 200 } = {}) {
   return out;
 }
 
+function hasBotNicknamePerms(guild, me) {
+  // me = GuildMember du bot
+  if (!guild || !me) return false;
+  return me.permissions?.has?.(PermissionFlagsBits.ManageNicknames) || false;
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("pseudo")
     .setDescription("STAFF: scan salon pseudos + sync nicknames (PSEUDO|RÔLE|POSTES).")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // garde-fou; toi tu gères aussi via roles staff
+    // garde-fou supplémentaire (mais on applique aussi isStaff via roles staff)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  async execute(interaction, client) {
+  async execute(interaction) {
     try {
       if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
 
       const cfg = getGuildConfig(interaction.guildId) || {};
-      const member = interaction.member;
+      const staffMember = interaction.member;
 
-      // STAFF ONLY
-      if (!isStaff(member, cfg)) return interaction.reply({ content: "⛔", ephemeral: true });
+      // STAFF ONLY (ton requirement)
+      if (!isStaff(staffMember, cfg)) return interaction.reply({ content: "⛔", ephemeral: true });
 
       const pseudoScanChannelId = cfg.pseudoScanChannelId;
       if (!pseudoScanChannelId) {
-        return interaction.reply({ content: "⚠️ Salon pseudoScanChannelId non configuré dans /setup.", ephemeral: true });
+        return interaction.reply({
+          content: "⚠️ Salon pseudos non configuré. Fais /setup et définis 🎮 pseudoScanChannelId.",
+          ephemeral: true,
+        });
       }
 
       const channel = await interaction.guild.channels.fetch(pseudoScanChannelId).catch(() => null);
       if (!channel || channel.type !== ChannelType.GuildText) {
-        return interaction.reply({ content: "⚠️ Salon pseudos invalide (doit être un salon texte).", ephemeral: true });
+        return interaction.reply({
+          content: "⚠️ Salon pseudos invalide (doit être un salon texte).",
+          ephemeral: true,
+        });
+      }
+
+      // Permission bot: Manage Nicknames (sinon, ça va fail pour tout le monde)
+      const me = await interaction.guild.members.fetchMe().catch(() => null);
+      if (!hasBotNicknamePerms(interaction.guild, me)) {
+        return interaction.reply({
+          content: "⚠️ Le bot n’a pas la permission **Gérer les pseudos** (Manage Nicknames).",
+          ephemeral: true,
+        });
       }
 
       await interaction.reply({ content: "⏳ Scan + Sync en cours...", ephemeral: true });
 
-      // 1) SCAN salon pseudos
+      // 1) SCAN
       const scanned = await scanPseudoChannel(channel, { limit: 300 }).catch(() => new Map());
 
-      // 2) Ecrit dans le store (pseudos.json)
+      // 2) STORE
       let storedCount = 0;
       for (const [userId, patch] of scanned.entries()) {
         if (!patch || typeof patch !== "object") continue;
@@ -124,31 +162,35 @@ module.exports = {
       }
 
       // 3) SYNC nicknames (tout le monde hors bots)
-      //    Important: nécessite que le bot ait "Manage Nicknames" + rôle au-dessus des rôles ciblés.
       await interaction.guild.members.fetch().catch(() => null);
 
-      const members = interaction.guild.members.cache
-        .filter((m) => m && !m.user.bot);
+      const members = interaction.guild.members.cache.filter((m) => m && !m.user.bot);
 
       let ok = 0;
       let fail = 0;
       let skipped = 0;
+      let cannotEdit = 0;
 
-      // Throttle léger pour éviter les rate limits
-      // (discord gère, mais c'est plus stable)
+      // Throttle léger (à ajuster selon taille serveur)
+      // Note: Discord rate-limit diffère selon conditions; 700-1000ms est généralement stable.
       for (const m of members.values()) {
-        // Option: on évite de toucher le propriétaire si restriction
         const line = buildMemberLine(m, cfg);
 
-        // Si rien de calculable, on skip
+        // si vide / invalide
         if (!line || line.length < 2) {
           skipped++;
           continue;
         }
 
-        // Si déjà identique, skip (réduit spam/rate limit)
+        // déjà identique
         if ((m.nickname || "") === line) {
           skipped++;
+          continue;
+        }
+
+        // cas non modifiable (rôle trop haut, owner, etc.)
+        if (!m.manageable) {
+          cannotEdit++;
           continue;
         }
 
@@ -159,11 +201,14 @@ module.exports = {
           fail++;
         }
 
-        await sleep(900);
+        await sleep(850);
       }
 
       return interaction.editReply({
-        content: `✅ Sync terminé.\n- Scan store: **${storedCount}** membre(s)\n- Nicknames: ✅ **${ok}** | ⚠️ **${fail}** | ⏭️ **${skipped}**`,
+        content:
+          `✅ Sync terminé.\n` +
+          `- Scan store: **${storedCount}** membre(s)\n` +
+          `- Nicknames: ✅ **${ok}** | ⚠️ **${fail}** | 🚫 **${cannotEdit}** | ⏭️ **${skipped}**`,
       });
     } catch (e) {
       try {
