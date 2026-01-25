@@ -1,152 +1,179 @@
 // src/commands/pseudo.js
-// Mise à jour ou affichage du pseudo joueur
-// Support: psn / xbox / ea / auto-scan
-// Format final: "PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3"
-// CommonJS — discord.js v14
+// /pseudo (STAFF ONLY) : scan salon pseudoScanChannelId + sync nickname de tout le monde
+// Format final: "PSEUDO (ou USERNAME) | RÔLE | POSTE1/POSTE2/POSTE3"
+// - Scan: lit les derniers messages du salon pseudoScanChannelId et récupère psn:/xbox:/ea:
+// - Sync: applique le nickname à tous les membres (hors bots), avec un petit throttle anti rate-limit
 
-const {
-  SlashCommandBuilder,
-  PermissionFlagsBits,
-  EmbedBuilder,
-} = require("discord.js");
-
+const { SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require("discord.js");
 const { getGuildConfig } = require("../core/guildConfig");
-const { setUserPseudos, getUserPseudos } = require("../core/pseudoStore");
+const { setUserPseudos } = require("../core/pseudoStore");
 const { buildMemberLine } = require("../core/memberDisplay");
+
+function isStaff(member, cfg) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
+
+  const staffRoleIds = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
+  return staffRoleIds.some((id) => id && member.roles.cache.has(String(id)));
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function cleanText(s, max = 64) {
+  return String(s || "")
+    .replace(/[`|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+// Extrait un pseudo depuis un message
+// Accepte: "psn:ID", "psn:/ID", "xbox: ID", "ea:ID", même au milieu d'une phrase.
+function parsePlatformIdFromContent(content) {
+  const txt = String(content || "");
+
+  // capture: psn:.... (jusqu'à espace / fin)
+  const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i;
+  const m = txt.match(re);
+  if (!m) return null;
+
+  const platform = String(m[1]).toLowerCase();
+  const value = cleanText(m[2], 40);
+  if (!value) return null;
+
+  // On stocke la valeur brute, memberDisplay se charge d'imposer le préfixe au rendu
+  return { platform, value };
+}
+
+async function scanPseudoChannel(channel, { limit = 200 } = {}) {
+  // Retour: Map<userId, { psn?, xbox?, ea? }> avec la valeur la plus récente trouvée
+  const out = new Map();
+
+  let lastId = undefined;
+  let fetched = 0;
+
+  while (fetched < limit) {
+    const batchSize = Math.min(100, limit - fetched);
+    const messages = await channel.messages.fetch({ limit: batchSize, before: lastId }).catch(() => null);
+    if (!messages || messages.size === 0) break;
+
+    // messages est trié du + récent au + ancien
+    for (const msg of messages.values()) {
+      if (!msg?.author?.id) continue;
+      if (msg.author.bot) continue;
+
+      const parsed = parsePlatformIdFromContent(msg.content);
+      if (!parsed) continue;
+
+      const userId = msg.author.id;
+      const cur = out.get(userId) || {};
+      // Le scan parcourt du récent vers ancien: on n’écrase pas si déjà trouvé pour cette plateforme
+      if (!cur[parsed.platform]) {
+        cur[parsed.platform] = parsed.value;
+        out.set(userId, cur);
+      }
+    }
+
+    fetched += messages.size;
+    lastId = messages.last()?.id;
+    if (!lastId) break;
+  }
+
+  return out;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("pseudo")
-    .setDescription("Définir ou afficher le pseudo PSN/XBOX/EA.")
-    .addStringOption(opt =>
-      opt
-        .setName("psn")
-        .setDescription("ID PSN (optionnel)")
-        .setRequired(false)
-    )
-    .addStringOption(opt =>
-      opt
-        .setName("xbox")
-        .setDescription("ID XBOX (optionnel)")
-        .setRequired(false)
-    )
-    .addStringOption(opt =>
-      opt
-        .setName("ea")
-        .setDescription("ID EA (optionnel)")
-        .setRequired(false)
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages),
+    .setDescription("STAFF: scan salon pseudos + sync nicknames (PSEUDO|RÔLE|POSTES).")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // garde-fou; toi tu gères aussi via roles staff
 
-  async execute(interaction) {
+  async execute(interaction, client) {
     try {
-      if (!interaction.inGuild()) {
-        return interaction.reply({ content: "⛔", ephemeral: true });
+      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
+
+      const cfg = getGuildConfig(interaction.guildId) || {};
+      const member = interaction.member;
+
+      // STAFF ONLY
+      if (!isStaff(member, cfg)) return interaction.reply({ content: "⛔", ephemeral: true });
+
+      const pseudoScanChannelId = cfg.pseudoScanChannelId;
+      if (!pseudoScanChannelId) {
+        return interaction.reply({ content: "⚠️ Salon pseudoScanChannelId non configuré dans /setup.", ephemeral: true });
       }
 
-      const guild = interaction.guild;
-      const guildId = guild.id;
-      const cfg = getGuildConfig(guildId) || {};
+      const channel = await interaction.guild.channels.fetch(pseudoScanChannelId).catch(() => null);
+      if (!channel || channel.type !== ChannelType.GuildText) {
+        return interaction.reply({ content: "⚠️ Salon pseudos invalide (doit être un salon texte).", ephemeral: true });
+      }
 
-      // ---------------------------------------------------------
-      // 1) Lecture des options fournies
-      // ---------------------------------------------------------
-      const psn = interaction.options.getString("psn") || "";
-      const xbox = interaction.options.getString("xbox") || "";
-      const ea = interaction.options.getString("ea") || "";
+      await interaction.reply({ content: "⏳ Scan + Sync en cours...", ephemeral: true });
 
-      let mode = null;
-      if (psn) mode = "psn";
-      if (xbox) mode = "xbox";
-      if (ea) mode = "ea";
+      // 1) SCAN salon pseudos
+      const scanned = await scanPseudoChannel(channel, { limit: 300 }).catch(() => new Map());
 
-      // ---------------------------------------------------------
-      // 2) Si aucun ID fourni, essayer auto SCAN du message dans le salon pseudoScan
-      // ---------------------------------------------------------
-      let autoExtract = { psn: "", xbox: "", ea: "" };
+      // 2) Ecrit dans le store (pseudos.json)
+      let storedCount = 0;
+      for (const [userId, patch] of scanned.entries()) {
+        if (!patch || typeof patch !== "object") continue;
+        setUserPseudos(interaction.guildId, userId, patch);
+        storedCount++;
+      }
 
-      const scanChannelId = cfg.pseudoScanChannelId;
-      if (!mode && scanChannelId && interaction.channelId === scanChannelId) {
-        const txt = interaction?.options?._hoistedOptions?.[0]?.value || "";
-        const content = (txt || "").toString();
+      // 3) SYNC nicknames (tout le monde hors bots)
+      //    Important: nécessite que le bot ait "Manage Nicknames" + rôle au-dessus des rôles ciblés.
+      await interaction.guild.members.fetch().catch(() => null);
 
-        const mPsn = content.match(/psn[:= ]+([a-z0-9_\-]+)/i);
-        const mXbox = content.match(/xbox[:= ]+([a-z0-9_\-]+)/i);
-        const mEa = content.match(/ea[:= ]+([a-z0-9_\-]+)/i);
+      const members = interaction.guild.members.cache
+        .filter((m) => m && !m.user.bot);
 
-        if (mPsn) autoExtract.psn = mPsn[1];
-        if (mXbox) autoExtract.xbox = mXbox[1];
-        if (mEa) autoExtract.ea = mEa[1];
+      let ok = 0;
+      let fail = 0;
+      let skipped = 0;
 
-        if (autoExtract.psn || autoExtract.xbox || autoExtract.ea) {
-          mode = "auto";
+      // Throttle léger pour éviter les rate limits
+      // (discord gère, mais c'est plus stable)
+      for (const m of members.values()) {
+        // Option: on évite de toucher le propriétaire si restriction
+        const line = buildMemberLine(m, cfg);
+
+        // Si rien de calculable, on skip
+        if (!line || line.length < 2) {
+          skipped++;
+          continue;
         }
+
+        // Si déjà identique, skip (réduit spam/rate limit)
+        if ((m.nickname || "") === line) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          await m.setNickname(line, "PSEUDO_SYNC");
+          ok++;
+        } catch {
+          fail++;
+        }
+
+        await sleep(900);
       }
 
-      // ---------------------------------------------------------
-      // 3) Stockage si mode défini
-      // ---------------------------------------------------------
-      if (mode) {
-        const patch = {
-          psn: psn || autoExtract.psn || undefined,
-          xbox: xbox || autoExtract.xbox || undefined,
-          ea: ea || autoExtract.ea || undefined,
-        };
-
-        const stored = setUserPseudos(guildId, interaction.user.id, patch);
-
-        const embed = new EmbedBuilder()
-          .setColor(0x5865f2)
-          .setTitle("Pseudo mis à jour")
-          .setDescription(
-            [
-              stored.psn ? `PSN: **${stored.psn}**` : null,
-              stored.xbox ? `XBOX: **${stored.xbox}**` : null,
-              stored.ea ? `EA: **${stored.ea}**` : null,
-            ]
-              .filter(Boolean)
-              .join("\n")
-          )
-          .setFooter({ text: cfg.botLabel || "XIG FC" });
-
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-      }
-
-      // ---------------------------------------------------------
-      // 4) Aucun pseudo fourni → juste afficher format complet
-      // ---------------------------------------------------------
-      const member = await guild.members.fetch(interaction.user.id);
-      const line = buildMemberLine(member, cfg);
-
-      const display = getUserPseudos(guildId, interaction.user.id) || {};
-
-      const embed = new EmbedBuilder()
-        .setColor(0x5865f2)
-        .setTitle("Pseudo actuel")
-        .addFields(
-          {
-            name: "Données",
-            value:
-              [
-                display.psn ? `PSN: **${display.psn}**` : null,
-                display.xbox ? `XBOX: **${display.xbox}**` : null,
-                display.ea ? `EA: **${display.ea}**` : null,
-              ]
-                .filter(Boolean)
-                .join("\n") || "Aucun pseudo enregistré.",
-          },
-          {
-            name: "Format /pseudo",
-            value: `\`${line}\``,
-          }
-        )
-        .setFooter({ text: cfg.botLabel || "XIG FC" });
-
-      return interaction.reply({ embeds: [embed], ephemeral: true });
-    } catch (err) {
-      console.error("[/pseudo ERROR]", err);
+      return interaction.editReply({
+        content: `✅ Sync terminé.\n- Scan store: **${storedCount}** membre(s)\n- Nicknames: ✅ **${ok}** | ⚠️ **${fail}** | ⏭️ **${skipped}**`,
+      });
+    } catch (e) {
       try {
-        return interaction.reply({ content: "⚠️", ephemeral: true });
+        if (interaction.deferred) {
+          await interaction.editReply({ content: "⚠️" }).catch(() => {});
+        } else if (!interaction.replied) {
+          await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
+        } else {
+          await interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
+        }
       } catch {}
     }
   },
