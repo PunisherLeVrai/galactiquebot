@@ -2,87 +2,70 @@
 // Format: "PSEUDO | RÔLE | POSTE1/POSTE2/POSTE3"
 //
 // PSEUDO priorité: PSN > XBOX > EA > username Discord
-// ✅ Préfixe obligatoire (sortie): psn:/  xbox:/  ea:/
+// ✅ Username: supprime chiffres + caractères spéciaux + espaces (lettres uniquement, collées)
+// ✅ Pseudo: enlève "psn/xbox/ea" si jamais présent (psn:, xbox:, ea:, / etc.)
 // RÔLE priorité: Président > Fondateur > GM > coGM > STAFF
 // ✅ Rôle: détection par NOM des rôles (Président, Fondateur, GM, coGM, Staff)
 // ✅ Staff fallback: si membre a un des cfg.staffRoleIds (setup) -> "STAFF" (ou admin)
 // POSTES: max 3, ordre cfg.postRoleIds (0..25)
 // ✅ Postes: libellé = nom du rôle Discord (pas de label poste)
-// ✅ Sécurités: retire ` et |, ignore @everyone, limite nickname à 32
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getUserPseudos } = require("./pseudoStore");
 
-const MAX_NICK = 32;
-
-function normalizeUsername(username) {
-  const raw = String(username || "");
-  const noAccents = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-  const lettersOnly = noAccents
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!lettersOnly) return "User";
-  return lettersOnly.charAt(0).toUpperCase() + lettersOnly.slice(1).toLowerCase();
-}
-
 function cleanValue(v, max = 40) {
   return String(v || "")
-    .replace(/[`|]/g, "") // " | " casse le format
+    .replace(/[`|]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 }
 
-function ensurePrefix(platform, value) {
-  const v = cleanValue(value, 40);
+// ✅ Username: lettres uniquement, SANS espaces
+function normalizeUsername(username) {
+  const raw = String(username || "");
+
+  // retire accents
+  const noAccents = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+
+  // garde seulement A-Z (supprime chiffres, спец, espaces)
+  const lettersOnly = noAccents.replace(/[^a-zA-Z]/g, "");
+
+  if (!lettersOnly) return "User";
+
+  // tu peux choisir lower/upper; ici: 1ère lettre maj, reste min
+  return lettersOnly.charAt(0).toUpperCase() + lettersOnly.slice(1).toLowerCase();
+}
+
+// ✅ enlève toute mention psn/xbox/ea au début si un joueur l’a tapée
+// Ex: "psn:ID" / "psn:/ID" / "psn ID" / "/ID" => "ID"
+// (on ne remet PAS de préfixe)
+function stripAnyPlatformPrefix(value) {
+  let v = cleanValue(value, 60);
   if (!v) return "";
 
-  const p = String(platform || "").toLowerCase();
-  const wanted = `${p}:/`; // ✅ sortie canonique demandée
+  // enlève "/"
+  v = v.replace(/^\/+/, "").trim();
 
-  const lowered = v.toLowerCase();
+  // enlève "psn:" "xbox:" "ea:" + variantes espaces/"/"
+  v = v.replace(/^(psn|xbox|ea)\s*[:\s/]+/i, "").trim();
 
-  // Déjà OK: "psn:/xxxx"
-  if (lowered.startsWith(wanted)) {
-    const rest = v.slice(wanted.length).trim().replace(/^\/+/, "");
-    return `${wanted}${rest}`.trim();
-  }
-
-  // "psn:xxxx" -> "psn:/xxxx"
-  if (lowered.startsWith(`${p}:`)) {
-    const rest = v.slice((p + ":").length).trim().replace(/^\/+/, "");
-    return `${wanted}${rest}`.trim();
-  }
-
-  // "/xxxx" -> "psn:/xxxx"
-  if (lowered.startsWith("/")) {
-    const rest = v.replace(/^\/+/, "").trim();
-    return `${wanted}${rest}`.trim();
-  }
-
-  // "psn / xxxx" ou "psn xxxx" -> "psn:/xxxx"
-  if (lowered.startsWith(`${p} `) || lowered.startsWith(`${p}/`)) {
-    const rest = v.slice(p.length).replace(/^[:\s/]+/, "").trim();
-    return `${wanted}${rest}`.trim();
-  }
-
-  // "xxxx" -> "psn:/xxxx"
-  return `${wanted}${v}`.trim();
+  // sécurité: re-clean
+  return cleanValue(v, 40);
 }
 
 function pickBestPseudo(member) {
   const entry = getUserPseudos(member.guild.id, member.user.id) || {};
 
-  const psn = cleanValue(entry.psn);
-  const xbox = cleanValue(entry.xbox);
-  const ea = cleanValue(entry.ea);
+  const psn = stripAnyPlatformPrefix(entry.psn);
+  const xbox = stripAnyPlatformPrefix(entry.xbox);
+  const ea = stripAnyPlatformPrefix(entry.ea);
 
-  if (psn) return ensurePrefix("psn", psn);
-  if (xbox) return ensurePrefix("xbox", xbox);
-  if (ea) return ensurePrefix("ea", ea);
+  if (psn) return psn;
+  if (xbox) return xbox;
+  if (ea) return ea;
 
+  // fallback username (lettres uniquement, sans espaces)
   return normalizeUsername(member.user?.username);
 }
 
@@ -102,7 +85,6 @@ function resolveMainRole(member, cfg) {
 
   const isAdmin = member.permissions?.has?.(PermissionFlagsBits.Administrator);
 
-  // Priorité demandée (par NOM de rôle Discord)
   const order = [
     { keywords: ["président", "president"], label: "Président" },
     { keywords: ["fondateur", "founder"], label: "Fondateur" },
@@ -121,7 +103,6 @@ function resolveMainRole(member, cfg) {
     }
   }
 
-  // Fallback STAFF si rôle staff configuré (setup) ou admin
   const staffRoleIds = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
   if (isAdmin || hasAnyRoleId(member, staffRoleIds)) return "STAFF";
 
@@ -131,8 +112,6 @@ function resolveMainRole(member, cfg) {
 function resolvePosts(member, cfg) {
   if (!member) return [];
 
-  // Source de vérité: cfg.postRoleIds (0..25)
-  // Compat: cfg.posts legacy [{roleId,label}] -> roleId
   const ids = Array.isArray(cfg?.postRoleIds)
     ? cfg.postRoleIds
     : Array.isArray(cfg?.posts)
@@ -142,32 +121,17 @@ function resolvePosts(member, cfg) {
   const ordered = ids.map(String).filter(Boolean);
   const out = [];
 
-  const everyoneRoleId = String(member.guild?.id || "");
-
   for (const roleId of ordered) {
-    if (!roleId) continue;
-    if (roleId === everyoneRoleId) continue; // ignore @everyone
     if (!member.roles.cache.has(roleId)) continue;
 
     const guildRole = member.guild?.roles?.cache?.get(roleId);
     const name = cleanValue(guildRole?.name || member.roles.cache.get(roleId)?.name, 16);
 
-    if (name) out.push(name);
+    out.push(name || "POSTE");
     if (out.length >= 3) break;
   }
 
   return out;
-}
-
-function clampNickname(s, max = MAX_NICK) {
-  const str = String(s || "").trim();
-  if (str.length <= max) return str;
-
-  // coupe dur + nettoyage de fin (évite " |" ou "/" pendants)
-  let cut = str.slice(0, max).trim();
-  cut = cut.replace(/[|/]\s*$/g, "").trim();
-  cut = cut.replace(/\|\s*$/g, "").trim();
-  return cut || str.slice(0, max);
 }
 
 function buildMemberLine(member, cfg) {
@@ -179,7 +143,7 @@ function buildMemberLine(member, cfg) {
   if (role) parts.push(role);
   if (posts.length) parts.push(posts.join("/"));
 
-  return clampNickname(parts.join(" | "), MAX_NICK);
+  return parts.join(" | ");
 }
 
 module.exports = {
