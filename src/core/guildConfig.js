@@ -7,15 +7,18 @@
 //
 // ✅ FIX IMPORTANT : chemin de stockage unique via DATA_DIR
 // - Par défaut: <root>/config/servers.json
-// - Override: DATA_DIR=/chemin/persistant (ex: Railway volume)
+// - Override: DATA_DIR=/chemin/persistant (ex: Railway volume /data)
 
 const fs = require("fs");
 const path = require("path");
 
+// Racine projet: src/core -> src -> (racine)
+const PROJECT_ROOT = path.join(__dirname, "..", "..", "..");
+
 // Dossier de data (persistant si DATA_DIR défini)
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(process.cwd(), "config");
+  : path.join(PROJECT_ROOT, "config");
 
 const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
@@ -50,8 +53,7 @@ const DEFAULT_GUILD = {
 };
 
 function ensureFile() {
-  const dir = path.dirname(CONFIG_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
   if (!fs.existsSync(CONFIG_PATH)) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
@@ -97,7 +99,6 @@ function uniqIds(arr, { max = null } = {}) {
     out.push(id);
     if (typeof max === "number" && out.length >= max) break;
   }
-
   return out;
 }
 
@@ -136,8 +137,6 @@ function normalizeGuild(cfg) {
   if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
 
   // ----- postes : source de vérité = postRoleIds -----
-  // 1) si postRoleIds existe -> on l'utilise
-  // 2) sinon, on convertit depuis l'ancien posts[]
   const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
   const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
 
@@ -170,16 +169,10 @@ function upsertGuildConfig(guildId, patch) {
   const current = normalizeGuild(data.guilds[gid] || {});
   const p = patch && typeof patch === "object" ? patch : {};
 
-  // staff/player : si patch fournit explicitement des arrays, on prend, sinon current
   const staffRoleIds = Array.isArray(p.staffRoleIds) ? p.staffRoleIds : current.staffRoleIds;
   const playerRoleIds = Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds;
 
-  // postes :
-  // priorité patch.postRoleIds (nouveau format)
-  // sinon, si patch.posts (legacy) est fourni, on convertit
-  // sinon current.postRoleIds
   let postRoleIds = current.postRoleIds;
-
   if (Array.isArray(p.postRoleIds)) {
     postRoleIds = p.postRoleIds;
   } else if (Array.isArray(p.posts)) {
@@ -214,7 +207,6 @@ function exportAllConfig() {
   return out;
 }
 
-// Optionnel (utile pour importer un export_config)
 function importAllConfig(payload, { replace = false } = {}) {
   const data = readAll();
 
