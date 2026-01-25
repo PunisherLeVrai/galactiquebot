@@ -1,0 +1,16 @@
+{
+  "name": "xig-blaugrana-fc-staff",
+  "version": "1.0.0",
+  "description": "Bot Discord minimal multi-serveur - XIG BLAUGRANA FC Staff",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node deploy-commands.js",
+    "nuke": "node nuke-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
+  }
+}
