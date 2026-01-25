@@ -1,5 +1,5 @@
 // src/core/guildConfig.js
-// Config multi-serveur minimal (servers.json) — CommonJS
+// Config multi-serveur (servers.json) — CommonJS
 // ✅ staffRoleIds (multi) + playerRoleIds (multi)
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
@@ -26,10 +26,11 @@ const DEFAULT_GUILD = {
   // rôles joueurs (1..n) : filtre + /pseudo
   playerRoleIds: [],
 
-  // ✅ postes (0..25) : utilisés par /pseudo (sans label)
+  // postes (0..25) : utilisés par /pseudo (sans label)
   postRoleIds: [],
 
   // compat legacy : [{ roleId, label }]
+  // (conservé uniquement pour compat avec d'anciens modules)
   posts: [],
 
   // auto minimal
@@ -118,13 +119,15 @@ function normalizeGuild(cfg) {
     automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
   };
 
-  // roles arrays
-  out.staffRoleIds = uniqIds(out.staffRoleIds);
-  out.playerRoleIds = uniqIds(out.playerRoleIds);
+  // ----- roles arrays -----
+  // Priorité aux nouvelles clés, mais compat si anciennes
+  const staffFromNew = Array.isArray(c.staffRoleIds) ? c.staffRoleIds : null;
+  const staffFromOld = c.staffRoleId ? [c.staffRoleId] : [];
+  out.staffRoleIds = uniqIds(staffFromNew ?? staffFromOld);
 
-  // ----- compat anciennes clés -----
-  if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
-  if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
+  const playersFromNew = Array.isArray(c.playerRoleIds) ? c.playerRoleIds : null;
+  const playersFromOld = c.playerRoleId ? [c.playerRoleId] : [];
+  out.playerRoleIds = uniqIds(playersFromNew ?? playersFromOld);
 
   // ----- postes : source de vérité = postRoleIds -----
   // 1) si postRoleIds existe -> on l'utilise
@@ -134,7 +137,7 @@ function normalizeGuild(cfg) {
 
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
 
-  // legacy posts reconstruit (compat), même si vide
+  // ----- compat : posts reconstruit depuis postRoleIds -----
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
   return out;
@@ -177,11 +180,10 @@ function upsertGuildConfig(guildId, patch) {
     ...p,
     automations: { ...current.automations, ...(p.automations || {}) },
 
-    staffRoleIds,
-    playerRoleIds,
+    staffRoleIds: uniqIds(staffRoleIds),
+    playerRoleIds: uniqIds(playerRoleIds),
 
-    // ✅ nouveau format
-    postRoleIds,
+    postRoleIds: uniqIds(postRoleIds, { max: 25 }),
   });
 
   merged.updatedAt = new Date().toISOString();
@@ -243,4 +245,9 @@ module.exports = {
   // utilitaires
   importAllConfig,
   resetGuildConfig,
+
+  // helpers (si besoin ailleurs)
+  uniqIds,
+  extractPostRoleIdsFromLegacyPosts,
+  buildLegacyPostsFromIds,
 };
