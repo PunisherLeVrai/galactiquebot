@@ -1,7 +1,7 @@
 // src/commands/setup.js
 // Setup — 2 messages — multi-serveur
 // Requis: 📅 + 📊 + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)
-// + Postes configurables pour /pseudo : 1..25 rôles (SANS label)
+// + Postes configurables pour /pseudo : 0..25 rôles (SANS label)
 // CommonJS — discord.js v14
 
 const {
@@ -46,6 +46,19 @@ function fmtCh(id) {
 function fmtRoles(ids) {
   const arr = Array.isArray(ids) ? ids.filter(Boolean) : [];
   return arr.length ? arr.map((id) => `<@&${id}>`).join(" ") : "—";
+}
+function uniqIds(arr, max = 25) {
+  const out = [];
+  const set = new Set();
+  for (const v of Array.isArray(arr) ? arr : []) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    if (set.has(s)) continue;
+    set.add(s);
+    out.push(s);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 function buildEmbed(guild, draft, autoEnabled) {
@@ -105,18 +118,6 @@ function inScope(i, scope) {
   return typeof i.customId === "string" && i.customId.endsWith(scope);
 }
 
-function uniq(arr) {
-  const out = [];
-  const set = new Set();
-  for (const v of Array.isArray(arr) ? arr : []) {
-    if (!v) continue;
-    if (set.has(v)) continue;
-    set.add(v);
-    out.push(v);
-  }
-  return out;
-}
-
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
@@ -135,7 +136,7 @@ module.exports = {
 
       const saved = getGuildConfig(guildId) || {};
 
-      // Compat: si "posts" existe encore au format [{roleId,label}], on le convertit en postRoleIds
+      // compat: ancien format posts [{roleId,label}] -> postRoleIds
       const legacyPostRoleIds = Array.isArray(saved.posts)
         ? saved.posts.map((p) => p?.roleId).filter(Boolean)
         : [];
@@ -147,15 +148,20 @@ module.exports = {
         pseudoScanChannelId: saved.pseudoScanChannelId || null,
 
         // rôles (multi)
-        staffRoleIds: Array.isArray(saved.staffRoleIds)
-          ? saved.staffRoleIds.filter(Boolean)
-          : (saved.staffRoleId ? [saved.staffRoleId] : []),
+        staffRoleIds: uniqIds(
+          Array.isArray(saved.staffRoleIds)
+            ? saved.staffRoleIds
+            : saved.staffRoleId
+              ? [saved.staffRoleId]
+              : [],
+          25
+        ),
+        playerRoleIds: uniqIds(Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [], 25),
 
-        playerRoleIds: Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds.filter(Boolean) : [],
-
-        // postes (multi 1..25) SANS label
-        postRoleIds: uniq(
-          Array.isArray(saved.postRoleIds) ? saved.postRoleIds : legacyPostRoleIds
+        // postes (0..25) SANS label
+        postRoleIds: uniqIds(
+          Array.isArray(saved.postRoleIds) ? saved.postRoleIds : legacyPostRoleIds,
+          25
         ),
       };
 
@@ -230,7 +236,7 @@ module.exports = {
       const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
-          .setPlaceholder(`${ICON.staff} Rôles Staff (multi)`)
+          .setPlaceholder(`${ICON.staff} Rôles Staff (0..25)`)
           .setMinValues(0)
           .setMaxValues(25)
       );
@@ -238,7 +244,7 @@ module.exports = {
       const rowRolePlayers = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.players)
-          .setPlaceholder(`${ICON.players} Rôles Joueurs (multi)`)
+          .setPlaceholder(`${ICON.players} Rôles Joueurs (0..25)`)
           .setMinValues(0)
           .setMaxValues(25)
       );
@@ -246,7 +252,7 @@ module.exports = {
       const rowRolePosts = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.posts)
-          .setPlaceholder(`${ICON.postes} Rôles Postes (1 à 25)`)
+          .setPlaceholder(`${ICON.postes} Rôles Postes (0..25)`)
           .setMinValues(0)
           .setMaxValues(25)
       );
@@ -358,8 +364,11 @@ module.exports = {
 
               if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
-              // Compat export: ancien format "posts" conservé (label neutre)
-              const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
+              // compat: ancien format "posts" (label neutre) pour les bouts de code pas migrés
+              const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({
+                roleId: String(roleId),
+                label: "POSTE",
+              }));
 
               upsertGuildConfig(guildId, {
                 botLabel: "XIG BLAUGRANA FC Staff",
@@ -368,11 +377,11 @@ module.exports = {
                 staffReportsChannelId: draft.staffReportsChannelId,
                 pseudoScanChannelId: draft.pseudoScanChannelId,
 
-                staffRoleIds: uniq(draft.staffRoleIds),
-                playerRoleIds: uniq(draft.playerRoleIds),
+                staffRoleIds: uniqIds(draft.staffRoleIds, 25),
+                playerRoleIds: uniqIds(draft.playerRoleIds, 25),
 
                 // ✅ nouveau format (sans label)
-                postRoleIds: uniq(draft.postRoleIds),
+                postRoleIds: uniqIds(draft.postRoleIds, 25),
 
                 // compat (si d'autres codes lisent encore staffRoleId / posts)
                 staffRoleId: draft.staffRoleIds[0] || null,
@@ -409,20 +418,17 @@ module.exports = {
 
           if (i.isRoleSelectMenu()) {
             if (i.customId === CID.staff) {
-              draft.staffRoleIds = uniq(i.values);
+              draft.staffRoleIds = uniqIds(i.values, 25);
               await i.deferUpdate();
               return refresh();
             }
-
             if (i.customId === CID.players) {
-              draft.playerRoleIds = uniq(i.values);
+              draft.playerRoleIds = uniqIds(i.values, 25);
               await i.deferUpdate();
               return refresh();
             }
-
             if (i.customId === CID.posts) {
-              // ✅ postes 0..25
-              draft.postRoleIds = uniq(i.values);
+              draft.postRoleIds = uniqIds(i.values, 25);
               await i.deferUpdate();
               return refresh();
             }
