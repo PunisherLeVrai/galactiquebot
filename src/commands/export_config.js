@@ -1,8 +1,5 @@
 // src/commands/export_config.js
-// Export complet de servers.json en pièce jointe
-// ✅ Admin only
-// ✅ Ephemeral
-// ✅ Ne montre pas le chemin (Railway)
+// Export complet servers.json en PJ — admin only — ephemeral
 // CommonJS — discord.js v14
 
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
@@ -11,19 +8,17 @@ const { exportAllConfig } = require("../core/guildConfig");
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
-    .setDescription("📤")
+    .setDescription("Export de la config (servers.json).")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
     try {
       if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
-
       if (!interaction.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
         return interaction.reply({ content: "⛔", ephemeral: true });
       }
 
       const data = exportAllConfig();
-
       const json = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(json, "utf8");
 
@@ -35,17 +30,16 @@ module.exports = {
       const mi = String(now.getMinutes()).padStart(2, "0");
 
       await interaction.reply({
-        content: "✅",
+        content: `✅ \`${yyyy}-${mm}-${dd}_${hh}-${mi}\``,
         files: [{ attachment: buffer, name: `servers_${yyyy}-${mm}-${dd}_${hh}-${mi}.json` }],
         ephemeral: true,
       });
-    } catch (err) {
-      console.error("[EXPORT_CONFIG_ERROR]", err);
+    } catch (e) {
       try {
-        if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({ content: "⚠️", ephemeral: true });
-        } else {
+        if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ content: "⚠️", ephemeral: true });
+        } else {
+          await interaction.followUp({ content: "⚠️", ephemeral: true });
         }
       } catch {}
     }
