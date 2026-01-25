@@ -55,13 +55,23 @@ function fmtRoles(ids) {
   const arr = Array.isArray(ids) ? ids.filter(Boolean) : [];
   return arr.length ? arr.map((id) => `<@&${id}>`).join(" ") : "—";
 }
-
 function cleanLabel(s) {
   return String(s || "")
     .replace(/[`]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 16);
+}
+function normalizePosts(posts) {
+  const arr = Array.isArray(posts) ? posts : [];
+  const clean = arr
+    .filter((p) => p && typeof p === "object" && p.roleId)
+    .map((p) => ({ roleId: String(p.roleId), label: cleanLabel(p.label || "POSTE") || "POSTE" }));
+
+  // dédoublonne par roleId (dernier gagne)
+  const map = new Map();
+  for (const p of clean) map.set(p.roleId, p);
+  return Array.from(map.values());
 }
 
 function buildEmbed(guild, draft, autoEnabled) {
@@ -151,19 +161,16 @@ module.exports = {
         pseudoScanChannelId: saved.pseudoScanChannelId || null,
 
         // rôles (multi)
-        // compat: si ancien staffRoleId existe, on le convertit en tableau
         staffRoleIds: Array.isArray(saved.staffRoleIds)
           ? saved.staffRoleIds.filter(Boolean)
           : (saved.staffRoleId ? [saved.staffRoleId] : []),
 
-        playerRoleIds: Array.isArray(saved.playerRoleIds)
-          ? saved.playerRoleIds.filter(Boolean)
-          : [],
+        playerRoleIds: Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds.filter(Boolean) : [],
 
         // postes (multi)
-        posts: Array.isArray(saved.posts) ? saved.posts.filter((p) => p?.roleId) : [],
+        posts: normalizePosts(saved.posts),
 
-        // UI temporaire (non stocké)
+        // UI temporaire
         pendingPostRoleId: null,
         pendingPostLabel: "MDC",
       };
@@ -203,7 +210,6 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
-
       const rowStaffReports = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.staffReports)
@@ -212,7 +218,6 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
-
       const rowPseudoScan = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.pseudoScan)
@@ -221,6 +226,13 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
+
+      // defaults (si supportés)
+      try {
+        if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
+        if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
+        if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
+      } catch {}
 
       const rowActions1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.save).setLabel(`${ICON.save} Save`).setStyle(ButtonStyle.Success),
@@ -234,7 +246,6 @@ module.exports = {
       });
 
       // ---------- Message 2 (roles + postes + auto/cancel) ----------
-      // Row 1: Staff roles (multi)
       const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
@@ -243,7 +254,6 @@ module.exports = {
           .setMaxValues(10)
       );
 
-      // Row 2: Players roles (multi)
       const rowRolePlayers = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.players)
@@ -252,7 +262,12 @@ module.exports = {
           .setMaxValues(10)
       );
 
-      // Row 3: Post role (single) to bind
+      // defaults rôles (si supportés)
+      try {
+        if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 10));
+        if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 10));
+      } catch {}
+
       const rowPostRole = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.postRole)
@@ -261,7 +276,6 @@ module.exports = {
           .setMaxValues(1)
       );
 
-      // Row 4: Post label quick-pick (string select)
       const rowPostLabel = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(CID.postLabel)
@@ -278,24 +292,14 @@ module.exports = {
           )
       );
 
-      // Row 5: actions2 (add/resetPosts + auto/cancel)
       const rowActions2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(CID.addPost)
-          .setLabel(`${ICON.addPost} Ajouter Poste`)
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(CID.resetPosts)
-          .setLabel(`${ICON.resetPosts} Reset Postes`)
-          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(CID.addPost).setLabel(`${ICON.addPost} Ajouter Poste`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.resetPosts).setLabel(`${ICON.resetPosts} Reset Postes`).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(CID.auto)
           .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(CID.cancel)
-          .setLabel(`${ICON.cancel} Cancel`)
-          .setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Cancel`).setStyle(ButtonStyle.Danger)
       );
 
       const msg2 = await interaction.followUp({
@@ -310,6 +314,19 @@ module.exports = {
         rowActions2.components[2]
           .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+
+        // refresh defaults (best-effort)
+        try {
+          if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
+          else rowDispos.components[0].setDefaultChannels([]);
+          if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
+          else rowStaffReports.components[0].setDefaultChannels([]);
+          if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
+          else rowPseudoScan.components[0].setDefaultChannels([]);
+
+          rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 10));
+          rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 10));
+        } catch {}
 
         await interaction.editReply({
           embeds: [buildEmbed(guild, draft, autoEnabled)],
@@ -332,7 +349,7 @@ module.exports = {
         try { col2.stop(); } catch {}
       };
 
-      // ---- Collect Message 1
+      // ---- Collect Message 1 (channels + save/reset)
       col1.on("collect", async (i) => {
         try {
           if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
@@ -380,20 +397,27 @@ module.exports = {
 
               if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
+              const posts = normalizePosts(draft.posts);
+
               upsertGuildConfig(guildId, {
                 botLabel: "XIG BLAUGRANA FC Staff",
 
+                // salons
                 disposChannelId: draft.disposChannelId,
                 staffReportsChannelId: draft.staffReportsChannelId,
                 pseudoScanChannelId: draft.pseudoScanChannelId,
 
-                // multi rôles (commandes + /pseudo)
+                // rôles
                 staffRoleIds: draft.staffRoleIds,
                 playerRoleIds: draft.playerRoleIds,
 
-                // /pseudo postes
-                posts: draft.posts,
+                // compat (si tu as d'autres commandes qui lisent encore staffRoleId)
+                staffRoleId: draft.staffRoleIds[0] || null,
 
+                // postes /pseudo
+                posts,
+
+                // auto
                 automations: { enabled: !!autoEnabled },
 
                 setupBy: interaction.user.id,
@@ -404,7 +428,7 @@ module.exports = {
               await i
                 .update({
                   content: `${ICON.save} Saved`,
-                  embeds: [buildEmbed(guild, draft, autoEnabled)],
+                  embeds: [buildEmbed(guild, { ...draft, posts }, autoEnabled)],
                   components: [],
                 })
                 .catch(() => {});
@@ -416,7 +440,7 @@ module.exports = {
         }
       });
 
-      // ---- Collect Message 2
+      // ---- Collect Message 2 (roles + posts + auto/cancel)
       col2.on("collect", async (i) => {
         try {
           if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
@@ -424,21 +448,18 @@ module.exports = {
           }
 
           if (i.isRoleSelectMenu()) {
-            // Staff (multi)
             if (i.customId === CID.staff) {
               draft.staffRoleIds = Array.isArray(i.values) ? i.values : [];
               await i.deferUpdate();
               return refresh();
             }
 
-            // Players (multi)
             if (i.customId === CID.players) {
               draft.playerRoleIds = Array.isArray(i.values) ? i.values : [];
               await i.deferUpdate();
               return refresh();
             }
 
-            // Post role to bind
             if (i.customId === CID.postRole) {
               draft.pendingPostRoleId = i.values?.[0] || null;
               await i.deferUpdate();
@@ -462,13 +483,12 @@ module.exports = {
               }
 
               const label = cleanLabel(draft.pendingPostLabel) || "POSTE";
-              const roleId = draft.pendingPostRoleId;
+              const roleId = String(draft.pendingPostRoleId);
 
-              // upsert : si roleId déjà présent, update label
-              const next = (draft.posts || []).filter((p) => p && p.roleId);
-              const idx = next.findIndex((p) => p.roleId === roleId);
-              if (idx >= 0) next[idx] = { roleId, label };
-              else next.push({ roleId, label });
+              const next = normalizePosts([
+                ...(draft.posts || []),
+                { roleId, label }, // upsert par normalizePosts()
+              ]);
 
               draft.posts = next;
 
