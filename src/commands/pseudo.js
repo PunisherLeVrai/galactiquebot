@@ -1,7 +1,7 @@
 // src/commands/pseudo.js
-// /pseudo (STAFF ONLY) : scan salon pseudoScanChannelId + sync nickname de tout le monde
+// /pseudo (STAFF ONLY) : scan salon pseudoScanChannelId (si configuré) + sync nickname de tout le monde
 // Format final: "PSEUDO (ou USERNAME) | RÔLE | POSTE1/POSTE2/POSTE3"
-// - Scan: lit les derniers messages du salon pseudoScanChannelId et récupère psn:/xbox:/ea:
+// - Scan (optionnel): lit les derniers messages du salon pseudoScanChannelId et récupère psn:/xbox:/ea:
 // - Store: merge en 1 seule écriture (batch) via importAllPseudos()
 // - Sync: applique le nickname à tous les membres (hors bots), throttle + checks "manageable"
 
@@ -34,8 +34,6 @@ function cleanText(s, max = 64) {
 // Accepte: "psn:ID", "psn:/ID", "xbox: ID", "ea:ID", même au milieu d'une phrase.
 function parsePlatformIdFromContent(content) {
   const txt = String(content || "");
-
-  // capture: psn|xbox|ea : /? ID (jusqu'à espace | ou fin)
   const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i;
   const m = txt.match(re);
   if (!m) return null;
@@ -69,7 +67,7 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
       const userId = msg.author.id;
       const cur = out.get(userId) || {};
 
-      // On parcourt du + récent au + ancien => on ne remplace pas si déjà trouvé pour cette plateforme
+      // scan du + récent au + ancien => on ne remplace pas si déjà trouvé pour cette plateforme
       if (!cur[parsed.platform]) {
         cur[parsed.platform] = parsed.value;
         out.set(userId, cur);
@@ -87,7 +85,7 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("pseudo")
-    .setDescription("STAFF: scan salon pseudos + sync nicknames (PSEUDO | RÔLE | POSTES).")
+    .setDescription("STAFF: sync nicknames (scan pseudos si configuré).")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
@@ -99,60 +97,60 @@ module.exports = {
         return interaction.reply({ content: "⛔", ephemeral: true });
       }
 
-      const pseudoScanChannelId = cfg.pseudoScanChannelId;
-      if (!pseudoScanChannelId) {
-        return interaction.reply({
-          content: "⚠️ Salon pseudos non configuré. Fais /setup puis choisis 🎮 Pseudos (opt).",
-          ephemeral: true,
-        });
-      }
+      await interaction.reply({ content: "⏳ Sync en cours...", ephemeral: true });
 
-      const channel = await interaction.guild.channels.fetch(pseudoScanChannelId).catch(() => null);
-      if (!channel || channel.type !== ChannelType.GuildText) {
-        return interaction.reply({ content: "⚠️ Salon pseudos invalide (doit être un salon texte).", ephemeral: true });
-      }
-
-      await interaction.reply({ content: "⏳ Scan + Sync en cours...", ephemeral: true });
-
-      // 1) SCAN
-      const scanned = await scanPseudoChannel(channel, { limit: 300 }).catch(() => new Map());
-
-      // 2) STORE (batch) — on construit un payload compatible importAllPseudos()
-      //    On MERGE uniquement les champs trouvés (psn/xbox/ea) pour ce guildId.
+      // -------------------------
+      // 1) SCAN + STORE (OPTIONNEL)
+      // -------------------------
       let storedCount = 0;
-      const usersPayload = {};
+      let scanStatus = "⏭️ Scan ignoré (salon pseudos non configuré).";
 
-      for (const [userId, patch] of scanned.entries()) {
-        if (!patch || typeof patch !== "object") continue;
+      const pseudoScanChannelId = cfg.pseudoScanChannelId;
 
-        // On ne met que les champs présents (sinon on risque d'écraser)
-        const u = {};
-        if (patch.psn) u.psn = patch.psn;
-        if (patch.xbox) u.xbox = patch.xbox;
-        if (patch.ea) u.ea = patch.ea;
+      if (pseudoScanChannelId) {
+        const channel = await interaction.guild.channels.fetch(pseudoScanChannelId).catch(() => null);
 
-        if (Object.keys(u).length) {
-          usersPayload[String(userId)] = u;
-          storedCount++;
+        if (channel && channel.type === ChannelType.GuildText) {
+          const scanned = await scanPseudoChannel(channel, { limit: 300 }).catch(() => new Map());
+
+          const usersPayload = {};
+          for (const [userId, patch] of scanned.entries()) {
+            if (!patch || typeof patch !== "object") continue;
+
+            const u = {};
+            if (patch.psn) u.psn = patch.psn;
+            if (patch.xbox) u.xbox = patch.xbox;
+            if (patch.ea) u.ea = patch.ea;
+
+            if (Object.keys(u).length) {
+              usersPayload[String(userId)] = u;
+              storedCount++;
+            }
+          }
+
+          if (storedCount > 0) {
+            importAllPseudos(
+              {
+                version: 1,
+                guilds: {
+                  [String(interaction.guildId)]: { users: usersPayload },
+                },
+              },
+              { replace: false }
+            );
+            scanStatus = `✅ Scan OK (merge): **${storedCount}** membre(s)`;
+          } else {
+            scanStatus = "✅ Scan OK (aucun pseudo trouvé)";
+          }
+        } else {
+          scanStatus = "⚠️ Scan ignoré (pseudoScanChannelId invalide ou pas un salon texte).";
         }
       }
 
-      if (storedCount > 0) {
-        importAllPseudos(
-          {
-            version: 1,
-            guilds: {
-              [String(interaction.guildId)]: { users: usersPayload },
-            },
-          },
-          { replace: false }
-        );
-      }
-
-      // 3) SYNC nicknames (tout le monde hors bots)
-      //    Important: nécessite "Manage Nicknames" + rôle bot au-dessus des rôles ciblés.
+      // -------------------------
+      // 2) SYNC (TOUJOURS)
+      // -------------------------
       await interaction.guild.members.fetch().catch(() => null);
-
       const members = interaction.guild.members.cache.filter((m) => m && !m.user.bot);
 
       let ok = 0;
@@ -161,7 +159,6 @@ module.exports = {
       let notManageable = 0;
 
       for (const m of members.values()) {
-        // Ne pas tenter si Discord interdit (rôle au-dessus / owner / permissions)
         if (!m.manageable) {
           notManageable++;
           continue;
@@ -185,14 +182,13 @@ module.exports = {
           fail++;
         }
 
-        // throttle léger
         await sleep(850);
       }
 
       return interaction.editReply({
         content:
           `✅ Sync terminé.\n` +
-          `- Scan store (merge): **${storedCount}** membre(s)\n` +
+          `- ${scanStatus}\n` +
           `- Nicknames: ✅ **${ok}** | ⚠️ **${fail}** | ⏭️ **${skipped}** | 🚫 **${notManageable}** (non manageable)`,
       });
     } catch {
