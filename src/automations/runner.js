@@ -1,8 +1,8 @@
 // src/automations/runner.js
 // Automation runner — CommonJS
-// ✅ Lance l'automatisation pseudo toutes les heures
+// ✅ Lance l'automatisation /pseudo toutes les heures
+// ✅ Respecte le switch config: cfg.automations.enabled doit être TRUE
 // ✅ Fonctionne même si pseudoScanChannelId n'est pas configuré : sync basée sur username/pseudos store
-// ✅ Scan salon pseudo si configuré + accessible
 // ⚠️ Le bot doit avoir "Manage Nicknames" + rôle au-dessus des membres ciblés
 
 const { getGuildConfig } = require("../core/guildConfig");
@@ -79,65 +79,51 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
 // Job principal
 // ---------------
 async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850 } = {}) {
-  if (!guild) {
-    return { storedCount: 0, ok: 0, fail: 0, skipped: 0, notManageable: 0, scanned: false, scanError: false };
-  }
+  if (!guild) return { storedCount: 0, ok: 0, fail: 0, skipped: 0, notManageable: 0, scanned: false };
 
   // 1) Scan (si salon configuré + accessible)
   let storedCount = 0;
   let scanned = false;
-  let scanError = false;
 
   const pseudoScanChannelId = cfg?.pseudoScanChannelId;
-
   if (pseudoScanChannelId) {
     const ch = await guild.channels.fetch(pseudoScanChannelId).catch(() => null);
+    if (ch && typeof ch.isTextBased === "function" && ch.isTextBased()) {
+      const scannedMap = await scanPseudoChannel(ch, { limit: scanLimit }).catch(() => new Map());
 
-    // discord.js v14 : isTextBased() existe, parfois sous forme de fonction
-    const isTextBased =
-      ch && typeof ch.isTextBased === "function" ? ch.isTextBased() : false;
+      const usersPayload = {};
+      for (const [userId, patch] of scannedMap.entries()) {
+        if (!patch || typeof patch !== "object") continue;
 
-    if (ch && isTextBased && ch.messages?.fetch) {
-      try {
-        const scannedMap = await scanPseudoChannel(ch, { limit: scanLimit });
+        const u = {};
+        if (patch.psn) u.psn = patch.psn;
+        if (patch.xbox) u.xbox = patch.xbox;
+        if (patch.ea) u.ea = patch.ea;
 
-        const usersPayload = {};
-        for (const [userId, patch] of scannedMap.entries()) {
-          if (!patch || typeof patch !== "object") continue;
-
-          const u = {};
-          if (patch.psn) u.psn = patch.psn;
-          if (patch.xbox) u.xbox = patch.xbox;
-          if (patch.ea) u.ea = patch.ea;
-
-          if (Object.keys(u).length) {
-            usersPayload[String(userId)] = u;
-            storedCount++;
-          }
+        if (Object.keys(u).length) {
+          usersPayload[String(userId)] = u;
+          storedCount++;
         }
-
-        if (storedCount > 0) {
-          importAllPseudos(
-            {
-              version: 1,
-              guilds: {
-                [String(guild.id)]: { users: usersPayload },
-              },
-            },
-            { replace: false }
-          );
-        }
-
-        scanned = true;
-      } catch {
-        scanError = true;
       }
+
+      if (storedCount > 0) {
+        importAllPseudos(
+          {
+            version: 1,
+            guilds: {
+              [String(guild.id)]: { users: usersPayload },
+            },
+          },
+          { replace: false }
+        );
+      }
+
+      scanned = true;
     }
   }
 
   // 2) Sync nicknames (même si scan impossible / non configuré)
   await guild.members.fetch().catch(() => null);
-
   const members = guild.members.cache.filter((m) => m && !m.user.bot);
 
   let ok = 0;
@@ -172,7 +158,7 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
     await sleep(throttleMs);
   }
 
-  return { storedCount, ok, fail, skipped, notManageable, scanned, scanError };
+  return { storedCount, ok, fail, skipped, notManageable, scanned };
 }
 
 // ---------------
@@ -191,15 +177,14 @@ function startAutomationRunner(client, opts = {}) {
         const cfg = getGuildConfig(guild.id);
         if (!cfg) continue;
 
-        // IMPORTANT:
-        // On NE bloque PAS l'automatisation si automations.enabled = false.
-        // (Sinon tu te retrouves avec "ça marche pas" tant que setup n'a pas été remis ou togglé.)
-        // Si tu veux un interrupteur plus tard, on le remettra proprement.
+        // ✅ Respect strict du switch: ne run QUE si ON explicitement
+        const enabled = cfg?.automations?.enabled;
+        if (enabled !== true) continue;
 
         await runPseudoForGuild(guild, cfg, { scanLimit, throttleMs });
       }
     } catch {
-      // volontairement silencieux (évite spam logs)
+      // silencieux volontairement (évite spam logs)
     }
   };
 
