@@ -2,11 +2,14 @@
 // XIG BLAUGRANA FC Staff — minimal multi-serveur
 // - charge les commandes depuis src/commands/*.js
 // - route interactionCreate (slash commands)
+// - démarre le runner d'automatisation (pseudo hourly)
 
 require("dotenv").config();
 const { Client, GatewayIntentBits, Collection, Partials } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
+
+const { startAutomationRunner } = require("./automations/runner");
 
 const TOKEN = process.env.TOKEN;
 if (!TOKEN) {
@@ -17,9 +20,9 @@ if (!TOKEN) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,     // requis pour rôles/permissions + RoleSelectMenu
-    GatewayIntentBits.GuildMessages,    // requis pour scanner un salon pseudo
-    GatewayIntentBits.MessageContent,   // requis pour lire le contenu (scanner) ⚠️ intent privilégié
+    GatewayIntentBits.GuildMembers, // requis pour rôles/permissions + RoleSelectMenu
+    GatewayIntentBits.GuildMessages, // requis pour scanner un salon pseudo
+    GatewayIntentBits.MessageContent, // requis pour lire le contenu (scanner) ⚠️ intent privilégié
   ],
   partials: [Partials.Channel],
 });
@@ -49,6 +52,22 @@ if (!fs.existsSync(cmdDir)) {
 // ---------- Ready ----------
 client.once("ready", () => {
   console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
+
+  // ---------- Automation runner ----------
+  // Toutes les heures (par défaut). Le runner gère:
+  // - scan salon pseudo si configuré
+  // - sinon sync sur username/pseudos store
+  try {
+    startAutomationRunner(client, {
+      everyMs: 60 * 60 * 1000, // 1h
+      throttleMs: 850,
+      scanLimit: 300,
+      runOnStart: true,
+    });
+    console.log("[AUTO] Runner démarré (pseudo hourly).");
+  } catch (e) {
+    console.error("[AUTO] Impossible de démarrer le runner.", e);
+  }
 });
 
 // ---------- Interactions (slash commands) ----------
