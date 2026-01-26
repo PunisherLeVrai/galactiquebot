@@ -20,9 +20,9 @@ if (!TOKEN) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // requis pour rôles/permissions + RoleSelectMenu
-    GatewayIntentBits.GuildMessages, // requis pour scanner un salon pseudo
-    GatewayIntentBits.MessageContent, // requis pour lire le contenu (scanner) ⚠️ intent privilégié
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent, // ⚠️ intent privilégié (scanner salon pseudo)
   ],
   partials: [Partials.Channel],
 });
@@ -53,8 +53,8 @@ if (!fs.existsSync(cmdDir)) {
 client.once("ready", () => {
   console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
 
-  // ---------- Automation runner ----------
-  // Toutes les heures (par défaut). Le runner gère:
+  // ---------- Automation runner (pseudo) ----------
+  // Toutes les heures (par défaut).
   // - scan salon pseudo si configuré
   // - sinon sync sur username/pseudos store
   try {
@@ -77,7 +77,6 @@ client.on("interactionCreate", async (interaction) => {
 
     const cmd = client.commands.get(interaction.commandName);
     if (!cmd) {
-      // évite "Unknown interaction" si la commande a été retirée côté bot
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
       }
