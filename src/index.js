@@ -55,8 +55,7 @@ client.once("ready", () => {
 
   // ---------- Automation runner (pseudo) ----------
   // Toutes les heures (par défaut).
-  // - scan salon pseudo si configuré
-  // - sinon sync sur username/pseudos store
+  // Le runner respecte cfg.automations.enabled === true
   try {
     startAutomationRunner(client, {
       everyMs: 60 * 60 * 1000, // 1h
