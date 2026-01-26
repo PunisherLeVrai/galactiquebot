@@ -96,6 +96,30 @@
       "setupAt": "2026-01-25T21:33:36.576Z",
       "updatedAt": "2026-01-25T21:33:36.578Z",
       "staffRoleId": "1393784275853246666"
+    },
+    "1410246320324870217": {
+      "botLabel": "XIG BLAUGRANA FC Staff",
+      "disposChannelId": "1441625985559691304",
+      "staffReportsChannelId": "1448731756478857337",
+      "pseudoScanChannelId": null,
+      "staffRoleIds": [
+        "1414648635437617263",
+        "1410246320664613046",
+        "1410246320664613045"
+      ],
+      "playerRoleIds": [
+        "1410246320656093296",
+        "1410246320656093295"
+      ],
+      "postRoleIds": [],
+      "posts": [],
+      "automations": {
+        "enabled": true
+      },
+      "setupBy": "448539638420733963",
+      "setupAt": "2026-01-26T17:23:57.099Z",
+      "updatedAt": "2026-01-26T17:23:57.100Z",
+      "staffRoleId": "1414648635437617263"
     }
   }
 }
