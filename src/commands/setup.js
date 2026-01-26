@@ -131,8 +131,9 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
     .setDescription("Configurer salons + rôles (multi) + postes + automations.")
-    // garde-fou minimal côté Discord; le vrai contrôle est STAFF ONLY ci-dessous
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    // IMPORTANT: si tu mets Administrator ici, les STAFF non-admin ne verront pas /setup.
+    // Le vrai contrôle est fait par isStaff() ci-dessous.
+    .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
     try {
