@@ -31,8 +31,9 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
     .setDescription("Export de la configuration du serveur (servers.json).")
-    // garde-fou minimal côté Discord; le vrai contrôle est STAFF ONLY ci-dessous
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    // IMPORTANT: sinon seuls les admins voient la commande.
+    // Le vrai contrôle est fait par isStaff() ci-dessous.
+    .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
     try {
@@ -45,7 +46,7 @@ module.exports = {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const data = exportAllConfig(); // normalisé par guildConfig.js
+      const data = exportAllConfig();
       const json = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(json, "utf8");
 
@@ -57,7 +58,7 @@ module.exports = {
         files: [{ attachment: buffer, name: filename }],
         ephemeral: true,
       });
-    } catch (e) {
+    } catch {
       try {
         if (interaction.deferred) {
           await interaction.editReply({ content: "⚠️" }).catch(() => {});
