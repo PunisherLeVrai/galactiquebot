@@ -2,7 +2,6 @@
 // XIG BLAUGRANA FC Staff — minimal multi-serveur
 // - charge les commandes depuis src/commands/*.js
 // - route interactionCreate (slash commands)
-// - intents prêts pour le scan du salon pseudo (messageCreate) plus tard
 
 require("dotenv").config();
 const { Client, GatewayIntentBits, Collection, Partials } = require("discord.js");
@@ -18,9 +17,9 @@ if (!TOKEN) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // requis pour rôles/permissions + RoleSelectMenu
-    GatewayIntentBits.GuildMessages, // requis pour scanner un salon (plus tard)
-    GatewayIntentBits.MessageContent, // requis pour lire le contenu (scanner) ⚠️ intent privilégié
+    GatewayIntentBits.GuildMembers,     // requis pour rôles/permissions + RoleSelectMenu
+    GatewayIntentBits.GuildMessages,    // requis pour scanner un salon pseudo
+    GatewayIntentBits.MessageContent,   // requis pour lire le contenu (scanner) ⚠️ intent privilégié
   ],
   partials: [Partials.Channel],
 });
