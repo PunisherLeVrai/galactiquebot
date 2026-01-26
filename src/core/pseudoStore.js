@@ -4,17 +4,16 @@
 // ✅ nettoyage (retire ` et |), trim, max length
 // ✅ strip du préfixe (psn:/xbox:/ea:) au stockage
 // ✅ import batché (1 seul write)
+// ✅ chemin imposé: <root>/src/config/pseudos.json (et pas ailleurs)
 
 const fs = require("fs");
 const path = require("path");
 
-// Même logique que guildConfig: ROOT_DIR stable
+// ROOT_DIR = racine du projet (car ce fichier est dans src/core)
 const ROOT_DIR = path.join(__dirname, "..", "..");
 
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.join(ROOT_DIR, "config");
-
+// ✅ chemin imposé: src/config
+const DATA_DIR = path.join(ROOT_DIR, "src", "config");
 const STORE_PATH = path.join(DATA_DIR, "pseudos.json");
 
 const DEFAULT_DATA = { version: 1, guilds: {} };
@@ -55,12 +54,13 @@ function writeAll(data) {
 function normalizeValue(v, max = 40) {
   if (v === null || v === undefined) return "";
   return String(v)
-    .replace(/[`|]/g, "")
+    .replace(/[`|]/g, "") // "|" casse le format "PSEUDO | ROLE | POSTES"
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 }
 
+// "psn:xxx" / "psn:/xxx" / "xxx" -> stocke "xxx"
 function stripPlatformPrefix(platform, value) {
   const v = normalizeValue(value, 60);
   if (!v) return "";
@@ -95,6 +95,11 @@ function getUserPseudos(guildId, userId) {
   return data.guilds?.[String(guildId)]?.users?.[String(userId)] || null;
 }
 
+/**
+ * setUserPseudos(guildId, userId, patch, opts?)
+ * - patch: { psn?, xbox?, ea? }
+ * - opts.write (default true): permet d'updater en batch sans écrire à chaque appel
+ */
 function setUserPseudos(guildId, userId, patch, opts = {}) {
   if (!guildId || !userId) return null;
 
@@ -119,6 +124,8 @@ function setUserPseudos(guildId, userId, patch, opts = {}) {
   return next;
 }
 
+// --- utilitaires ---
+
 function exportAllPseudos() {
   const data = readAll();
   const out = { version: data.version || 1, guilds: {} };
@@ -140,6 +147,12 @@ function exportAllPseudos() {
   return out;
 }
 
+/**
+ * Import payload (exportAllPseudos ou structure compatible)
+ * - replace=false: merge
+ * - replace=true: remplace data.guilds complètement
+ * Batch => 1 seul writeAll()
+ */
 function importAllPseudos(payload, { replace = false } = {}) {
   const data = readAll();
 
@@ -180,13 +193,16 @@ function resetGuildPseudos(guildId) {
 }
 
 module.exports = {
+  // chemins
   ROOT_DIR,
   DATA_DIR,
   STORE_PATH,
 
+  // CRUD
   getUserPseudos,
   setUserPseudos,
 
+  // utilitaires
   exportAllPseudos,
   importAllPseudos,
   resetGuildPseudos,
