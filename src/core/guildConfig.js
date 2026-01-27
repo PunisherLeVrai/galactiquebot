@@ -2,12 +2,13 @@
 // Config multi-serveur (servers.json) — CommonJS
 // ✅ staffRoleIds (multi) + playerRoleIds (multi)
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
+// ✅ dispoMessageIds (0..7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
 //
 // ✅ Chemin FORCÉ : src/config/servers.json
 // - Par défaut: <projet>/src/config/servers.json
-// - Override (si tu veux persistance Railway): DATA_DIR=/chemin/persistant  (dans ce cas: /chemin/persistant/servers.json)
+// - Override (persistance Railway): DATA_DIR=/chemin/persistant  => /chemin/persistant/servers.json
 
 const fs = require("fs");
 const path = require("path");
@@ -16,11 +17,9 @@ const path = require("path");
 const SRC_DIR = path.join(__dirname, "..");
 
 // Dossier de data (persistant si DATA_DIR défini)
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.join(SRC_DIR, "config");
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(SRC_DIR, "config");
 
-// ✅ FORCÉ
+// ✅ FORCÉ (si DATA_DIR non défini)
 const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
 const DEFAULT_DATA = { version: 1, guilds: {} };
@@ -32,6 +31,14 @@ const DEFAULT_GUILD = {
   disposChannelId: null,
   staffReportsChannelId: null,
   pseudoScanChannelId: null,
+
+  // ✅ (optionnel) salon où se trouvent les 7 messages de dispo
+  // si null, on utilisera disposChannelId
+  checkDispoChannelId: null,
+
+  // ✅ IDs de messages (0..7) = Lundi..Dimanche
+  // ex: ["msgIdLun","msgIdMar",...]
+  dispoMessageIds: [],
 
   // rôles
   staffRoleIds: [],
@@ -143,6 +150,12 @@ function normalizeGuild(cfg) {
   // posts legacy reconstruit
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
+  // ✅ dispoMessageIds (0..7)
+  out.dispoMessageIds = uniqIds(c.dispoMessageIds, { max: 7 });
+
+  // ✅ checkDispoChannelId
+  out.checkDispoChannelId = c.checkDispoChannelId ? String(c.checkDispoChannelId) : null;
+
   return out;
 }
 
@@ -169,6 +182,13 @@ function upsertGuildConfig(guildId, patch) {
   if (Array.isArray(p.postRoleIds)) postRoleIds = p.postRoleIds;
   else if (Array.isArray(p.posts)) postRoleIds = extractPostRoleIdsFromLegacyPosts(p.posts);
 
+  // ✅ dispoMessageIds (0..7) : si patch fourni -> on prend, sinon on garde
+  const dispoMessageIds = Array.isArray(p.dispoMessageIds) ? p.dispoMessageIds : current.dispoMessageIds;
+
+  // ✅ checkDispoChannelId : si patch fourni explicitement (même null) -> on prend, sinon on garde
+  const checkDispoChannelId =
+    Object.prototype.hasOwnProperty.call(p, "checkDispoChannelId") ? p.checkDispoChannelId : current.checkDispoChannelId;
+
   const merged = normalizeGuild({
     ...current,
     ...p,
@@ -177,6 +197,9 @@ function upsertGuildConfig(guildId, patch) {
     staffRoleIds,
     playerRoleIds,
     postRoleIds,
+
+    dispoMessageIds,
+    checkDispoChannelId,
   });
 
   merged.updatedAt = new Date().toISOString();
@@ -201,8 +224,7 @@ function importAllConfig(payload, { replace = false } = {}) {
   const data = readAll();
 
   const incoming = payload && typeof payload === "object" ? payload : {};
-  const incomingGuilds =
-    incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
+  const incomingGuilds = incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
 
   if (replace) data.guilds = {};
 
