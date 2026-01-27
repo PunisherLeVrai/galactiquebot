@@ -6,6 +6,16 @@
       "disposChannelId": "1429059902852173936",
       "staffReportsChannelId": "1446471718943326259",
       "pseudoScanChannelId": "1464277188001136765",
+      "checkDispoChannelId": "1429059902852173936",
+      "dispoMessageIds": [
+        "1464942217301856328",
+        "1464942238793596928",
+        "1464942248302084137",
+        "1464942252525883569",
+        "1464942257148006421",
+        "1464942261744832675",
+        "1464942266060902565"
+      ],
       "staffRoleIds": [
         "1393784275853246666",
         "1393891243368386641",
@@ -90,11 +100,11 @@
         }
       ],
       "automations": {
-        "enabled": false
+        "enabled": true
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-01-25T21:33:36.576Z",
-      "updatedAt": "2026-01-25T21:33:36.578Z",
+      "setupAt": "2026-01-27T17:27:27.505Z",
+      "updatedAt": "2026-01-27T17:27:27.505Z",
       "staffRoleId": "1393784275853246666"
     },
     "1410246320324870217": {
@@ -102,6 +112,16 @@
       "disposChannelId": "1441625985559691304",
       "staffReportsChannelId": "1448731756478857337",
       "pseudoScanChannelId": null,
+      "checkDispoChannelId": null,
+      "dispoMessageIds": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
       "staffRoleIds": [
         "1414648635437617263",
         "1410246320664613046",
