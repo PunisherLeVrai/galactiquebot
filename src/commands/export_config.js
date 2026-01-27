@@ -46,15 +46,24 @@ module.exports = {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const data = exportAllConfig();
+      const data = exportAllConfig(); // <- exporte tout ce que guildConfig normalise
       const json = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(json, "utf8");
 
       const ts = stamp(new Date());
       const filename = `servers_${ts}.json`;
 
+      // Debug infos (non bloquant)
+      const guildCount = Object.keys(data?.guilds || {}).length;
+      const hasDispoIds = Array.isArray(data?.guilds?.[String(interaction.guildId)]?.dispoMessageIds);
+
       return interaction.reply({
-        content: `✅ Export effectué.\nFichier : \`${filename}\`\nChemin interne : \`${CONFIG_PATH}\``,
+        content:
+          `✅ Export effectué.\n` +
+          `Fichier : \`${filename}\`\n` +
+          `Chemin interne : \`${CONFIG_PATH}\`\n` +
+          `Guilds exportées: **${guildCount}**\n` +
+          `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui" : "non"}**`,
         files: [{ attachment: buffer, name: filename }],
         ephemeral: true,
       });
