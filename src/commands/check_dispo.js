@@ -1,16 +1,7 @@
 // src/commands/check_dispo.js
 // /check_dispo — STAFF ONLY — Embed
-// But: vérifier les réactions ✅ / ❌ / sans réaction sur 1..7 messages (Lun→Dim)
-// Filtre membres: doit avoir AU MOINS 1 rôle dans cfg.playerRoleIds
-//
-// ⚠️ Requiert:
-// - cfg.disposChannelId (salon où sont les messages)
-// - cfg.dispoMessageIds (array 0..6) OU legacy cfg.dispoMessageId_* si tu l'avais (optionnel)
-//
-// Notes techniques:
-// - Discord API ne donne pas direct tous les users d’une réaction -> reaction.users.fetch()
-// - On déduplique par userId
-// - On ignore les bots
+// Vérifie réactions ✅ / ❌ / sans réaction sur les messages Lun→Dim
+// Filtre : doit avoir ≥1 rôle dans cfg.playerRoleIds
 
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require("discord.js");
 const { getGuildConfig } = require("../core/guildConfig");
@@ -53,11 +44,9 @@ async function safeFetchMessage(channel, messageId) {
 }
 
 async function collectReactionUserIds(message, emoji) {
-  // Retour: Set<userId>
   const out = new Set();
   if (!message?.reactions?.cache) return out;
 
-  // match exact unicode ou custom (name) best-effort
   const reaction =
     message.reactions.cache.find((r) => r?.emoji?.name === emoji) ||
     message.reactions.cache.find((r) => String(r?.emoji?.toString?.()) === emoji);
@@ -65,27 +54,22 @@ async function collectReactionUserIds(message, emoji) {
   if (!reaction) return out;
 
   try {
-    const users = await reaction.users.fetch(); // Collection<User>
+    const users = await reaction.users.fetch();
     for (const u of users.values()) {
       if (!u?.id) continue;
       if (u.bot) continue;
       out.add(u.id);
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   return out;
 }
 
 function getDispoMessageIds(cfg) {
-  // Nouveau format attendu: cfg.dispoMessageIds = [idLun..idDim]
   if (Array.isArray(cfg?.dispoMessageIds)) {
     return cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
   }
 
-  // fallback legacy possible (si tu avais stocké autrement)
-  // Exemple: cfg.dispoMessageId_0 ... cfg.dispoMessageId_6
   const legacy = [];
   for (let i = 0; i < 7; i++) {
     const key = `dispoMessageId_${i}`;
@@ -97,13 +81,13 @@ function getDispoMessageIds(cfg) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("check_dispo")
-    .setDescription("STAFF: Vérifier ✅/❌/sans réaction sur les messages de dispos (Lun→Dim).")
-    // garde-fou minimal côté Discord, mais le vrai contrôle est STAFF ONLY
+    .setDescription("STAFF: Vérifier les réactions (Lundi → Dimanche).")
     .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
+      if (!interaction.inGuild())
+        return interaction.reply({ content: "⛔", ephemeral: true });
 
       const cfg = getGuildConfig(interaction.guildId) || {};
 
@@ -112,10 +96,15 @@ module.exports = {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const disposChannelId = cfg?.disposChannelId;
+      // 🔥 NOUVEAU : checkDispoChannelId prioritaire
+      const disposChannelId =
+        cfg?.checkDispoChannelId && cfg.checkDispoChannelId !== "null"
+          ? cfg.checkDispoChannelId
+          : cfg?.disposChannelId;
+
       if (!disposChannelId) {
         return interaction.reply({
-          content: "⚠️ Salon Dispos non configuré. Fais /setup puis choisis 📅 Dispos.",
+          content: "⚠️ Aucun salon Dispo/Check Dispo configuré. Fais /setup.",
           ephemeral: true,
         });
       }
@@ -131,16 +120,19 @@ module.exports = {
 
       const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
       if (!channel || !channel.isTextBased?.()) {
-        return interaction.reply({ content: "⚠️ Salon Dispos invalide (doit être un salon texte).", ephemeral: true });
+        return interaction.reply({
+          content: "⚠️ Le salon Dispo/Check Dispo doit être un salon texte.",
+          ephemeral: true,
+        });
       }
 
-      // Charge tous les membres pour filtre joueurs
+      // Fetch membres
       await interaction.guild.members.fetch().catch(() => null);
 
       const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
       if (!playerRoleIds.length) {
         return interaction.reply({
-          content: "⚠️ Aucun rôle Joueur configuré (👟). Fais /setup.",
+          content: "⚠️ Aucun rôle Joueur configuré dans /setup.",
           ephemeral: true,
         });
       }
@@ -151,20 +143,19 @@ module.exports = {
 
       const playerIds = new Set(players.map((m) => m.user.id));
 
-      await interaction.reply({ content: "⏳ Analyse des réactions...", ephemeral: true });
+      await interaction.reply({ content: "⏳ Analyse en cours...", ephemeral: true });
 
       const embed = new EmbedBuilder()
-        .setTitle("✅ Check Dispo — Réactions")
+        .setTitle("📊 Check Dispo (Lun → Dim)")
         .setColor(0x5865f2)
         .setDescription(
-          [
-            `Salon: <#${disposChannelId}>`,
-            `Filtre: **au moins 1 rôle Joueur** (👟)`,
-            `Joueurs détectés: **${playerIds.size}**`,
-          ].join("\n")
+          `Salon : <#${disposChannelId}>\n` +
+          `Filtre : rôles Joueurs (👟)\n` +
+          `Joueurs détectés : **${playerIds.size}**`
         )
         .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
+      // ---- Parcours semaine ----
       for (let i = 0; i < 7; i++) {
         const mid = messageIds[i];
         const dayLabel = DAYS[i];
@@ -172,7 +163,7 @@ module.exports = {
         if (!mid) {
           embed.addFields({
             name: `📅 ${dayLabel}`,
-            value: "⚠️ ID message non configuré.",
+            value: "⚠️ ID non configuré.",
             inline: false,
           });
           continue;
@@ -183,7 +174,7 @@ module.exports = {
         if (!msg) {
           embed.addFields({
             name: `📅 ${dayLabel}`,
-            value: `⚠️ Message introuvable (ID: \`${mid}\`).`,
+            value: `⚠️ Message introuvable (ID: \`${mid}\`)`,
             inline: false,
           });
           continue;
@@ -192,7 +183,6 @@ module.exports = {
         const okSet = await collectReactionUserIds(msg, "✅");
         const noSet = await collectReactionUserIds(msg, "❌");
 
-        // Filtrer sur joueurs uniquement
         const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
         const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
 
@@ -200,27 +190,23 @@ module.exports = {
         const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
 
         const value = [
-          `🟩 ✅ **Présents** (${okPlayers.length})\n${mentionList(okPlayers)}`,
-          `🟥 ❌ **Absents** (${noPlayers.length})\n${mentionList(noPlayers)}`,
-          `🟦 ⏳ **Sans réaction** (${missing.length})\n${mentionList(missing)}`,
+          `🟩 **Présents** (${okPlayers.length})\n${mentionList(okPlayers)}`,
+          `🟥 **Absents** (${noPlayers.length})\n${mentionList(noPlayers)}`,
+          `🟦 **Sans réaction** (${missing.length})\n${mentionList(missing)}`,
         ].join("\n\n");
 
-        embed.addFields({
-          name: `📅 ${dayLabel}`,
-          value,
-          inline: false,
-        });
+        embed.addFields({ name: `📅 ${dayLabel}`, value, inline: false });
       }
 
       return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
     } catch (e) {
       try {
         if (interaction.deferred) {
-          await interaction.editReply({ content: "⚠️" }).catch(() => {});
+          await interaction.editReply({ content: "⚠️" });
         } else if (!interaction.replied) {
-          await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
+          await interaction.reply({ content: "⚠️", ephemeral: true });
         } else {
-          await interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
+          await interaction.followUp({ content: "⚠️", ephemeral: true });
         }
       } catch {}
     }
