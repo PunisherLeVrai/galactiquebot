@@ -1,11 +1,12 @@
 // src/commands/check_dispo.js
 // /check_dispo — STAFF ONLY — NON EPHEMERE — Embed
-// Vérifie réactions ✅ / ❌ / sans réaction sur UN jour choisi (obligatoire)
+// Vérifie réactions sur 1 jour choisi (obligatoire)
 // Filtre : doit avoir ≥1 rôle dans cfg.playerRoleIds
 
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require("discord.js");
 const { getGuildConfig } = require("../core/guildConfig");
 
+// Index -> Jour
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 
 function isStaff(member, cfg) {
@@ -43,13 +44,14 @@ async function safeFetchMessage(channel, messageId) {
   }
 }
 
-async function collectReactionUserIds(message, emoji) {
+async function collectReactionUserIds(message, emojiName) {
   const out = new Set();
   if (!message?.reactions?.cache) return out;
 
+  // recherche unicode ou custom
   const reaction =
-    message.reactions.cache.find((r) => r?.emoji?.name === emoji) ||
-    message.reactions.cache.find((r) => String(r?.emoji?.toString?.()) === emoji);
+    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
+    message.reactions.cache.find((r) => r.emoji.toString?.() === emojiName);
 
   if (!reaction) return out;
 
@@ -70,11 +72,10 @@ function getDispoMessageIds(cfg) {
     return cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
   }
 
-  // fallback legacy
+  // fallback (ancien format)
   const legacy = [];
   for (let i = 0; i < 7; i++) {
-    const key = `dispoMessageId_${i}`;
-    legacy.push(cfg?.[key] ? String(cfg[key]) : null);
+    legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
   }
   return legacy;
 }
@@ -82,62 +83,62 @@ function getDispoMessageIds(cfg) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("check_dispo")
-    .setDescription("STAFF: Vérifier les réactions pour un jour (obligatoire).")
-    .addStringOption((opt) =>
+    .setDescription("STAFF: Vérifier les réactions sur 1 jour (obligatoire).")
+    .addIntegerOption((opt) =>
       opt
         .setName("jour")
-        .setDescription("Choisir le jour à analyser.")
+        .setDescription("Jour à analyser")
         .setRequired(true)
         .addChoices(
-          { name: "Lundi", value: "0" },
-          { name: "Mardi", value: "1" },
-          { name: "Mercredi", value: "2" },
-          { name: "Jeudi", value: "3" },
-          { name: "Vendredi", value: "4" },
-          { name: "Samedi", value: "5" },
-          { name: "Dimanche", value: "6" }
+          { name: "Lundi", value: 0 },
+          { name: "Mardi", value: 1 },
+          { name: "Mercredi", value: 2 },
+          { name: "Jeudi", value: 3 },
+          { name: "Vendredi", value: 4 },
+          { name: "Samedi", value: 5 },
+          { name: "Dimanche", value: 6 }
         )
     )
     .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) return interaction.reply({ content: "⛔" });
+      if (!interaction.inGuild()) return interaction.reply("⛔");
 
       const cfg = getGuildConfig(interaction.guildId) || {};
 
       // STAFF ONLY
       if (!isStaff(interaction.member, cfg)) {
-        return interaction.reply({ content: "⛔ Accès réservé au STAFF." });
+        return interaction.reply("⛔ Accès réservé au STAFF.");
       }
 
-      // Salon : checkDispoChannelId prioritaire
+      // salon dispo
       const disposChannelId =
         cfg?.checkDispoChannelId && cfg.checkDispoChannelId !== "null"
           ? cfg.checkDispoChannelId
           : cfg?.disposChannelId;
 
       if (!disposChannelId) {
-        return interaction.reply({ content: "⚠️ Aucun salon Dispo/Check Dispo configuré. Fais /setup." });
+        return interaction.reply("⚠️ Aucun salon configuré dans /setup.");
       }
 
       const messageIds = getDispoMessageIds(cfg);
       const anyId = messageIds.some((x) => x);
       if (!anyId) {
-        return interaction.reply({ content: "⚠️ Aucun ID de message Dispo configuré (Lun→Dim)." });
+        return interaction.reply("⚠️ Aucun ID de message Dispo configuré (Lun→Dim).");
       }
 
       const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
       if (!channel || !channel.isTextBased?.()) {
-        return interaction.reply({ content: "⚠️ Le salon Dispo/Check Dispo doit être un salon texte." });
+        return interaction.reply("⚠️ Le salon Dispo/Check Dispo doit être un salon texte.");
       }
 
-      // Fetch membres
+      // fetch membres
       await interaction.guild.members.fetch().catch(() => null);
 
       const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
       if (!playerRoleIds.length) {
-        return interaction.reply({ content: "⚠️ Aucun rôle Joueur configuré (👟) dans /setup." });
+        return interaction.reply("⚠️ Aucun rôle Joueur configuré dans /setup.");
       }
 
       const players = interaction.guild.members.cache
@@ -146,26 +147,21 @@ module.exports = {
 
       const playerIds = new Set(players.map((m) => m.user.id));
 
-      const dayIndex = Number(interaction.options.getString("jour"));
-      if (!Number.isInteger(dayIndex) || dayIndex < 0 || dayIndex > 6) {
-        return interaction.reply({ content: "⚠️ Jour invalide." });
-      }
-
+      const dayIndex = interaction.options.getInteger("jour");
       const dayLabel = DAYS[dayIndex];
       const mid = messageIds[dayIndex];
 
-      // NON EPHEMERE
-      await interaction.reply({ content: "⏳ Analyse en cours..." });
+      await interaction.reply("⏳ Analyse en cours...");
 
+      // message manquant
       if (!mid) {
         const embed = new EmbedBuilder()
           .setTitle(`📊 Check Dispo — ${dayLabel}`)
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${disposChannelId}>\n` +
-              `Filtre : rôles Joueurs (👟)\n` +
-              `Joueurs détectés : **${playerIds.size}**\n\n` +
-              `⚠️ ID du message non configuré pour ce jour.`
+            `Joueurs détectés : **${playerIds.size}**\n\n` +
+            `⚠️ ID du message non configuré pour ce jour.`
           )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -179,49 +175,48 @@ module.exports = {
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${disposChannelId}>\n` +
-              `Filtre : rôles Joueurs (👟)\n` +
-              `Joueurs détectés : **${playerIds.size}**\n\n` +
-              `⚠️ Message introuvable (ID: \`${mid}\`).`
+            `Joueurs détectés : **${playerIds.size}**\n\n` +
+            `⚠️ Message introuvable (ID: \`${mid}\`).`
           )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
 
-      const okSet = await collectReactionUserIds(msg, "✅");
-      const noSet = await collectReactionUserIds(msg, "❌");
+      // réactions
+      const ok = await collectReactionUserIds(msg, "✅");
+      const no = await collectReactionUserIds(msg, "❌");
 
-      const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
-      const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
+      const okPlayers = Array.from(ok).filter((id) => playerIds.has(id));
+      const noPlayers = Array.from(no).filter((id) => playerIds.has(id));
 
       const reacted = new Set([...okPlayers, ...noPlayers]);
       const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
 
+      // embed final
       const embed = new EmbedBuilder()
         .setTitle(`📊 Check Dispo — ${dayLabel}`)
         .setColor(0x5865f2)
         .setDescription(
           `Salon : <#${disposChannelId}>\n` +
-            `Message : \`${mid}\`\n` +
-            `Filtre : rôles Joueurs (👟)\n` +
-            `Joueurs détectés : **${playerIds.size}**`
+          `Message : \`${mid}\`\n` +
+          `Joueurs détectés : **${playerIds.size}**`
         )
         .addFields(
-          { name: `🟩 ✅ Présents (${okPlayers.length})`, value: mentionList(okPlayers), inline: false },
-          { name: `🟥 ❌ Absents (${noPlayers.length})`, value: mentionList(noPlayers), inline: false },
-          { name: `🟦 ⏳ Sans réaction (${missing.length})`, value: mentionList(missing), inline: false }
+          { name: `🟩 Présents (${okPlayers.length})`, value: mentionList(okPlayers) },
+          { name: `🟥 Absents (${noPlayers.length})`, value: mentionList(noPlayers) },
+          { name: `🟦 Sans réaction (${missing.length})`, value: mentionList(missing) }
         )
         .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
       return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
-    } catch {
+
+    } catch (e) {
       try {
-        if (interaction.deferred) {
-          await interaction.editReply({ content: "⚠️" }).catch(() => {});
-        } else if (!interaction.replied) {
-          await interaction.reply({ content: "⚠️" }).catch(() => {});
+        if (interaction.replied) {
+          await interaction.followUp("⚠️ Erreur inconnue.");
         } else {
-          await interaction.followUp({ content: "⚠️" }).catch(() => {});
+          await interaction.reply("⚠️ Erreur inconnue.");
         }
       } catch {}
     }
