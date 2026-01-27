@@ -46,7 +46,7 @@ module.exports = {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const data = exportAllConfig(); // <- exporte tout ce que guildConfig normalise
+      const data = exportAllConfig(); // exporte tout ce que guildConfig normalise
       const json = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(json, "utf8");
 
@@ -55,7 +55,9 @@ module.exports = {
 
       // Debug infos (non bloquant)
       const guildCount = Object.keys(data?.guilds || {}).length;
-      const hasDispoIds = Array.isArray(data?.guilds?.[String(interaction.guildId)]?.dispoMessageIds);
+      const thisGuild = data?.guilds?.[String(interaction.guildId)] || {};
+      const hasDispoIds = Array.isArray(thisGuild.dispoMessageIds) && thisGuild.dispoMessageIds.length === 7;
+      const hasCheckDispoCh = !!thisGuild.checkDispoChannelId;
 
       return interaction.reply({
         content:
@@ -63,7 +65,8 @@ module.exports = {
           `Fichier : \`${filename}\`\n` +
           `Chemin interne : \`${CONFIG_PATH}\`\n` +
           `Guilds exportées: **${guildCount}**\n` +
-          `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui" : "non"}**`,
+          `checkDispoChannelId (ce serveur): **${hasCheckDispoCh ? "oui" : "non"}**\n` +
+          `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**`,
         files: [{ attachment: buffer, name: filename }],
         ephemeral: true,
       });
