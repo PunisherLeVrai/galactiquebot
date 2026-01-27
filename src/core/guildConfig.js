@@ -2,7 +2,7 @@
 // Config multi-serveur (servers.json) — CommonJS
 // ✅ staffRoleIds (multi) + playerRoleIds (multi)
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
-// ✅ dispoMessageIds (0..7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
+// ✅ dispoMessageIds (7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
 //
@@ -36,9 +36,9 @@ const DEFAULT_GUILD = {
   // si null, on utilisera disposChannelId
   checkDispoChannelId: null,
 
-  // ✅ IDs de messages (0..7) = Lundi..Dimanche
+  // ✅ IDs de messages (7) = Lundi..Dimanche (index 0..6)
   // ex: ["msgIdLun","msgIdMar",...]
-  dispoMessageIds: [],
+  dispoMessageIds: [null, null, null, null, null, null, null],
 
   // rôles
   staffRoleIds: [],
@@ -107,6 +107,27 @@ function uniqIds(arr, { max = null } = {}) {
   return out;
 }
 
+// --------------------
+// ✅ Dispo message IDs (Lun..Dim) : tableau FIXE de 7
+// --------------------
+function isSnowflake(id) {
+  const s = String(id || "").trim();
+  return /^[0-9]{15,25}$/.test(s);
+}
+
+function normalizeDispoMessageIds(input) {
+  const src = Array.isArray(input) ? input : [];
+  const out = new Array(7).fill(null);
+
+  for (let i = 0; i < 7; i++) {
+    const v = src[i];
+    const s = v === null || v === undefined ? "" : String(v).trim();
+    out[i] = isSnowflake(s) ? s : null;
+  }
+
+  return out;
+}
+
 // legacy posts -> ids
 function extractPostRoleIdsFromLegacyPosts(posts) {
   if (!Array.isArray(posts)) return [];
@@ -150,10 +171,10 @@ function normalizeGuild(cfg) {
   // posts legacy reconstruit
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
-  // ✅ dispoMessageIds (0..7)
-  out.dispoMessageIds = uniqIds(c.dispoMessageIds, { max: 7 });
+  // ✅ dispoMessageIds (7 slots fixes, index 0..6)
+  out.dispoMessageIds = normalizeDispoMessageIds(c.dispoMessageIds);
 
-  // ✅ checkDispoChannelId
+  // ✅ checkDispoChannelId (string ou null)
   out.checkDispoChannelId = c.checkDispoChannelId ? String(c.checkDispoChannelId) : null;
 
   return out;
@@ -182,12 +203,13 @@ function upsertGuildConfig(guildId, patch) {
   if (Array.isArray(p.postRoleIds)) postRoleIds = p.postRoleIds;
   else if (Array.isArray(p.posts)) postRoleIds = extractPostRoleIdsFromLegacyPosts(p.posts);
 
-  // ✅ dispoMessageIds (0..7) : si patch fourni -> on prend, sinon on garde
+  // ✅ dispoMessageIds : si patch fourni -> on prend (et on normalise), sinon on garde
   const dispoMessageIds = Array.isArray(p.dispoMessageIds) ? p.dispoMessageIds : current.dispoMessageIds;
 
   // ✅ checkDispoChannelId : si patch fourni explicitement (même null) -> on prend, sinon on garde
-  const checkDispoChannelId =
-    Object.prototype.hasOwnProperty.call(p, "checkDispoChannelId") ? p.checkDispoChannelId : current.checkDispoChannelId;
+  const checkDispoChannelId = Object.prototype.hasOwnProperty.call(p, "checkDispoChannelId")
+    ? p.checkDispoChannelId
+    : current.checkDispoChannelId;
 
   const merged = normalizeGuild({
     ...current,
