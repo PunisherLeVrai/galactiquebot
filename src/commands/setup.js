@@ -1,5 +1,5 @@
 // src/commands/setup.js
-// Setup — 2 messages — multi-serveur — STAFF ONLY
+// Setup — 3 messages — multi-serveur — STAFF ONLY
 // Requis: 📅 + 📊 + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)
 // + Postes configurables pour /pseudo : 0..25 rôles (SANS label)
 // + ✅ Check Dispo: salon (opt) + 7 IDs de messages (Lun..Dim) pour /check_dispo
@@ -45,7 +45,7 @@ const ICON = {
   msg: "✉️",
 };
 
-// ✅ STAFF ONLY (même logique que /pseudo /export_config)
+// ✅ STAFF ONLY
 function isStaff(member, cfg) {
   if (!member) return false;
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
@@ -74,12 +74,24 @@ function uniqIds(arr, max = 25) {
   }
   return out;
 }
-function cleanMsgId(v) {
+
+function isSnowflake(v) {
   const s = String(v || "").trim();
-  // Discord snowflake: 17..20 digits (on garde souple)
-  if (!/^\d{16,25}$/.test(s)) return "";
-  return s;
+  return /^[0-9]{15,25}$/.test(s);
 }
+
+function normalizeDispoMessageIds(input) {
+  const src = Array.isArray(input) ? input : [];
+  const out = new Array(7).fill(null);
+
+  for (let i = 0; i < 7; i++) {
+    const v = src[i];
+    const s = v === null || v === undefined ? "" : String(v).trim();
+    out[i] = isSnowflake(s) ? s : null;
+  }
+  return out;
+}
+
 function fmtMsgIds(ids) {
   const arr = Array.isArray(ids) ? ids : [];
   const days = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
@@ -109,7 +121,7 @@ function buildEmbed(guild, draft, autoEnabled) {
         "",
         "Requis : 📅 Dispos + 📊 Staff + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)",
         "",
-        "Ces réglages servent aux commandes et à /pseudo.",
+        "Ces réglages servent aux commandes et à /pseudo + /check_dispo.",
       ].join("\n")
     )
     .addFields(
@@ -125,8 +137,8 @@ function buildEmbed(guild, draft, autoEnabled) {
       {
         name: "Rôles",
         value: [
-          `${ICON.staff} ${fmtRoles(draft.staffRoleIds)} — Staff (commandes + /pseudo)`,
-          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs`,
+          `${ICON.staff} ${fmtRoles(draft.staffRoleIds)} — Staff (commandes + /pseudo + /check_dispo)`,
+          `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs (filtres)`,
         ].join("\n"),
         inline: false,
       },
@@ -160,9 +172,7 @@ function inScope(i, scope) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Configurer salons + rôles (multi) + postes + check dispo + automations.")
-    // IMPORTANT: si tu mets Administrator ici, les STAFF non-admin ne verront pas /setup.
-    // Le vrai contrôle est fait par isStaff() ci-dessous.
+    .setDescription("Configurer salons + rôles + postes + check dispo + automations.")
     .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
@@ -172,15 +182,12 @@ module.exports = {
       const guild = interaction.guild;
       const guildId = guild.id;
 
-      // on lit la config actuelle pour vérifier le staff
       const saved = getGuildConfig(guildId) || {};
 
-      // ✅ STAFF ONLY
       if (!isStaff(interaction.member, saved)) {
         return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, ephemeral: true });
       }
 
-      // compat: ancien format posts [{roleId,label}] -> postRoleIds
       const legacyPostRoleIds = Array.isArray(saved.posts)
         ? saved.posts.map((p) => p?.roleId).filter(Boolean)
         : [];
@@ -193,7 +200,7 @@ module.exports = {
 
         // ✅ check dispo
         checkDispoChannelId: saved.checkDispoChannelId || null,
-        dispoMessageIds: Array.isArray(saved.dispoMessageIds) ? saved.dispoMessageIds.slice(0, 7) : [],
+        dispoMessageIds: normalizeDispoMessageIds(saved.dispoMessageIds),
 
         // rôles (multi)
         staffRoleIds: uniqIds(
@@ -206,7 +213,7 @@ module.exports = {
         ),
         playerRoleIds: uniqIds(Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [], 25),
 
-        // postes (0..25)
+        // postes
         postRoleIds: uniqIds(Array.isArray(saved.postRoleIds) ? saved.postRoleIds : legacyPostRoleIds, 25),
       };
 
@@ -227,7 +234,7 @@ module.exports = {
         players: `setup:players:${scope}`,
         posts: `setup:posts:${scope}`,
 
-        // ✅ message ids (buttons)
+        // ✅ message ids
         msgLun: `setup:msg:Lun:${scope}`,
         msgMar: `setup:msg:Mar:${scope}`,
         msgMer: `setup:msg:Mer:${scope}`,
@@ -272,11 +279,9 @@ module.exports = {
           .addChannelTypes(ChannelType.GuildText)
       );
 
-      // defaults salons (best-effort)
       try {
         if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
-        if (draft.staffReportsChannelId)
-          rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
+        if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
         if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
       } catch {}
 
@@ -316,7 +321,6 @@ module.exports = {
           .setMaxValues(25)
       );
 
-      // defaults rôles (best-effort)
       try {
         if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
         if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
@@ -368,7 +372,7 @@ module.exports = {
       const msg3 = await interaction.followUp({
         content:
           "🗓️ **Check Dispo** — Choisis le salon (opt) puis clique un bouton pour définir l’ID du message.\n" +
-          "➡️ Quand tu cliques un jour, **réponds avec l’ID** (17-20 chiffres) dans la fenêtre modale.",
+          "➡️ Après le clic, **envoie l’ID** dans le salon (il sera supprimé). Timeout: 60s.",
         components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2],
         ephemeral: true,
       });
@@ -380,12 +384,10 @@ module.exports = {
           .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
           .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
-        // refresh defaults (best-effort)
         try {
           if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
           else rowDispos.components[0].setDefaultChannels([]);
-          if (draft.staffReportsChannelId)
-            rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
+          if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
           else rowStaffReports.components[0].setDefaultChannels([]);
           if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
           else rowPseudoScan.components[0].setDefaultChannels([]);
@@ -404,17 +406,14 @@ module.exports = {
         });
 
         await msg2
-          .edit({
-            content: "🧩 Rôles / 📌 Postes",
-            components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowActions2],
-          })
+          .edit({ content: "🧩 Rôles / 📌 Postes", components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowActions2] })
           .catch(() => {});
 
         await msg3
           .edit({
             content:
               "🗓️ **Check Dispo** — Choisis le salon (opt) puis clique un bouton pour définir l’ID du message.\n" +
-              "➡️ Quand tu cliques un jour, **réponds avec l’ID** (17-20 chiffres) dans la fenêtre modale.",
+              "➡️ Après le clic, **envoie l’ID** dans le salon (il sera supprimé). Timeout: 60s.",
             components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2],
           })
           .catch(() => {});
@@ -430,51 +429,38 @@ module.exports = {
         try { col3.stop(); } catch {}
       };
 
-      const setDayIndex = (label) => {
-        const map = { Lun: 0, Mar: 1, Mer: 2, Jeu: 3, Ven: 4, Sam: 5, Dim: 6 };
-        return map[label] ?? null;
-      };
+      const dayIndex = (label) => ({ Lun: 0, Mar: 1, Mer: 2, Jeu: 3, Ven: 4, Sam: 5, Dim: 6 }[label]);
 
       async function askMessageId(i, dayLabel) {
-        const idx = setDayIndex(dayLabel);
-        if (idx === null) return;
+        const idx = dayIndex(dayLabel);
+        if (typeof idx !== "number") return;
 
-        // On utilise un prompt simple via ephemeral reply + awaitMessages (fiable, sans modals)
-        // (Discord modals demandent TextInputBuilder, plus long; ici c’est robuste.)
         await i.reply({
-          content:
-            `Envoie maintenant l’ID du message pour **${dayLabel}** (17-20 chiffres).\n` +
-            `Tu peux aussi copier l’ID du message via "Mode développeur".\n` +
-            `⏳ Attente 60s...`,
+          content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
           ephemeral: true,
         });
 
         const filter = (m) => m.author.id === interaction.user.id;
         const ch = i.channel;
-        const collected = await ch
-          .awaitMessages({ filter, max: 1, time: 60_000 })
-          .catch(() => null);
+        const collected = await ch.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
+        const msg = collected?.first?.() || null;
 
-        const msg = collected && collected.first ? collected.first() : null;
         if (!msg) {
           return i.followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", ephemeral: true }).catch(() => {});
         }
 
-        const id = cleanMsgId(msg.content);
-        // On supprime le message utilisateur pour garder propre (best-effort)
+        const id = String(msg.content || "").trim();
         try { await msg.delete().catch(() => {}); } catch {}
 
-        if (!id) {
-          return i.followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID de message valide.", ephemeral: true }).catch(() => {});
+        if (!isSnowflake(id)) {
+          return i
+            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID de message valide.", ephemeral: true })
+            .catch(() => {});
         }
 
-        // set dans draft
-        const arr = Array.isArray(draft.dispoMessageIds) ? draft.dispoMessageIds.slice(0, 7) : [];
-        while (arr.length < 7) arr.push("");
-        arr[idx] = id;
-
-        // uniqIds garderait l’ordre? non. Ici on veut l’ordre semaine => on NE PASSE PAS par uniqIds.
-        draft.dispoMessageIds = arr;
+        const next = normalizeDispoMessageIds(draft.dispoMessageIds);
+        next[idx] = id;
+        draft.dispoMessageIds = next;
 
         return refresh();
       }
@@ -482,9 +468,7 @@ module.exports = {
       // ---- Collect Message 1
       col1.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true });
-          }
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -507,7 +491,7 @@ module.exports = {
               draft.postRoleIds = [];
 
               draft.checkDispoChannelId = null;
-              draft.dispoMessageIds = [];
+              draft.dispoMessageIds = new Array(7).fill(null);
 
               autoEnabled = false;
 
@@ -526,16 +510,7 @@ module.exports = {
 
               if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
 
-              // compat: ancien format posts (label neutre)
-              const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({
-                roleId: String(roleId),
-                label: "POSTE",
-              }));
-
-              // dispoMessageIds: on nettoie mais ON GARDE l’ordre Lun..Dim
-              const dm = Array.isArray(draft.dispoMessageIds) ? draft.dispoMessageIds.slice(0, 7) : [];
-              const dispoMessageIds = [];
-              for (let k = 0; k < 7; k++) dispoMessageIds.push(cleanMsgId(dm[k]) || "");
+              const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 
               upsertGuildConfig(guildId, {
                 botLabel: "XIG BLAUGRANA FC Staff",
@@ -546,11 +521,10 @@ module.exports = {
 
                 // ✅ check dispo
                 checkDispoChannelId: draft.checkDispoChannelId,
-                dispoMessageIds,
+                dispoMessageIds: normalizeDispoMessageIds(draft.dispoMessageIds),
 
                 staffRoleIds: uniqIds(draft.staffRoleIds, 25),
                 playerRoleIds: uniqIds(draft.playerRoleIds, 25),
-
                 postRoleIds: uniqIds(draft.postRoleIds, 25),
 
                 // compat
@@ -564,30 +538,20 @@ module.exports = {
               });
 
               stopAll();
-              await i
-                .update({
-                  content: `${ICON.save} Saved`,
-                  embeds: [buildEmbed(guild, draft, autoEnabled)],
-                  components: [],
-                })
-                .catch(() => {});
+              await i.update({ content: `${ICON.save} Saved`, embeds: [buildEmbed(guild, draft, autoEnabled)], components: [] }).catch(() => {});
               await msg2.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
               await msg3.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
             }
           }
         } catch {
-          try {
-            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
-          } catch {}
+          try { if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true }); } catch {}
         }
       });
 
       // ---- Collect Message 2
       col2.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true });
-          }
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
 
           if (i.isRoleSelectMenu()) {
             if (i.customId === CID.staff) {
@@ -617,30 +581,20 @@ module.exports = {
             if (i.customId === CID.cancel) {
               stopAll();
               await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
-              try {
-                await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] });
-              } catch {}
-              try {
-                await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] });
-              } catch {}
-              try {
-                await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] });
-              } catch {}
+              try { await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] }); } catch {}
+              try { await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
+              try { await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
             }
           }
         } catch {
-          try {
-            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
-          } catch {}
+          try { if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true }); } catch {}
         }
       });
 
       // ---- Collect Message 3 (Check Dispo)
       col3.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true });
-          }
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -652,12 +606,11 @@ module.exports = {
 
           if (i.isButton()) {
             if (i.customId === CID.msgClear) {
-              draft.dispoMessageIds = [];
+              draft.dispoMessageIds = new Array(7).fill(null);
               await i.deferUpdate();
               return refresh();
             }
 
-            // Demande ID pour le jour
             if (i.customId === CID.msgLun) return askMessageId(i, "Lun");
             if (i.customId === CID.msgMar) return askMessageId(i, "Mar");
             if (i.customId === CID.msgMer) return askMessageId(i, "Mer");
@@ -667,9 +620,7 @@ module.exports = {
             if (i.customId === CID.msgDim) return askMessageId(i, "Dim");
           }
         } catch {
-          try {
-            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
-          } catch {}
+          try { if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true }); } catch {}
         }
       });
 
@@ -680,11 +631,8 @@ module.exports = {
       });
     } catch {
       try {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: "⚠️", ephemeral: true });
-        } else {
-          await interaction.followUp({ content: "⚠️", ephemeral: true });
-        }
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "⚠️", ephemeral: true });
+        else await interaction.followUp({ content: "⚠️", ephemeral: true });
       } catch {}
     }
   },
