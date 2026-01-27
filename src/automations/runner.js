@@ -1,6 +1,6 @@
 // src/automations/runner.js
 // Automation runner — CommonJS
-// ✅ Lance l'automatisation /pseudo toutes les heures
+// ✅ Lance l'automatisation /pseudo toutes les heures à HH:10
 // ✅ Respecte le switch config: cfg.automations.enabled doit être TRUE
 // ✅ Fonctionne même si pseudoScanChannelId n'est pas configuré : sync basée sur username/pseudos store
 // ⚠️ Le bot doit avoir "Manage Nicknames" + rôle au-dessus des membres ciblés
@@ -162,10 +162,9 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
 }
 
 // ---------------
-// Runner
+// Runner (HH:10)
 // ---------------
 function startAutomationRunner(client, opts = {}) {
-  const everyMs = typeof opts.everyMs === "number" ? opts.everyMs : 60 * 60 * 1000; // 1h
   const throttleMs = typeof opts.throttleMs === "number" ? opts.throttleMs : 850;
   const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
 
@@ -178,8 +177,7 @@ function startAutomationRunner(client, opts = {}) {
         if (!cfg) continue;
 
         // ✅ Respect strict du switch: ne run QUE si ON explicitement
-        const enabled = cfg?.automations?.enabled;
-        if (enabled !== true) continue;
+        if (cfg?.automations?.enabled !== true) continue;
 
         await runPseudoForGuild(guild, cfg, { scanLimit, throttleMs });
       }
@@ -188,15 +186,37 @@ function startAutomationRunner(client, opts = {}) {
     }
   };
 
-  // 1) premier run au démarrage (optionnel)
-  const runOnStart = opts.runOnStart !== false;
-  if (runOnStart) tick();
+  // Prochain déclenchement à HH:10 (minute 10, seconde 0)
+  function getMsUntilNextH10() {
+    const now = new Date();
+    const next = new Date(now);
+    next.setMinutes(10, 0, 0); // HH:10:00
 
-  // 2) puis toutes les heures
-  const timer = setInterval(tick, everyMs);
-  timer.unref?.();
+    // si déjà passé → heure suivante
+    if (next <= now) next.setHours(next.getHours() + 1);
 
-  return () => clearInterval(timer);
+    return next - now;
+  }
+
+  // 1) premier run exactement à HH:10
+  const firstDelay = getMsUntilNextH10();
+
+  const firstTimeout = setTimeout(() => {
+    tick(); // run à HH:10
+
+    // 2) puis toutes les heures (60min) => toujours à HH:10
+    const timer = setInterval(tick, 60 * 60 * 1000);
+    timer.unref?.();
+  }, firstDelay);
+
+  firstTimeout.unref?.();
+
+  // stop function (best-effort)
+  return () => {
+    try {
+      clearTimeout(firstTimeout);
+    } catch {}
+  };
 }
 
 module.exports = {
