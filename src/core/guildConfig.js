@@ -8,8 +8,9 @@
 // ✅ checkDispoChannelId (opt) : salon où sont les 7 messages (sinon disposChannelId)
 // ✅ automations:
 //    - enabled (global)
-//    - pseudo: { enabled, minute } => run à HH:minute
-//    - checkDispo: { enabled, times: ["HH:MM", ...] } => publications aux horaires choisis
+//    - pseudo: { enabled, minute }
+//    - checkDispo: { enabled, times: ["HH:MM", ...] }
+//    - reminderDispo: { enabled, mode, channelId, times: ["HH:MM", ...] }
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
 
@@ -48,20 +49,28 @@ const DEFAULT_GUILD = {
 
   // postes (0..25) : utilisés par /pseudo (sans label)
   postRoleIds: [],
-
-  // compat legacy : [{ roleId, label }]
-  posts: [],
+  posts: [], // compat legacy : [{ roleId, label }]
 
   // ✅ automations (format étendu)
   automations: {
     enabled: false, // switch global
+
     pseudo: {
       enabled: true,
       minute: 10, // HH:10 par défaut
     },
+
     checkDispo: {
       enabled: false,
-      times: [], // ["21:10", "17:10", ...]
+      times: [], // ["21:10", ...]
+    },
+
+    // ✅ nouveau: rappel dispo (sans réaction ✅/❌)
+    reminderDispo: {
+      enabled: false,
+      mode: "channel", // "channel" | "dm" | "both"
+      channelId: null, // salon rappel (fallback: staffReportsChannelId)
+      times: [], // ["21:10", ...]
     },
   },
 
@@ -74,13 +83,8 @@ const DEFAULT_GUILD = {
 // IO helpers
 // -----------
 function ensureFile() {
-  // ✅ crée src/config si absent
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-  // ✅ crée src/config/servers.json si absent
-  if (!fs.existsSync(CONFIG_PATH)) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
-  }
+  if (!fs.existsSync(CONFIG_PATH)) fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
 }
 
 function safeReadJson(filePath, fallback) {
@@ -96,11 +100,9 @@ function safeReadJson(filePath, fallback) {
 function readAll() {
   ensureFile();
   const data = safeReadJson(CONFIG_PATH, { ...DEFAULT_DATA });
-
   if (!data || typeof data !== "object") return { ...DEFAULT_DATA };
   if (!data.guilds || typeof data.guilds !== "object") data.guilds = {};
   if (!data.version) data.version = 1;
-
   return data;
 }
 
@@ -112,7 +114,6 @@ function writeAll(data) {
 function uniqIds(arr, { max = null } = {}) {
   const out = [];
   const seen = new Set();
-
   for (const v of Array.isArray(arr) ? arr : []) {
     const id = String(v || "").trim();
     if (!id) continue;
@@ -121,7 +122,6 @@ function uniqIds(arr, { max = null } = {}) {
     out.push(id);
     if (typeof max === "number" && out.length >= max) break;
   }
-
   return out;
 }
 
@@ -136,13 +136,11 @@ function isSnowflake(id) {
 function normalizeDispoMessageIds(input) {
   const src = Array.isArray(input) ? input : [];
   const out = new Array(7).fill(null);
-
   for (let i = 0; i < 7; i++) {
     const v = src[i];
     const s = v === null || v === undefined ? "" : String(v).trim();
     out[i] = isSnowflake(s) ? s : null;
   }
-
   return out;
 }
 
@@ -155,7 +153,7 @@ function toBool(v, fallback = false) {
   return fallback;
 }
 
-function clampInt(n, { min = 0, max = 60, fallback = 0 } = {}) {
+function clampInt(n, { min = 0, max = 59, fallback = 0 } = {}) {
   const x = Number(n);
   if (!Number.isFinite(x)) return fallback;
   const i = Math.trunc(x);
@@ -197,6 +195,13 @@ function normalizeTimes(arr, { max = 12 } = {}) {
   return out;
 }
 
+function normalizeReminderMode(v) {
+  const s = String(v || "").toLowerCase().trim();
+  if (s === "dm" || s === "mp") return "dm";
+  if (s === "both" || s === "2") return "both";
+  return "channel";
+}
+
 function normalizeAutomations(a) {
   const src = a && typeof a === "object" ? a : {};
 
@@ -204,6 +209,7 @@ function normalizeAutomations(a) {
 
   const pseudoSrc = src.pseudo && typeof src.pseudo === "object" ? src.pseudo : {};
   const checkSrc = src.checkDispo && typeof src.checkDispo === "object" ? src.checkDispo : {};
+  const remindSrc = src.reminderDispo && typeof src.reminderDispo === "object" ? src.reminderDispo : {};
 
   const pseudoMinute = clampInt(pseudoSrc.minute, {
     min: 0,
@@ -222,6 +228,13 @@ function normalizeAutomations(a) {
     checkDispo: {
       enabled: toBool(checkSrc.enabled, DEFAULT_GUILD.automations.checkDispo.enabled),
       times: normalizeTimes(checkSrc.times, { max: 12 }),
+    },
+
+    reminderDispo: {
+      enabled: toBool(remindSrc.enabled, DEFAULT_GUILD.automations.reminderDispo.enabled),
+      mode: normalizeReminderMode(remindSrc.mode ?? DEFAULT_GUILD.automations.reminderDispo.mode),
+      channelId: remindSrc.channelId ? String(remindSrc.channelId) : null,
+      times: normalizeTimes(remindSrc.times, { max: 12 }),
     },
   };
 }
@@ -250,11 +263,7 @@ function buildLegacyPostsFromIds(postRoleIds) {
 // --------------------
 function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
-
-  const out = {
-    ...DEFAULT_GUILD,
-    ...c,
-  };
+  const out = { ...DEFAULT_GUILD, ...c };
 
   out.automations = normalizeAutomations(c.automations);
 
@@ -267,7 +276,6 @@ function normalizeGuild(cfg) {
   const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
   const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
-
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
   out.dispoMessageIds = normalizeDispoMessageIds(c.dispoMessageIds);
@@ -313,19 +321,17 @@ function upsertGuildConfig(guildId, patch) {
     ...(p.automations || {}),
     pseudo: { ...(current.automations?.pseudo || {}), ...(p.automations?.pseudo || {}) },
     checkDispo: { ...(current.automations?.checkDispo || {}), ...(p.automations?.checkDispo || {}) },
+    reminderDispo: { ...(current.automations?.reminderDispo || {}), ...(p.automations?.reminderDispo || {}) },
   });
 
   const merged = normalizeGuild({
     ...current,
     ...p,
-
     staffRoleIds,
     playerRoleIds,
     postRoleIds,
-
     dispoMessageIds,
     checkDispoChannelId,
-
     automations: mergedAutomations,
   });
 
@@ -371,7 +377,6 @@ function resetGuildConfig(guildId) {
   if (!guildId) return null;
   const data = readAll();
   const gid = String(guildId);
-
   delete data.guilds[gid];
   writeAll(data);
   return true;
