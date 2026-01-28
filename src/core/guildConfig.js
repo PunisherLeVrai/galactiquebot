@@ -1,19 +1,17 @@
 // src/core/guildConfig.js
 // Config multi-serveur (servers.json) — CommonJS
+// ✅ Chemin FORCÉ : <projet>/src/config/servers.json (AUCUN override)
+//
 // ✅ staffRoleIds (multi) + playerRoleIds (multi)
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
 // ✅ dispoMessageIds (7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
 // ✅ checkDispoChannelId (opt) : salon où sont les 7 messages (sinon disposChannelId)
 // ✅ automations:
 //    - enabled (global)
-//    - pseudo: { enabled, minute } => run à HH:minute (ex minute=10 => HH:10)
+//    - pseudo: { enabled, minute } => run à HH:minute
 //    - checkDispo: { enabled, times: ["HH:MM", ...] } => publications aux horaires choisis
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
-//
-// ✅ Chemin FORCÉ : src/config/servers.json
-// - Par défaut: <projet>/src/config/servers.json
-// - Override (persistance Railway): DATA_DIR=/chemin/persistant  => /chemin/persistant/servers.json
 
 const fs = require("fs");
 const path = require("path");
@@ -21,10 +19,8 @@ const path = require("path");
 // SRC_DIR = dossier src (car ce fichier est dans src/core)
 const SRC_DIR = path.join(__dirname, "..");
 
-// Dossier de data (persistant si DATA_DIR défini)
-const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(SRC_DIR, "config");
-
-// ✅ FORCÉ (si DATA_DIR non défini)
+// ✅ Direction OBLIGATOIRE: src/config/servers.json
+const DATA_DIR = path.join(SRC_DIR, "config");
 const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
 const DEFAULT_DATA = { version: 1, guilds: {} };
@@ -56,7 +52,7 @@ const DEFAULT_GUILD = {
   // compat legacy : [{ roleId, label }]
   posts: [],
 
-  // ✅ automations (nouveau format étendu)
+  // ✅ automations (format étendu)
   automations: {
     enabled: false, // switch global
     pseudo: {
@@ -78,8 +74,10 @@ const DEFAULT_GUILD = {
 // IO helpers
 // -----------
 function ensureFile() {
+  // ✅ crée src/config si absent
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+  // ✅ crée src/config/servers.json si absent
   if (!fs.existsSync(CONFIG_PATH)) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
   }
@@ -195,7 +193,6 @@ function normalizeTimes(arr, { max = 12 } = {}) {
     if (out.length >= max) break;
   }
 
-  // tri chronologique (facilite lecture)
   out.sort((a, b) => a.localeCompare(b));
   return out;
 }
@@ -203,13 +200,16 @@ function normalizeTimes(arr, { max = 12 } = {}) {
 function normalizeAutomations(a) {
   const src = a && typeof a === "object" ? a : {};
 
-  // compat legacy: si automations était {enabled: bool} uniquement
   const globalEnabled = toBool(src.enabled, DEFAULT_GUILD.automations.enabled);
 
   const pseudoSrc = src.pseudo && typeof src.pseudo === "object" ? src.pseudo : {};
   const checkSrc = src.checkDispo && typeof src.checkDispo === "object" ? src.checkDispo : {};
 
-  const pseudoMinute = clampInt(pseudoSrc.minute, { min: 0, max: 59, fallback: DEFAULT_GUILD.automations.pseudo.minute });
+  const pseudoMinute = clampInt(pseudoSrc.minute, {
+    min: 0,
+    max: 59,
+    fallback: DEFAULT_GUILD.automations.pseudo.minute,
+  });
 
   return {
     enabled: globalEnabled,
@@ -256,29 +256,21 @@ function normalizeGuild(cfg) {
     ...c,
   };
 
-  // ✅ automations (deep normalize)
   out.automations = normalizeAutomations(c.automations);
 
-  // roles arrays
   out.staffRoleIds = uniqIds(out.staffRoleIds);
   out.playerRoleIds = uniqIds(out.playerRoleIds);
 
-  // compat anciennes clés
   if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
   if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
 
-  // postes: source de vérité = postRoleIds, sinon conversion depuis posts legacy
   const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
   const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
 
-  // posts legacy reconstruit
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
-  // ✅ dispoMessageIds (7 slots fixes, index 0..6)
   out.dispoMessageIds = normalizeDispoMessageIds(c.dispoMessageIds);
-
-  // ✅ checkDispoChannelId (string ou null)
   out.checkDispoChannelId = c.checkDispoChannelId ? String(c.checkDispoChannelId) : null;
 
   return out;
@@ -310,15 +302,12 @@ function upsertGuildConfig(guildId, patch) {
   if (Array.isArray(p.postRoleIds)) postRoleIds = p.postRoleIds;
   else if (Array.isArray(p.posts)) postRoleIds = extractPostRoleIdsFromLegacyPosts(p.posts);
 
-  // ✅ dispoMessageIds : si patch fourni -> on prend (puis normalizeGuild normalise), sinon on garde
   const dispoMessageIds = Array.isArray(p.dispoMessageIds) ? p.dispoMessageIds : current.dispoMessageIds;
 
-  // ✅ checkDispoChannelId : si patch fourni explicitement (même null) -> on prend, sinon on garde
   const checkDispoChannelId = Object.prototype.hasOwnProperty.call(p, "checkDispoChannelId")
     ? p.checkDispoChannelId
     : current.checkDispoChannelId;
 
-  // ✅ automations : merge fin
   const mergedAutomations = normalizeAutomations({
     ...current.automations,
     ...(p.automations || {}),
