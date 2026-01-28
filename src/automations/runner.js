@@ -7,24 +7,18 @@
 //
 // 🔒 Renforcement MAX des réactions / fetch:
 // - Fetch message via channel.messages.fetch(id)
-// - Re-fetch du message via msg.fetch() avant lecture
-// - Tentative message.reactions.fetch() si dispo (et si cache vide / incomplet)
+// - Re-fetch forcé via msg.fetch({ force: true }) avant lecture
+// - Tentative message.reactions.fetch() si dispo (cache vide / incomplet)
+// - Support partials: Reaction#fetch() si reaction.partial
 // - Recherche réaction par emoji.name OU emoji.toString()
-// - Fetch users via reaction.users.fetch() (source de vérité)
-// - Retour d’un état "reactions_unavailable" si on ne peut pas lire les réactions (permissions/intents/cache)
+// - Fetch users via reaction.users.fetch({limit, after}) (source de vérité, paginé)
+// - Retour état "reactions_unavailable" si lecture impossible (permissions/intents/cache)
 //
-// ⚠️ Permissions indispensables pour lire les réactions:
-// - ViewChannel + ReadMessageHistory sur le salon où se trouvent les messages de dispo
-// - ReadMessageHistory est souvent oublié: sans ça, messages.fetch() peut échouer
-//
-// ⚠️ Intents conseillés:
-// - Guilds, GuildMembers (indispensable ici), GuildMessages, GuildMessageReactions
+// 🧠 Fix circular dependency:
+// - Lazy-require de getGuildConfig / importAllPseudos / buildMemberLine dans les fonctions
+//   (évite que runner <-> guildConfig se charge en boucle)
 
 const { EmbedBuilder } = require("discord.js");
-
-const { getGuildConfig } = require("../core/guildConfig");
-const { importAllPseudos } = require("../core/pseudoStore");
-const { buildMemberLine } = require("../core/memberDisplay");
 
 // --------------------
 // Constantes
@@ -33,7 +27,7 @@ const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dima
 
 // JS getDay(): 0=Dim .. 6=Sam  -> nous: 0=Lun .. 6=Dim
 function dayIndexFromDate(d = new Date()) {
-  const js = d.getDay(); // 0..6 (Dim..Sam)
+  const js = d.getDay();
   return js === 0 ? 6 : js - 1;
 }
 
@@ -79,18 +73,31 @@ async function safeFetchMessage(channel, messageId) {
 
 async function ensureFreshMessage(msg) {
   if (!msg) return null;
+
   try {
-    const fresh = await msg.fetch().catch(() => null);
-    return fresh || msg;
+    // partial -> fetch
+    if (msg.partial) {
+      const m = await msg.fetch().catch(() => null);
+      return m || msg;
+    }
+
+    // refetch forcé si supporté (discord.js v14: fetch({force:true}))
+    const m = await msg.fetch({ force: true }).catch(() => null);
+    return m || msg;
   } catch {
-    return msg;
+    // fallback "best effort"
+    try {
+      const m = await msg.fetch().catch(() => null);
+      return m || msg;
+    } catch {
+      return msg;
+    }
   }
 }
 
 function findReactionInCache(message, emojiName) {
   if (!message?.reactions?.cache) return null;
 
-  // emojiName peut être "✅" ou un custom emoji; on teste name et toString()
   return (
     message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
     message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName)
@@ -98,7 +105,7 @@ function findReactionInCache(message, emojiName) {
 }
 
 async function tryFetchReactions(message) {
-  // discord.js v14: message.reactions.fetch() existe (mais peut échouer selon permissions)
+  // message.reactions.fetch() peut échouer si permissions/intents manquants
   try {
     if (message?.reactions?.fetch) {
       await message.reactions.fetch().catch(() => null);
@@ -106,53 +113,89 @@ async function tryFetchReactions(message) {
   } catch {}
 }
 
-async function collectReactionUserIdsStrong(message, emojiName) {
-  const out = new Set();
+async function ensureFreshReaction(reaction) {
+  if (!reaction) return null;
 
-  if (!message) {
-    return { ok: false, reason: "no_message", users: out };
-  }
-
-  // 1) Refetch message (évite partials / cache stale)
-  const fresh = await ensureFreshMessage(message);
-
-  // 2) Si cache reactions vide, tenter un fetch des réactions
-  const cacheSize = fresh?.reactions?.cache?.size ?? 0;
-  if (cacheSize === 0) {
-    await tryFetchReactions(fresh);
-  }
-
-  // 3) Retrouver la réaction dans le cache
-  let reaction = findReactionInCache(fresh, emojiName);
-
-  // 4) Si toujours pas trouvé, retenter fetch (parfois le 1er fetch ne remplit pas)
-  if (!reaction) {
-    await tryFetchReactions(fresh);
-    reaction = findReactionInCache(fresh, emojiName);
-  }
-
-  if (!reaction) {
-    // On ne considère pas ça comme "erreur": l’emoji peut ne pas exister sur le message
-    // MAIS si reactions.cache est resté à 0 malgré nos tentatives, c'est probablement permissions/intents.
-    const finalCacheSize = fresh?.reactions?.cache?.size ?? 0;
-    if (finalCacheSize === 0) {
-      return { ok: false, reason: "reactions_unavailable", users: out };
-    }
-    return { ok: true, reason: "emoji_not_found", users: out };
-  }
-
-  // 5) Fetch users pour cette réaction (source de vérité)
   try {
-    const users = await reaction.users.fetch().catch(() => null);
-    if (!users) return { ok: false, reason: "users_fetch_failed", users: out };
+    if (reaction.partial && typeof reaction.fetch === "function") {
+      const r = await reaction.fetch().catch(() => null);
+      return r || reaction;
+    }
+    return reaction;
+  } catch {
+    return reaction;
+  }
+}
+
+// pagination safe (même si beaucoup de réactions)
+async function fetchAllReactionUsers(reaction, { maxPages = 15 } = {}) {
+  const out = new Set();
+  if (!reaction?.users?.fetch) return out;
+
+  let after = undefined;
+  let pages = 0;
+
+  while (pages < maxPages) {
+    pages++;
+    const users = await reaction.users.fetch({ limit: 100, after }).catch(() => null);
+    if (!users || users.size === 0) break;
 
     for (const u of users.values()) {
       if (!u?.id) continue;
       if (u.bot) continue;
       out.add(u.id);
     }
+
+    after = users.last()?.id;
+    if (!after || users.size < 100) break;
+  }
+
+  return out;
+}
+
+async function collectReactionUserIdsStrong(message, emojiName) {
+  const out = new Set();
+
+  if (!message) return { ok: false, reason: "no_message", users: out };
+
+  // 1) message refetch
+  const freshMsg = await ensureFreshMessage(message);
+
+  // 2) si cache réactions vide -> tenter fetch
+  const cacheSize1 = freshMsg?.reactions?.cache?.size ?? 0;
+  if (cacheSize1 === 0) await tryFetchReactions(freshMsg);
+
+  // 3) trouver la réaction
+  let reaction = findReactionInCache(freshMsg, emojiName);
+
+  // 4) retenter fetch si introuvable
+  if (!reaction) {
+    await tryFetchReactions(freshMsg);
+    reaction = findReactionInCache(freshMsg, emojiName);
+  }
+
+  // 5) cas introuvable
+  if (!reaction) {
+    const cacheSize2 = freshMsg?.reactions?.cache?.size ?? 0;
+
+    // si après nos tentatives le cache est toujours vide: permissions/intents/read history
+    if (cacheSize2 === 0) {
+      return { ok: false, reason: "reactions_unavailable", users: out };
+    }
+
+    // sinon: emoji pas présent sur le message
+    return { ok: true, reason: "emoji_not_found", users: out };
+  }
+
+  // 6) reaction partial -> fetch
+  reaction = await ensureFreshReaction(reaction);
+
+  // 7) fetch users (paginé)
+  try {
+    const users = await fetchAllReactionUsers(reaction);
+    for (const id of users) out.add(id);
   } catch {
-    return { ok: false, reason: "users_fetch_threw", users: out };
+    return { ok: false, reason: "users_fetch_failed", users: out };
   }
 
   return { ok: true, reason: "ok", users: out };
@@ -161,8 +204,6 @@ async function collectReactionUserIdsStrong(message, emojiName) {
 // --------------------
 // PSEUDO — scan salon
 // --------------------
-
-// Accepte: "psn:ID", "psn:/ID", "xbox: ID", "ea:ID" (même au milieu d'une phrase)
 function parsePlatformIdFromContent(content) {
   const txt = String(content || "");
   const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i;
@@ -177,7 +218,6 @@ function parsePlatformIdFromContent(content) {
 }
 
 async function scanPseudoChannel(channel, { limit = 300 } = {}) {
-  // Map<userId, { psn?, xbox?, ea? }> (valeur la + récente par plateforme)
   const out = new Map();
 
   let lastId = undefined;
@@ -198,7 +238,7 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
       const userId = msg.author.id;
       const cur = out.get(userId) || {};
 
-      // On parcourt du + récent au + ancien => on ne remplace pas si déjà trouvé
+      // du + récent au + ancien -> ne remplace pas si déjà trouvé
       if (!cur[parsed.platform]) {
         cur[parsed.platform] = parsed.value;
         out.set(userId, cur);
@@ -215,6 +255,10 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
 
 async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850 } = {}) {
   if (!guild) return { storedCount: 0, ok: 0, fail: 0, skipped: 0, notManageable: 0, scanned: false };
+
+  // 🔧 lazy require (anti circular)
+  const { importAllPseudos } = require("../core/pseudoStore");
+  const { buildMemberLine } = require("../core/memberDisplay");
 
   // 1) Scan (si salon configuré + accessible)
   let storedCount = 0;
@@ -249,7 +293,7 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
     }
   }
 
-  // 2) Sync nicknames (même si scan impossible / non configuré)
+  // 2) Sync nicknames
   await guild.members.fetch().catch(() => null);
   const members = guild.members.cache.filter((m) => m && !m.user.bot);
 
@@ -303,7 +347,6 @@ function getDispoMessageIds(cfg) {
     return a;
   }
 
-  // fallback legacy
   const legacy = [];
   for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
   while (legacy.length < 7) legacy.push(null);
@@ -311,7 +354,6 @@ function getDispoMessageIds(cfg) {
 }
 
 function resolveDispoChannelId(cfg) {
-  // checkDispoChannelId prioritaire, sinon disposChannelId
   const v =
     cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null"
       ? cfg.checkDispoChannelId
@@ -339,7 +381,6 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
   const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
   if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
 
-  // Fetch membres pour filtrer joueurs
   await guild.members.fetch().catch(() => null);
 
   const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
@@ -379,37 +420,42 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
   const okRes = await collectReactionUserIdsStrong(msg, "✅");
   const noRes = await collectReactionUserIdsStrong(msg, "❌");
 
-  // Si on ne peut pas lire les réactions (permissions/intents/cache), on le signale clairement.
-  if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
+  const bothUnavailable =
+    !okRes.ok && okRes.reason === "reactions_unavailable" &&
+    !noRes.ok && noRes.reason === "reactions_unavailable";
+
+  if (bothUnavailable) {
     embed.addFields({
       name: "🚫 Réactions indisponibles",
       value:
         "Impossible de lire les réactions sur ce message.\n" +
-        "Vérifie: **ViewChannel + ReadMessageHistory** sur le salon dispo, et l’intent **GuildMessageReactions**.",
+        "Vérifie: **ViewChannel + ReadMessageHistory** sur le salon dispo, et l’intent **GuildMessageReactions**.\n" +
+        "Note: si le salon est privé, il faut aussi **ViewChannel** + **ReadMessageHistory** pour le bot.",
       inline: false,
     });
-
     await reportChannel.send({ embeds: [embed] }).catch(() => null);
     if (throttleMs) await sleep(throttleMs);
     return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true };
   }
 
-  const okSet = okRes.users;
-  const noSet = noRes.users;
-
-  const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
-  const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
+  const okPlayers = Array.from(okRes.users).filter((id) => playerIds.has(id));
+  const noPlayers = Array.from(noRes.users).filter((id) => playerIds.has(id));
 
   const reacted = new Set([...okPlayers, ...noPlayers]);
   const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
 
-  // ajout d’un hint si une des 2 lectures a échoué
   const warn =
     (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
       ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
       : "";
 
-  embed.setDescription(embed.data.description + warn);
+  // embed.data.description est interne; on réécrit proprement la description
+  embed.setDescription(
+    `Salon : <#${disposChannelId}>\n` +
+    `Filtre : rôles Joueurs (👟)\n` +
+    `Joueurs détectés : **${playerIds.size}**` +
+    warn
+  );
 
   embed.addFields(
     { name: `🟩 ✅ Présents (${okPlayers.length})`, value: mentionList(okPlayers), inline: false },
@@ -452,7 +498,6 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
   const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
   if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
 
-  // Fetch membres pour filtrer joueurs
   await guild.members.fetch().catch(() => null);
 
   const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
@@ -476,8 +521,11 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
   const okRes = await collectReactionUserIdsStrong(msg, "✅");
   const noRes = await collectReactionUserIdsStrong(msg, "❌");
 
-  if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
-    // On peut aussi prévenir le staff si configuré
+  const bothUnavailable =
+    !okRes.ok && okRes.reason === "reactions_unavailable" &&
+    !noRes.ok && noRes.reason === "reactions_unavailable";
+
+  if (bothUnavailable) {
     const staffReportsId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
     if (staffReportsId) {
       const reportCh = await guild.channels.fetch(staffReportsId).catch(() => null);
@@ -489,7 +537,10 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
             "Impossible de lire les réactions (permissions/intents/cache).\n" +
             "Vérifie: **ViewChannel + ReadMessageHistory** et l’intent **GuildMessageReactions**."
           )
-          .addFields({ name: "Message", value: `\`${mid}\``, inline: true }, { name: "Salon", value: `<#${disposChannelId}>`, inline: true })
+          .addFields(
+            { name: "Message", value: `\`${mid}\``, inline: true },
+            { name: "Salon", value: `<#${disposChannelId}>`, inline: true }
+          )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
         await reportCh.send({ embeds: [emb] }).catch(() => null);
@@ -499,11 +550,8 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
   }
 
-  const okSet = okRes.users;
-  const noSet = noRes.users;
-
-  const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
-  const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
+  const okPlayers = Array.from(okRes.users).filter((id) => playerIds.has(id));
+  const noPlayers = Array.from(noRes.users).filter((id) => playerIds.has(id));
   const reacted = new Set([...okPlayers, ...noPlayers]);
   const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
 
@@ -513,6 +561,7 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
 
   const r = cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object" ? cfg.automations.reminderDispo : {};
   const mode = normalizeReminderMode(r.mode);
+
   const targetChannelId = r.channelId
     ? String(r.channelId)
     : (cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null);
@@ -529,7 +578,7 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     const ch = await guild.channels.fetch(targetChannelId).catch(() => null);
     if (ch && ch.isTextBased?.()) {
       const content = `${baseText}\n\n${mentionList(missing, { max: 60, empty: "—" })}`;
-      await ch.send({ content }).catch(() => null);
+      await ch.send({ content, allowedMentions: { users: missing, roles: [], repliedUser: false } }).catch(() => null);
       sentChannel = true;
     }
   }
@@ -609,14 +658,9 @@ function startAutomationRunner(client, opts = {}) {
   const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
   const throttleMsPseudo = typeof opts.throttleMsPseudo === "number" ? opts.throttleMsPseudo : 850;
   const throttleMsCheck = typeof opts.throttleMsCheck === "number" ? opts.throttleMsCheck : 0;
-
-  // throttle DM reminder (anti rate-limit)
   const throttleMsReminder = typeof opts.throttleMsReminder === "number" ? opts.throttleMsReminder : 650;
+  const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000;
 
-  // tick loop fréquence (plus petit = plus précis, mais inutilement agressif)
-  const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000; // 20s
-
-  // anti double-run: Map<guildId:job, lastMinuteKey>
   const lastRun = new Map();
 
   async function tick() {
@@ -628,11 +672,13 @@ function startAutomationRunner(client, opts = {}) {
       const mm = now.getMinutes();
       const mKey = minuteKey(now);
 
+      // 🔧 lazy require (anti circular)
+      const { getGuildConfig } = require("../core/guildConfig");
+
       for (const guild of client.guilds.cache.values()) {
         const cfg = getGuildConfig(guild.id);
         if (!cfg) continue;
 
-        // switch global
         if (cfg?.automations?.enabled !== true) continue;
 
         // ---------- PSEUDO ----------
