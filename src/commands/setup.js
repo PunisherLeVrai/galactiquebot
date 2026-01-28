@@ -1,9 +1,9 @@
-// src/commands/setup.js  (PARTIE 1/2)
+// src/commands/setup.js
 // Setup — 3 messages — multi-serveur — STAFF ONLY — version compacte + corrigée
 // - salons: dispos + staff + pseudoScan(opt) + checkDispo(opt)
 // - rôles: staffRoleIds (>=1) + playerRoleIds (>=1) + postRoleIds (0..25)
 // - checkDispo: 7 IDs (Lun..Dim)
-// - automations: enabled + pseudo {enabled, minute} + checkDispo {enabled, times[]}
+// - automations: enabled + pseudo {enabled, minute} + checkDispo {enabled, times[]} + rappel {enabled, times[]}
 // CommonJS — discord.js v14
 
 const {
@@ -41,6 +41,7 @@ const ICON = {
   cancel: "❎",
   clock: "⏱️",
   checkDispo: "🗓️",
+  rappel: "🔔",
   msg: "✉️",
   times: "🕒",
   plus: "➕",
@@ -155,10 +156,15 @@ function buildEmbed(guild, draft) {
 
   const a = draft.automations || {};
   const globalOn = !!a.enabled;
+
   const pseudoOn = !!a?.pseudo?.enabled;
   const pseudoMin = clampInt(a?.pseudo?.minute, { fallback: 10 });
+
   const cdOn = !!a?.checkDispo?.enabled;
   const cdTimes = normalizeTimes(a?.checkDispo?.times);
+
+  const rpOn = !!a?.rappel?.enabled;
+  const rpTimes = normalizeTimes(a?.rappel?.times);
 
   return new EmbedBuilder()
     .setTitle(`${ICON.title} Setup — ${guild.name}`)
@@ -203,6 +209,7 @@ function buildEmbed(guild, draft) {
           `Global: **${globalOn ? "ON" : "OFF"}**`,
           `Pseudo: **${pseudoOn ? "ON" : "OFF"}** — minute: \`${pseudoMin}\` (HH:${String(pseudoMin).padStart(2, "0")})`,
           `CheckDispo: **${cdOn ? "ON" : "OFF"}** — horaires: ${fmtTimes(cdTimes)}`,
+          `${ICON.rappel} Rappel: **${rpOn ? "ON" : "OFF"}** — horaires: ${fmtTimes(rpTimes)}`,
         ].join("\n"),
       }
     )
@@ -256,6 +263,11 @@ module.exports = {
             enabled: !!saved?.automations?.checkDispo?.enabled,
             times: normalizeTimes(saved?.automations?.checkDispo?.times),
           },
+          // ✅ NOUVEAU : rappel (horaires)
+          rappel: {
+            enabled: !!saved?.automations?.rappel?.enabled,
+            times: normalizeTimes(saved?.automations?.rappel?.times),
+          },
         },
       };
 
@@ -276,16 +288,24 @@ module.exports = {
         autoGlobal: `setup:auto:global:${scope}`,
         autoPseudo: `setup:auto:pseudo:${scope}`,
         autoCheck: `setup:auto:check:${scope}`,
+        autoRappel: `setup:auto:rappel:${scope}`,
         pseudoMinute: `setup:auto:pseudoMinute:${scope}`,
+
         checkTimes: `setup:auto:checkTimes:${scope}`,
         checkAdd: `setup:auto:checkAdd:${scope}`,
         checkClear: `setup:auto:checkClear:${scope}`,
+        modalAddTime: `setup:modal:addTime:${scope}`,
+
+        // ✅ NOUVEAU : rappel horaires + modal
+        rappelTimes: `setup:auto:rappelTimes:${scope}`,
+        rappelAdd: `setup:auto:rappelAdd:${scope}`,
+        rappelClear: `setup:auto:rappelClear:${scope}`,
+        modalAddRappelTime: `setup:modal:addRappelTime:${scope}`,
 
         save: `setup:save:${scope}`,
         reset: `setup:reset:${scope}`,
         cancel: `setup:cancel:${scope}`,
         modalPseudoMinute: `setup:modal:pseudoMinute:${scope}`,
-        modalAddTime: `setup:modal:addTime:${scope}`,
       };
 
       // ---------- UI (message 1) ----------
@@ -320,20 +340,52 @@ module.exports = {
 
       // ---------- UI (message 2) ----------
       const rowRoleStaff = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.staff).setPlaceholder(`${ICON.staff} Rôles Staff (0..25)`).setMinValues(0).setMaxValues(25)
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.staff)
+          .setPlaceholder(`${ICON.staff} Rôles Staff (0..25)`)
+          .setMinValues(0)
+          .setMaxValues(25)
       );
       const rowRolePlayers = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.players).setPlaceholder(`${ICON.players} Rôles Joueurs (0..25)`).setMinValues(0).setMaxValues(25)
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.players)
+          .setPlaceholder(`${ICON.players} Rôles Joueurs (0..25)`)
+          .setMinValues(0)
+          .setMaxValues(25)
       );
       const rowRolePosts = new ActionRowBuilder().addComponents(
-        new RoleSelectMenuBuilder().setCustomId(CID.posts).setPlaceholder(`${ICON.postes} Rôles Postes (0..25)`).setMinValues(0).setMaxValues(25)
+        new RoleSelectMenuBuilder()
+          .setCustomId(CID.posts)
+          .setPlaceholder(`${ICON.postes} Rôles Postes (0..25)`)
+          .setMinValues(0)
+          .setMaxValues(25)
       );
 
+      // ✅ Ajout bouton Rappel
       const rowAutoButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.autoGlobal).setLabel("Global").setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.autoPseudo).setLabel("Pseudo").setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.pseudoMinute).setLabel(`${ICON.clock} Minute`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.autoCheck).setLabel("CheckDispo").setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.autoGlobal)
+          .setLabel("Global")
+          .setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.autoPseudo)
+          .setLabel("Pseudo")
+          .setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.pseudoMinute)
+          .setLabel(`${ICON.clock} Minute`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.autoCheck)
+          .setLabel("CheckDispo")
+          .setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.autoRappel)
+          .setLabel("Rappel")
+          .setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+      );
+
+      const rowCancel = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Cancel`).setStyle(ButtonStyle.Danger)
       );
 
@@ -342,6 +394,7 @@ module.exports = {
         if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
         if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
         if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
+
         if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
         if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
         if (draft.postRoleIds.length) rowRolePosts.components[0].setDefaultRoles(draft.postRoleIds.slice(0, 25));
@@ -355,10 +408,11 @@ module.exports = {
 
       const msg2 = await interaction.followUp({
         content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
-        components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons],
+        components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
         ephemeral: true,
       });
-// ---------- UI (message 3) ----------
+
+      // ---------- UI (message 3) ----------
       const rowCheckDispoChannel = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.checkDispo)
@@ -382,6 +436,8 @@ module.exports = {
       );
 
       const preset = PRESET_TIMES.map(normalizeTimeStr).filter(Boolean);
+
+      // ✅ CheckDispo horaires
       const rowTimesSelect = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(CID.checkTimes)
@@ -398,8 +454,29 @@ module.exports = {
       );
 
       const rowTimesButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.checkAdd).setLabel(`${ICON.plus} Ajouter HH:MM`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.checkClear).setLabel(`${ICON.broom} Clear horaires`).setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(CID.checkAdd).setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.checkClear).setLabel(`${ICON.broom} Clear CheckDispo`).setStyle(ButtonStyle.Secondary)
+      );
+
+      // ✅ NOUVEAU : Rappel horaires
+      const rowRappelTimesSelect = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(CID.rappelTimes)
+          .setPlaceholder(`${ICON.rappel} Horaires Rappel (max 12)`)
+          .setMinValues(0)
+          .setMaxValues(Math.min(12, preset.length))
+          .addOptions(
+            preset.map((t) => ({
+              label: t,
+              value: t,
+              default: (draft.automations.rappel.times || []).includes(t),
+            }))
+          )
+      );
+
+      const rowRappelButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(CID.rappelAdd).setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.rappelClear).setLabel(`${ICON.broom} Clear Rappel`).setStyle(ButtonStyle.Secondary)
       );
 
       try {
@@ -409,19 +486,28 @@ module.exports = {
       const msg3 = await interaction.followUp({
         content:
           "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+          "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
           "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
-        components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2, rowTimesSelect, rowTimesButtons],
+        components: [
+          rowCheckDispoChannel,
+          rowMsgButtons1,
+          rowMsgButtons2,
+          rowTimesSelect,
+          rowTimesButtons,
+          rowRappelTimesSelect,
+          rowRappelButtons,
+        ],
         ephemeral: true,
       });
 
       const mainMsg = await interaction.fetchReply();
-
-      // ---------- refresh ----------
+            // ---------- refresh ----------
       const refresh = async () => {
         // styles
-        rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
-        rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
-        rowAutoButtons.components[3].setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Global
+        rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Pseudo
+        rowAutoButtons.components[3].setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // CheckDispo
+        rowAutoButtons.components[4].setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Rappel
 
         // defaults
         try {
@@ -441,6 +527,14 @@ module.exports = {
               default: (draft.automations.checkDispo.times || []).includes(t),
             }))
           );
+
+          rowRappelTimesSelect.components[0].setOptions(
+            preset.map((t) => ({
+              label: t,
+              value: t,
+              default: (draft.automations.rappel.times || []).includes(t),
+            }))
+          );
         } catch {}
 
         await interaction.editReply({
@@ -450,14 +544,23 @@ module.exports = {
 
         await msg2.edit({
           content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
-          components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons],
+          components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
         }).catch(() => {});
 
         await msg3.edit({
           content:
             "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+            "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
             "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
-          components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2, rowTimesSelect, rowTimesButtons],
+          components: [
+            rowCheckDispoChannel,
+            rowMsgButtons1,
+            rowMsgButtons2,
+            rowTimesSelect,
+            rowTimesButtons,
+            rowRappelTimesSelect,
+            rowRappelButtons,
+          ],
         }).catch(() => {});
       };
 
@@ -521,8 +624,19 @@ module.exports = {
         return i.showModal(modal);
       };
 
+      const openAddRappelTimeModal = (i) => {
+        const modal = new ModalBuilder().setCustomId(CID.modalAddRappelTime).setTitle("Rappel — ajouter HH:MM");
+        const input = new TextInputBuilder()
+          .setCustomId("time")
+          .setLabel("Horaire (HH:MM)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setPlaceholder("ex: 20:45");
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      };
+
       // ✅ IMPORTANT: pas de interaction.client.on(...) (sinon listeners multiples)
-      // On attend les modals via awaitModalSubmit avec un filter scope.
       const awaitModal = (filter) =>
         interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
 
@@ -554,7 +668,12 @@ module.exports = {
             draft.checkDispoChannelId = null;
             draft.dispoMessageIds = new Array(7).fill(null);
 
-            draft.automations = { enabled: false, pseudo: { enabled: true, minute: 10 }, checkDispo: { enabled: false, times: [] } };
+            draft.automations = {
+              enabled: false,
+              pseudo: { enabled: true, minute: 10 },
+              checkDispo: { enabled: false, times: [] },
+              rappel: { enabled: false, times: [] }, // ✅ reset rappel
+            };
 
             await i.deferUpdate();
             return refresh();
@@ -592,8 +711,19 @@ module.exports = {
 
               automations: {
                 enabled: !!draft.automations.enabled,
-                pseudo: { enabled: !!draft.automations.pseudo.enabled, minute: clampInt(draft.automations.pseudo.minute, { fallback: 10 }) },
-                checkDispo: { enabled: !!draft.automations.checkDispo.enabled, times: normalizeTimes(draft.automations.checkDispo.times) },
+                pseudo: {
+                  enabled: !!draft.automations.pseudo.enabled,
+                  minute: clampInt(draft.automations.pseudo.minute, { fallback: 10 }),
+                },
+                checkDispo: {
+                  enabled: !!draft.automations.checkDispo.enabled,
+                  times: normalizeTimes(draft.automations.checkDispo.times),
+                },
+                // ✅ NOUVEAU : rappel
+                rappel: {
+                  enabled: !!draft.automations.rappel.enabled,
+                  times: normalizeTimes(draft.automations.rappel.times),
+                },
               },
 
               setupBy: interaction.user.id,
@@ -653,6 +783,13 @@ module.exports = {
             return refresh();
           }
 
+          // ✅ NOUVEAU : toggle rappel
+          if (i.customId === CID.autoRappel) {
+            draft.automations.rappel.enabled = !draft.automations.rappel.enabled;
+            await i.deferUpdate();
+            return refresh();
+          }
+
           if (i.customId === CID.cancel) {
             stopAll();
             await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
@@ -683,6 +820,13 @@ module.exports = {
             return refresh();
           }
 
+          // ✅ NOUVEAU : select rappel times
+          if (i.isStringSelectMenu() && i.customId === CID.rappelTimes) {
+            draft.automations.rappel.times = normalizeTimes(i.values, { max: 12 });
+            await i.deferUpdate();
+            return refresh();
+          }
+
           if (!i.isButton()) return;
 
           if (i.customId === CID.msgClear) {
@@ -693,6 +837,13 @@ module.exports = {
 
           if (i.customId === CID.checkClear) {
             draft.automations.checkDispo.times = [];
+            await i.deferUpdate();
+            return refresh();
+          }
+
+          // ✅ NOUVEAU : clear rappel
+          if (i.customId === CID.rappelClear) {
+            draft.automations.rappel.times = [];
             await i.deferUpdate();
             return refresh();
           }
@@ -708,7 +859,23 @@ module.exports = {
               return;
             }
             draft.automations.checkDispo.times = normalizeTimes([...(draft.automations.checkDispo.times || []), t], { max: 12 });
-            await mi.reply({ content: `✅ Horaire ajouté: \`${t}\``, ephemeral: true }).catch(() => {});
+            await mi.reply({ content: `✅ Horaire ajouté (CheckDispo): \`${t}\``, ephemeral: true }).catch(() => {});
+            return refresh();
+          }
+
+          // ✅ NOUVEAU : add rappel HH:MM
+          if (i.customId === CID.rappelAdd) {
+            await openAddRappelTimeModal(i);
+            const mi = await awaitModal((x) => x.customId === CID.modalAddRappelTime && x.user.id === interaction.user.id).catch(() => null);
+            if (!mi) return;
+
+            const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
+            if (!t) {
+              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 20:45).", ephemeral: true }).catch(() => {});
+              return;
+            }
+            draft.automations.rappel.times = normalizeTimes([...(draft.automations.rappel.times || []), t], { max: 12 });
+            await mi.reply({ content: `✅ Horaire ajouté (Rappel): \`${t}\``, ephemeral: true }).catch(() => {});
             return refresh();
           }
 
