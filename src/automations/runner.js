@@ -4,16 +4,21 @@
 // ✅ PSEUDO
 // ✅ CHECK_DISPO (AUTO REPORT)
 // ✅ REMINDER_DISPO (AUTO REMIND)
-// - Rappelle les joueurs (cfg.playerRoleIds) qui n'ont pas réagi ✅/❌ au message du jour
-// - Mode: channel | dm | both
-// - Salon: cfg.automations.reminderDispo.channelId (fallback staffReportsChannelId)
-// - Horaires: cfg.automations.reminderDispo.times = ["HH:MM", ...]
 //
-// ⚠️ Le bot doit avoir:
-// - Manage Nicknames (pour PSEUDO)
-// - accès lecture aux messages de dispos + lecture réactions (pour CHECK_DISPO / REMINDER_DISPO)
-// - droit d'envoyer embeds dans le salon staffReportsChannelId
-// - droit d'envoyer messages dans le salon reminder (si mode channel/both)
+// 🔒 Renforcement MAX des réactions / fetch:
+// - Fetch message via channel.messages.fetch(id)
+// - Re-fetch du message via msg.fetch() avant lecture
+// - Tentative message.reactions.fetch() si dispo (et si cache vide / incomplet)
+// - Recherche réaction par emoji.name OU emoji.toString()
+// - Fetch users via reaction.users.fetch() (source de vérité)
+// - Retour d’un état "reactions_unavailable" si on ne peut pas lire les réactions (permissions/intents/cache)
+//
+// ⚠️ Permissions indispensables pour lire les réactions:
+// - ViewChannel + ReadMessageHistory sur le salon où se trouvent les messages de dispo
+// - ReadMessageHistory est souvent oublié: sans ça, messages.fetch() peut échouer
+//
+// ⚠️ Intents conseillés:
+// - Guilds, GuildMembers (indispensable ici), GuildMessages, GuildMessageReactions
 
 const { EmbedBuilder } = require("discord.js");
 
@@ -51,7 +56,6 @@ function uniq(arr) {
   return Array.from(new Set((arr || []).map(String))).filter(Boolean);
 }
 
-// construit une liste de mentions, mais peut être trop long pour Discord
 function mentionList(ids, { empty = "—", max = 40 } = {}) {
   const u = uniq(ids);
   if (!u.length) return empty;
@@ -61,14 +65,97 @@ function mentionList(ids, { empty = "—", max = 40 } = {}) {
   return sliced.join(" ") + more;
 }
 
-// ✅ chunk pour éviter >2000 chars
-function chunkMentions(ids, { chunkSize = 30 } = {}) {
-  const u = uniq(ids);
-  const chunks = [];
-  for (let i = 0; i < u.length; i += chunkSize) {
-    chunks.push(u.slice(i, i + chunkSize).map((id) => `<@${id}>`).join(" "));
+// --------------------
+// 🔒 Message / Reactions hardening
+// --------------------
+async function safeFetchMessage(channel, messageId) {
+  if (!channel || !messageId) return null;
+  try {
+    return await channel.messages.fetch(String(messageId));
+  } catch {
+    return null;
   }
-  return chunks;
+}
+
+async function ensureFreshMessage(msg) {
+  if (!msg) return null;
+  try {
+    const fresh = await msg.fetch().catch(() => null);
+    return fresh || msg;
+  } catch {
+    return msg;
+  }
+}
+
+function findReactionInCache(message, emojiName) {
+  if (!message?.reactions?.cache) return null;
+
+  // emojiName peut être "✅" ou un custom emoji; on teste name et toString()
+  return (
+    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
+    message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName)
+  );
+}
+
+async function tryFetchReactions(message) {
+  // discord.js v14: message.reactions.fetch() existe (mais peut échouer selon permissions)
+  try {
+    if (message?.reactions?.fetch) {
+      await message.reactions.fetch().catch(() => null);
+    }
+  } catch {}
+}
+
+async function collectReactionUserIdsStrong(message, emojiName) {
+  const out = new Set();
+
+  if (!message) {
+    return { ok: false, reason: "no_message", users: out };
+  }
+
+  // 1) Refetch message (évite partials / cache stale)
+  const fresh = await ensureFreshMessage(message);
+
+  // 2) Si cache reactions vide, tenter un fetch des réactions
+  const cacheSize = fresh?.reactions?.cache?.size ?? 0;
+  if (cacheSize === 0) {
+    await tryFetchReactions(fresh);
+  }
+
+  // 3) Retrouver la réaction dans le cache
+  let reaction = findReactionInCache(fresh, emojiName);
+
+  // 4) Si toujours pas trouvé, retenter fetch (parfois le 1er fetch ne remplit pas)
+  if (!reaction) {
+    await tryFetchReactions(fresh);
+    reaction = findReactionInCache(fresh, emojiName);
+  }
+
+  if (!reaction) {
+    // On ne considère pas ça comme "erreur": l’emoji peut ne pas exister sur le message
+    // MAIS si reactions.cache est resté à 0 malgré nos tentatives, c'est probablement permissions/intents.
+    const finalCacheSize = fresh?.reactions?.cache?.size ?? 0;
+    if (finalCacheSize === 0) {
+      return { ok: false, reason: "reactions_unavailable", users: out };
+    }
+    return { ok: true, reason: "emoji_not_found", users: out };
+  }
+
+  // 5) Fetch users pour cette réaction (source de vérité)
+  try {
+    const users = await reaction.users.fetch().catch(() => null);
+    if (!users) return { ok: false, reason: "users_fetch_failed", users: out };
+
+    for (const u of users.values()) {
+      if (!u?.id) continue;
+      if (u.bot) continue;
+      out.add(u.id);
+    }
+  } catch {
+    return { ok: false, reason: "users_fetch_threw", users: out };
+  }
+
+  return { ok: true, reason: "ok", users: out };
 }
 
 // --------------------
@@ -155,10 +242,7 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
       }
 
       if (storedCount > 0) {
-        importAllPseudos(
-          { version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } },
-          { replace: false }
-        );
+        importAllPseudos({ version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } }, { replace: false });
       }
 
       scanned = true;
@@ -224,37 +308,6 @@ function getDispoMessageIds(cfg) {
   for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
   while (legacy.length < 7) legacy.push(null);
   return legacy.slice(0, 7);
-}
-
-async function safeFetchMessage(channel, messageId) {
-  if (!channel || !messageId) return null;
-  try {
-    return await channel.messages.fetch(String(messageId));
-  } catch {
-    return null;
-  }
-}
-
-async function collectReactionUserIds(message, emojiName) {
-  const out = new Set();
-  if (!message?.reactions?.cache) return out;
-
-  const reaction =
-    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
-    message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName);
-
-  if (!reaction) return out;
-
-  try {
-    const users = await reaction.users.fetch();
-    for (const u of users.values()) {
-      if (!u?.id) continue;
-      if (u.bot) continue;
-      out.add(u.id);
-    }
-  } catch {}
-
-  return out;
 }
 
 function resolveDispoChannelId(cfg) {
@@ -323,14 +376,40 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true };
   }
 
-  const okSet = await collectReactionUserIds(msg, "✅");
-  const noSet = await collectReactionUserIds(msg, "❌");
+  const okRes = await collectReactionUserIdsStrong(msg, "✅");
+  const noRes = await collectReactionUserIdsStrong(msg, "❌");
+
+  // Si on ne peut pas lire les réactions (permissions/intents/cache), on le signale clairement.
+  if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
+    embed.addFields({
+      name: "🚫 Réactions indisponibles",
+      value:
+        "Impossible de lire les réactions sur ce message.\n" +
+        "Vérifie: **ViewChannel + ReadMessageHistory** sur le salon dispo, et l’intent **GuildMessageReactions**.",
+      inline: false,
+    });
+
+    await reportChannel.send({ embeds: [embed] }).catch(() => null);
+    if (throttleMs) await sleep(throttleMs);
+    return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true };
+  }
+
+  const okSet = okRes.users;
+  const noSet = noRes.users;
 
   const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
   const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
 
   const reacted = new Set([...okPlayers, ...noPlayers]);
   const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
+
+  // ajout d’un hint si une des 2 lectures a échoué
+  const warn =
+    (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
+      ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
+      : "";
+
+  embed.setDescription(embed.data.description + warn);
 
   embed.addFields(
     { name: `🟩 ✅ Présents (${okPlayers.length})`, value: mentionList(okPlayers), inline: false },
@@ -373,6 +452,7 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
   const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
   if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
 
+  // Fetch membres pour filtrer joueurs
   await guild.members.fetch().catch(() => null);
 
   const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
@@ -393,8 +473,34 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
   }
 
-  const okSet = await collectReactionUserIds(msg, "✅");
-  const noSet = await collectReactionUserIds(msg, "❌");
+  const okRes = await collectReactionUserIdsStrong(msg, "✅");
+  const noRes = await collectReactionUserIdsStrong(msg, "❌");
+
+  if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
+    // On peut aussi prévenir le staff si configuré
+    const staffReportsId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
+    if (staffReportsId) {
+      const reportCh = await guild.channels.fetch(staffReportsId).catch(() => null);
+      if (reportCh && reportCh.isTextBased?.()) {
+        const emb = new EmbedBuilder()
+          .setTitle(`🚫 Rappel Dispo — ${dayLabel}`)
+          .setColor(0x5865f2)
+          .setDescription(
+            "Impossible de lire les réactions (permissions/intents/cache).\n" +
+            "Vérifie: **ViewChannel + ReadMessageHistory** et l’intent **GuildMessageReactions**."
+          )
+          .addFields({ name: "Message", value: `\`${mid}\``, inline: true }, { name: "Salon", value: `<#${disposChannelId}>`, inline: true })
+          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+        await reportCh.send({ embeds: [emb] }).catch(() => null);
+      }
+    }
+
+    return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+  }
+
+  const okSet = okRes.users;
+  const noSet = noRes.users;
 
   const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
   const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
@@ -405,11 +511,7 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, missing, sentChannel: false, sentDm: 0, dmFail: 0, nothingToDo: true };
   }
 
-  const r =
-    cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object"
-      ? cfg.automations.reminderDispo
-      : {};
-
+  const r = cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object" ? cfg.automations.reminderDispo : {};
   const mode = normalizeReminderMode(r.mode);
   const targetChannelId = r.channelId
     ? String(r.channelId)
@@ -421,52 +523,40 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     `Merci de répondre sur le message Dispo (✅ ou ❌).` +
     (link ? `\n➡️ ${link}` : "");
 
-  // 1) Channel (chunk mentions)
+  // 1) Channel
   let sentChannel = false;
   if ((mode === "channel" || mode === "both") && targetChannelId) {
     const ch = await guild.channels.fetch(targetChannelId).catch(() => null);
     if (ch && ch.isTextBased?.()) {
-      const chunks = chunkMentions(missing, { chunkSize: 30 });
-
-      // 1er message = texte + 1er chunk
-      const first = chunks.shift() || "—";
-      const ok = await ch.send({ content: `${baseText}\n\n${first}` }).then(() => true).catch(() => false);
-      if (ok) sentChannel = true;
-
-      // suivants = mentions seules
-      for (const part of chunks) {
-        await ch.send({ content: part }).catch(() => null);
-      }
+      const content = `${baseText}\n\n${mentionList(missing, { max: 60, empty: "—" })}`;
+      await ch.send({ content }).catch(() => null);
+      sentChannel = true;
     }
   }
 
   // 2) DM
   let sentDm = 0;
   let dmFail = 0;
-
   if (mode === "dm" || mode === "both") {
     for (const uid of missing) {
       try {
-        // priorité member cache (plus rapide)
-        const member = guild.members.cache.get(uid) || null;
-        const user = member?.user || (await guild.client.users.fetch(uid).catch(() => null));
+        const user = await guild.client.users.fetch(uid).catch(() => null);
         if (!user) {
           dmFail++;
           continue;
         }
-
-        const ok = await user.send({ content: baseText }).then(() => true).catch(() => false);
-        if (ok) sentDm++;
-        else dmFail++;
+        await user.send({ content: baseText }).catch(() => {
+          dmFail++;
+        });
+        sentDm++;
       } catch {
         dmFail++;
       }
-
       if (throttleMs) await sleep(throttleMs);
     }
   }
 
-  // 3) Résumé staff
+  // 3) Résumé staff (si possible)
   const staffReportsId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
   if (staffReportsId) {
     const reportCh = await guild.channels.fetch(staffReportsId).catch(() => null);
@@ -484,7 +574,7 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
           { name: "📣 Salon", value: sentChannel ? "oui" : "non", inline: true },
           { name: "✉️ MP envoyés", value: String(sentDm), inline: true },
           { name: "🚫 MP échoués", value: String(dmFail), inline: true },
-          { name: "👥 Cibles", value: mentionList(missing, { max: 60 }), inline: false }
+          { name: "👥 Cibles", value: mentionList(missing), inline: false }
         )
         .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -519,9 +609,14 @@ function startAutomationRunner(client, opts = {}) {
   const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
   const throttleMsPseudo = typeof opts.throttleMsPseudo === "number" ? opts.throttleMsPseudo : 850;
   const throttleMsCheck = typeof opts.throttleMsCheck === "number" ? opts.throttleMsCheck : 0;
+
+  // throttle DM reminder (anti rate-limit)
   const throttleMsReminder = typeof opts.throttleMsReminder === "number" ? opts.throttleMsReminder : 650;
+
+  // tick loop fréquence (plus petit = plus précis, mais inutilement agressif)
   const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000; // 20s
 
+  // anti double-run: Map<guildId:job, lastMinuteKey>
   const lastRun = new Map();
 
   async function tick() {
@@ -537,6 +632,7 @@ function startAutomationRunner(client, opts = {}) {
         const cfg = getGuildConfig(guild.id);
         if (!cfg) continue;
 
+        // switch global
         if (cfg?.automations?.enabled !== true) continue;
 
         // ---------- PSEUDO ----------
