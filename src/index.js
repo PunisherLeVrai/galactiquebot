@@ -17,6 +17,9 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// ✅ Discord Ephemeral flag (MessageFlags.Ephemeral = 1 << 6)
+const EPHEMERAL = 1 << 6;
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -60,7 +63,8 @@ if (!fs.existsSync(cmdDir)) {
 }
 
 // ---------- Ready ----------
-client.once("ready", () => {
+// ✅ discord.js: ready -> clientReady (évite warning v15)
+client.once("clientReady", () => {
   console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
 
   // ---------- Automation runner ----------
@@ -89,7 +93,7 @@ client.on("interactionCreate", async (interaction) => {
     const cmd = client.commands.get(interaction.commandName);
     if (!cmd) {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: "⚠️", flags: EPHEMERAL }).catch(() => {});
       }
       return;
     }
@@ -101,9 +105,9 @@ client.on("interactionCreate", async (interaction) => {
       if (interaction.deferred) {
         await interaction.editReply({ content: "⚠️" }).catch(() => {});
       } else if (!interaction.replied) {
-        await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: "⚠️", flags: EPHEMERAL }).catch(() => {});
       } else {
-        await interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
+        await interaction.followUp({ content: "⚠️", flags: EPHEMERAL }).catch(() => {});
       }
     } catch {}
   }
