@@ -3,6 +3,10 @@
 // Requis: 📅 + 📊 + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)
 // + Postes configurables pour /pseudo : 0..25 rôles (SANS label)
 // + ✅ Check Dispo: salon (opt) + 7 IDs de messages (Lun..Dim) pour /check_dispo
+// + ✅ Automations avancées (guildConfig étendu + runner multi-jobs)
+//   - automations.enabled
+//   - automations.pseudo: { enabled, minute }
+//   - automations.checkDispo: { enabled, times: ["HH:MM", ...] }
 // CommonJS — discord.js v14
 
 const {
@@ -12,9 +16,13 @@ const {
   ActionRowBuilder,
   ChannelSelectMenuBuilder,
   RoleSelectMenuBuilder,
+  StringSelectMenuBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require("discord.js");
 
 const { getGuildConfig, upsertGuildConfig } = require("../core/guildConfig");
@@ -37,12 +45,17 @@ const ICON = {
   save: "💾",
   reset: "🔄",
   cancel: "❎",
+
   autoOn: "🤖",
   autoOff: "🛑",
+  clock: "⏱️",
 
   // ✅ check dispo
   checkDispo: "🗓️",
   msg: "✉️",
+  times: "🕒",
+  plus: "➕",
+  broom: "🧹",
 };
 
 // ✅ STAFF ONLY
@@ -103,7 +116,48 @@ function fmtMsgIds(ids) {
   return lines.join("\n");
 }
 
-function buildEmbed(guild, draft, autoEnabled) {
+// ---- Automations helpers (doit matcher guildConfig.js) ----
+function clampInt(n, { min = 0, max = 59, fallback = 10 } = {}) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  const i = Math.trunc(x);
+  if (i < min) return min;
+  if (i > max) return max;
+  return i;
+}
+function normalizeTimeStr(v) {
+  const s = String(v || "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
+  if (hh < 0 || hh > 23) return null;
+  if (mm < 0 || mm > 59) return null;
+  return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+}
+function normalizeTimes(arr, { max = 12 } = {}) {
+  const src = Array.isArray(arr) ? arr : [];
+  const out = [];
+  const seen = new Set();
+  for (const v of src) {
+    const t = normalizeTimeStr(v);
+    if (!t) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= max) break;
+  }
+  out.sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+function fmtTimes(arr) {
+  const a = Array.isArray(arr) ? arr : [];
+  return a.length ? a.map((t) => `\`${t}\``).join(" ") : "—";
+}
+
+function buildEmbed(guild, draft) {
   const requiredOk =
     !!draft.disposChannelId &&
     !!draft.staffReportsChannelId &&
@@ -111,6 +165,13 @@ function buildEmbed(guild, draft, autoEnabled) {
     draft.staffRoleIds.length > 0 &&
     Array.isArray(draft.playerRoleIds) &&
     draft.playerRoleIds.length > 0;
+
+  const auto = draft.automations || {};
+  const globalOn = !!auto.enabled;
+  const pseudoOn = !!auto?.pseudo?.enabled;
+  const pseudoMin = clampInt(auto?.pseudo?.minute, { fallback: 10 });
+  const cdOn = !!auto?.checkDispo?.enabled;
+  const cdTimes = normalizeTimes(auto?.checkDispo?.times);
 
   return new EmbedBuilder()
     .setTitle(`${ICON.title} Setup — ${guild.name}`)
@@ -121,7 +182,7 @@ function buildEmbed(guild, draft, autoEnabled) {
         "",
         "Requis : 📅 Dispos + 📊 Staff + 🛡️ (≥1 rôle staff) + 👟 (≥1 rôle joueur)",
         "",
-        "Ces réglages servent aux commandes et à /pseudo + /check_dispo.",
+        "Ces réglages servent aux commandes et à /pseudo + /check_dispo + automations.",
       ].join("\n")
     )
     .addFields(
@@ -137,7 +198,7 @@ function buildEmbed(guild, draft, autoEnabled) {
       {
         name: "Rôles",
         value: [
-          `${ICON.staff} ${fmtRoles(draft.staffRoleIds)} — Staff (commandes + /pseudo + /check_dispo)`,
+          `${ICON.staff} ${fmtRoles(draft.staffRoleIds)} — Staff`,
           `${ICON.players} ${fmtRoles(draft.playerRoleIds)} — Joueurs (filtres)`,
         ].join("\n"),
         inline: false,
@@ -158,7 +219,11 @@ function buildEmbed(guild, draft, autoEnabled) {
       },
       {
         name: "Automations",
-        value: `État: **${autoEnabled ? "ON" : "OFF"}**`,
+        value: [
+          `Global: **${globalOn ? "ON" : "OFF"}**`,
+          `Pseudo: **${pseudoOn ? "ON" : "OFF"}** — minute: \`${pseudoMin}\` (HH:${String(pseudoMin).padStart(2, "0")})`,
+          `CheckDispo: **${cdOn ? "ON" : "OFF"}** — horaires: ${fmtTimes(cdTimes)}`,
+        ].join("\n"),
         inline: false,
       }
     )
@@ -193,16 +258,13 @@ module.exports = {
         : [];
 
       const draft = {
-        // salons
         disposChannelId: saved.disposChannelId || null,
         staffReportsChannelId: saved.staffReportsChannelId || null,
         pseudoScanChannelId: saved.pseudoScanChannelId || null,
 
-        // ✅ check dispo
         checkDispoChannelId: saved.checkDispoChannelId || null,
         dispoMessageIds: normalizeDispoMessageIds(saved.dispoMessageIds),
 
-        // rôles (multi)
         staffRoleIds: uniqIds(
           Array.isArray(saved.staffRoleIds)
             ? saved.staffRoleIds
@@ -213,11 +275,21 @@ module.exports = {
         ),
         playerRoleIds: uniqIds(Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [], 25),
 
-        // postes
         postRoleIds: uniqIds(Array.isArray(saved.postRoleIds) ? saved.postRoleIds : legacyPostRoleIds, 25),
-      };
 
-      let autoEnabled = !!saved?.automations?.enabled;
+        // ✅ automations draft
+        automations: {
+          enabled: !!saved?.automations?.enabled,
+          pseudo: {
+            enabled: saved?.automations?.pseudo?.enabled !== false, // par défaut true si non défini
+            minute: clampInt(saved?.automations?.pseudo?.minute, { fallback: 10 }),
+          },
+          checkDispo: {
+            enabled: !!saved?.automations?.checkDispo?.enabled,
+            times: normalizeTimes(saved?.automations?.checkDispo?.times),
+          },
+        },
+      };
 
       const scope = `${guildId}:${interaction.user.id}`;
       const CID = {
@@ -226,7 +298,6 @@ module.exports = {
         staffReports: `setup:staffReports:${scope}`,
         pseudoScan: `setup:pseudoScan:${scope}`,
 
-        // ✅ check dispo channel
         checkDispo: `setup:checkDispo:${scope}`,
 
         // roles
@@ -234,7 +305,7 @@ module.exports = {
         players: `setup:players:${scope}`,
         posts: `setup:posts:${scope}`,
 
-        // ✅ message ids
+        // message ids
         msgLun: `setup:msg:Lun:${scope}`,
         msgMar: `setup:msg:Mar:${scope}`,
         msgMer: `setup:msg:Mer:${scope}`,
@@ -244,14 +315,22 @@ module.exports = {
         msgDim: `setup:msg:Dim:${scope}`,
         msgClear: `setup:msg:clear:${scope}`,
 
+        // automations
+        autoGlobal: `setup:auto:global:${scope}`,
+        autoPseudo: `setup:auto:pseudo:${scope}`,
+        autoCheck: `setup:auto:check:${scope}`,
+        pseudoMinute: `setup:auto:pseudoMinute:${scope}`,
+        checkTimes: `setup:auto:checkTimes:${scope}`,
+        checkAdd: `setup:auto:checkAdd:${scope}`,
+        checkClear: `setup:auto:checkClear:${scope}`,
+
         // actions
         save: `setup:save:${scope}`,
         reset: `setup:reset:${scope}`,
         cancel: `setup:cancel:${scope}`,
-        auto: `setup:auto:${scope}`,
       };
 
-      // ---------- Message 1 ----------
+      // ---------- UI builders ----------
       const rowDispos = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.dispos)
@@ -279,24 +358,12 @@ module.exports = {
           .addChannelTypes(ChannelType.GuildText)
       );
 
-      try {
-        if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
-        if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
-        if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
-      } catch {}
-
       const rowActions1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.save).setLabel(`${ICON.save} Save`).setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(CID.reset).setLabel(`${ICON.reset} Reset`).setStyle(ButtonStyle.Secondary)
       );
 
-      await interaction.reply({
-        embeds: [buildEmbed(guild, draft, autoEnabled)],
-        components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
-        ephemeral: true,
-      });
-
-      // ---------- Message 2 ----------
+      // message 2
       const rowRoleStaff = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.staff)
@@ -321,27 +388,30 @@ module.exports = {
           .setMaxValues(25)
       );
 
-      try {
-        if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
-        if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
-        if (draft.postRoleIds.length) rowRolePosts.components[0].setDefaultRoles(draft.postRoleIds.slice(0, 25));
-      } catch {}
-
-      const rowActions2 = new ActionRowBuilder().addComponents(
+      const rowAutoButtons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(CID.auto)
-          .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
-          .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Cancel`).setStyle(ButtonStyle.Danger)
+          .setCustomId(CID.autoGlobal)
+          .setLabel(`Global`)
+          .setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.autoPseudo)
+          .setLabel(`Pseudo`)
+          .setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.pseudoMinute)
+          .setLabel(`${ICON.clock} Minute`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.autoCheck)
+          .setLabel(`CheckDispo`)
+          .setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CID.cancel)
+          .setLabel(`${ICON.cancel} Cancel`)
+          .setStyle(ButtonStyle.Danger)
       );
 
-      const msg2 = await interaction.followUp({
-        content: "🧩 Rôles / 📌 Postes",
-        components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowActions2],
-        ephemeral: true,
-      });
-
-      // ---------- Message 3 (Check Dispo) ----------
+      // message 3
       const rowCheckDispoChannel = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.checkDispo)
@@ -350,10 +420,6 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
-
-      try {
-        if (draft.checkDispoChannelId) rowCheckDispoChannel.components[0].setDefaultChannels([draft.checkDispoChannelId]);
-      } catch {}
 
       const rowMsgButtons1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.msgLun).setLabel("ID Lun").setStyle(ButtonStyle.Primary),
@@ -369,54 +435,118 @@ module.exports = {
         new ButtonBuilder().setCustomId(CID.msgClear).setLabel("Clear IDs").setStyle(ButtonStyle.Secondary)
       );
 
+      // horaires presets (tu peux changer la liste)
+      const PRESET_TIMES = [
+        "17:10", "18:10", "19:10", "20:10", "20:45",
+        "21:00", "21:10", "21:20", "21:40",
+        "22:00", "22:10", "22:20", "22:40",
+      ].map(normalizeTimeStr).filter(Boolean);
+
+      const rowTimesSelect = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(CID.checkTimes)
+          .setPlaceholder(`${ICON.times} Horaires CheckDispo (max 12)`)
+          .setMinValues(0)
+          .setMaxValues(Math.min(12, PRESET_TIMES.length))
+          .addOptions(
+            PRESET_TIMES.map((t) => ({
+              label: t,
+              value: t,
+              default: draft.automations.checkDispo.times.includes(t),
+            }))
+          )
+      );
+
+      const rowTimesButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(CID.checkAdd).setLabel(`${ICON.plus} Ajouter HH:MM`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.checkClear).setLabel(`${ICON.broom} Clear horaires`).setStyle(ButtonStyle.Secondary)
+      );
+
+      // defaults UI
+      try {
+        if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
+        if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
+        if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
+
+        if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
+        if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
+        if (draft.postRoleIds.length) rowRolePosts.components[0].setDefaultRoles(draft.postRoleIds.slice(0, 25));
+
+        if (draft.checkDispoChannelId) rowCheckDispoChannel.components[0].setDefaultChannels([draft.checkDispoChannelId]);
+      } catch {}
+
+      // ---------- Send messages ----------
+      await interaction.reply({
+        embeds: [buildEmbed(guild, draft)],
+        components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
+        ephemeral: true,
+      });
+
+      const msg2 = await interaction.followUp({
+        content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
+        components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons],
+        ephemeral: true,
+      });
+
       const msg3 = await interaction.followUp({
         content:
-          "🗓️ **Check Dispo** — Choisis le salon (opt) puis clique un bouton pour définir l’ID du message.\n" +
-          "➡️ Après le clic, **envoie l’ID** dans le salon (il sera supprimé). Timeout: 60s.",
-        components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2],
+          "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+          "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
+        components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2, rowTimesSelect, rowTimesButtons],
         ephemeral: true,
       });
 
       const mainMsg = await interaction.fetchReply();
 
       const refresh = async () => {
-        rowActions2.components[0]
-          .setLabel(autoEnabled ? `${ICON.autoOn} Auto` : `${ICON.autoOff} Auto`)
-          .setStyle(autoEnabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        // refresh button styles
+        rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowAutoButtons.components[3].setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
+        // refresh select defaults
         try {
+          // channels
           if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
           else rowDispos.components[0].setDefaultChannels([]);
           if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
           else rowStaffReports.components[0].setDefaultChannels([]);
           if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
           else rowPseudoScan.components[0].setDefaultChannels([]);
+          if (draft.checkDispoChannelId) rowCheckDispoChannel.components[0].setDefaultChannels([draft.checkDispoChannelId]);
+          else rowCheckDispoChannel.components[0].setDefaultChannels([]);
 
+          // roles
           rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
           rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
           rowRolePosts.components[0].setDefaultRoles(draft.postRoleIds.slice(0, 25));
 
-          if (draft.checkDispoChannelId) rowCheckDispoChannel.components[0].setDefaultChannels([draft.checkDispoChannelId]);
-          else rowCheckDispoChannel.components[0].setDefaultChannels([]);
+          // times menu defaults (rebuild options)
+          rowTimesSelect.components[0].setOptions(
+            PRESET_TIMES.map((t) => ({
+              label: t,
+              value: t,
+              default: draft.automations.checkDispo.times.includes(t),
+            }))
+          );
         } catch {}
 
         await interaction.editReply({
-          embeds: [buildEmbed(guild, draft, autoEnabled)],
+          embeds: [buildEmbed(guild, draft)],
           components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
         });
 
-        await msg2
-          .edit({ content: "🧩 Rôles / 📌 Postes", components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowActions2] })
-          .catch(() => {});
+        await msg2.edit({
+          content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
+          components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons],
+        }).catch(() => {});
 
-        await msg3
-          .edit({
-            content:
-              "🗓️ **Check Dispo** — Choisis le salon (opt) puis clique un bouton pour définir l’ID du message.\n" +
-              "➡️ Après le clic, **envoie l’ID** dans le salon (il sera supprimé). Timeout: 60s.",
-            components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2],
-          })
-          .catch(() => {});
+        await msg3.edit({
+          content:
+            "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+            "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
+          components: [rowCheckDispoChannel, rowMsgButtons1, rowMsgButtons2, rowTimesSelect, rowTimesButtons],
+        }).catch(() => {});
       };
 
       const col1 = mainMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 });
@@ -453,9 +583,7 @@ module.exports = {
         try { await msg.delete().catch(() => {}); } catch {}
 
         if (!isSnowflake(id)) {
-          return i
-            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID de message valide.", ephemeral: true })
-            .catch(() => {});
+          return i.followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", ephemeral: true }).catch(() => {});
         }
 
         const next = normalizeDispoMessageIds(draft.dispoMessageIds);
@@ -465,10 +593,45 @@ module.exports = {
         return refresh();
       }
 
-      // ---- Collect Message 1
+      function openPseudoMinuteModal(i) {
+        const modal = new ModalBuilder()
+          .setCustomId(`setup:modal:pseudoMinute:${scope}`)
+          .setTitle("Pseudo — minute (0-59)");
+
+        const input = new TextInputBuilder()
+          .setCustomId("minute")
+          .setLabel("Minute (0-59)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setPlaceholder("ex: 10")
+          .setValue(String(clampInt(draft.automations?.pseudo?.minute, { fallback: 10 })));
+
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      function openAddTimeModal(i) {
+        const modal = new ModalBuilder()
+          .setCustomId(`setup:modal:addTime:${scope}`)
+          .setTitle("CheckDispo — ajouter HH:MM");
+
+        const input = new TextInputBuilder()
+          .setCustomId("time")
+          .setLabel("Horaire (HH:MM)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setPlaceholder("ex: 21:10");
+
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      // ---------- Collect handlers ----------
       col1.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+          }
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
@@ -493,7 +656,11 @@ module.exports = {
               draft.checkDispoChannelId = null;
               draft.dispoMessageIds = new Array(7).fill(null);
 
-              autoEnabled = false;
+              draft.automations = {
+                enabled: false,
+                pseudo: { enabled: true, minute: 10 },
+                checkDispo: { enabled: false, times: [] },
+              };
 
               await i.deferUpdate();
               return refresh();
@@ -508,7 +675,7 @@ module.exports = {
                 Array.isArray(draft.playerRoleIds) &&
                 draft.playerRoleIds.length > 0;
 
-              if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
+              if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true }).catch(() => {});
 
               const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 
@@ -519,7 +686,6 @@ module.exports = {
                 staffReportsChannelId: draft.staffReportsChannelId,
                 pseudoScanChannelId: draft.pseudoScanChannelId,
 
-                // ✅ check dispo
                 checkDispoChannelId: draft.checkDispoChannelId,
                 dispoMessageIds: normalizeDispoMessageIds(draft.dispoMessageIds),
 
@@ -531,14 +697,25 @@ module.exports = {
                 staffRoleId: draft.staffRoleIds[0] || null,
                 posts: legacyPosts,
 
-                automations: { enabled: !!autoEnabled },
+                // ✅ automations complet
+                automations: {
+                  enabled: !!draft.automations.enabled,
+                  pseudo: {
+                    enabled: !!draft.automations.pseudo.enabled,
+                    minute: clampInt(draft.automations.pseudo.minute, { fallback: 10 }),
+                  },
+                  checkDispo: {
+                    enabled: !!draft.automations.checkDispo.enabled,
+                    times: normalizeTimes(draft.automations.checkDispo.times),
+                  },
+                },
 
                 setupBy: interaction.user.id,
                 setupAt: new Date().toISOString(),
               });
 
               stopAll();
-              await i.update({ content: `${ICON.save} Saved`, embeds: [buildEmbed(guild, draft, autoEnabled)], components: [] }).catch(() => {});
+              await i.update({ content: `${ICON.save} Saved`, embeds: [buildEmbed(guild, draft)], components: [] }).catch(() => {});
               await msg2.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
               await msg3.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
             }
@@ -548,32 +725,40 @@ module.exports = {
         }
       });
 
-      // ---- Collect Message 2
       col2.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+          }
 
           if (i.isRoleSelectMenu()) {
-            if (i.customId === CID.staff) {
-              draft.staffRoleIds = uniqIds(i.values, 25);
-              await i.deferUpdate();
-              return refresh();
-            }
-            if (i.customId === CID.players) {
-              draft.playerRoleIds = uniqIds(i.values, 25);
-              await i.deferUpdate();
-              return refresh();
-            }
-            if (i.customId === CID.posts) {
-              draft.postRoleIds = uniqIds(i.values, 25);
-              await i.deferUpdate();
-              return refresh();
-            }
+            if (i.customId === CID.staff) draft.staffRoleIds = uniqIds(i.values, 25);
+            if (i.customId === CID.players) draft.playerRoleIds = uniqIds(i.values, 25);
+            if (i.customId === CID.posts) draft.postRoleIds = uniqIds(i.values, 25);
+
+            await i.deferUpdate();
+            return refresh();
           }
 
           if (i.isButton()) {
-            if (i.customId === CID.auto) {
-              autoEnabled = !autoEnabled;
+            if (i.customId === CID.autoGlobal) {
+              draft.automations.enabled = !draft.automations.enabled;
+              await i.deferUpdate();
+              return refresh();
+            }
+
+            if (i.customId === CID.autoPseudo) {
+              draft.automations.pseudo.enabled = !draft.automations.pseudo.enabled;
+              await i.deferUpdate();
+              return refresh();
+            }
+
+            if (i.customId === CID.pseudoMinute) {
+              return openPseudoMinuteModal(i);
+            }
+
+            if (i.customId === CID.autoCheck) {
+              draft.automations.checkDispo.enabled = !draft.automations.checkDispo.enabled;
               await i.deferUpdate();
               return refresh();
             }
@@ -591,17 +776,25 @@ module.exports = {
         }
       });
 
-      // ---- Collect Message 3 (Check Dispo)
       col3.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+          }
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
             if (i.customId === CID.checkDispo) draft.checkDispoChannelId = v;
-
             await i.deferUpdate();
             return refresh();
+          }
+
+          if (i.isStringSelectMenu()) {
+            if (i.customId === CID.checkTimes) {
+              draft.automations.checkDispo.times = normalizeTimes(i.values, { max: 12 });
+              await i.deferUpdate();
+              return refresh();
+            }
           }
 
           if (i.isButton()) {
@@ -609,6 +802,16 @@ module.exports = {
               draft.dispoMessageIds = new Array(7).fill(null);
               await i.deferUpdate();
               return refresh();
+            }
+
+            if (i.customId === CID.checkClear) {
+              draft.automations.checkDispo.times = [];
+              await i.deferUpdate();
+              return refresh();
+            }
+
+            if (i.customId === CID.checkAdd) {
+              return openAddTimeModal(i);
             }
 
             if (i.customId === CID.msgLun) return askMessageId(i, "Lun");
@@ -624,11 +827,41 @@ module.exports = {
         }
       });
 
+      // ✅ Modal submissions (minute + add time)
+      interaction.client.on("interactionCreate", async (mi) => {
+        try {
+          if (!mi.isModalSubmit()) return;
+          if (mi.user.id !== interaction.user.id) return;
+
+          if (mi.customId === `setup:modal:pseudoMinute:${scope}`) {
+            const raw = mi.fields.getTextInputValue("minute");
+            const minute = clampInt(raw, { fallback: 10 });
+            draft.automations.pseudo.minute = minute;
+            await mi.reply({ content: `✅ Minute pseudo réglée sur \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`, ephemeral: true }).catch(() => {});
+            return refresh();
+          }
+
+          if (mi.customId === `setup:modal:addTime:${scope}`) {
+            const raw = mi.fields.getTextInputValue("time");
+            const t = normalizeTimeStr(raw);
+            if (!t) {
+              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 21:10).", ephemeral: true }).catch(() => {});
+              return;
+            }
+            const next = normalizeTimes([...(draft.automations.checkDispo.times || []), t], { max: 12 });
+            draft.automations.checkDispo.times = next;
+            await mi.reply({ content: `✅ Horaire ajouté: \`${t}\``, ephemeral: true }).catch(() => {});
+            return refresh();
+          }
+        } catch {}
+      });
+
       col1.on("end", async () => {
         try { await interaction.editReply({ content: ICON.time, embeds: [], components: [] }); } catch {}
         try { await msg2.edit({ content: ICON.time, components: [] }); } catch {}
         try { await msg3.edit({ content: ICON.time, components: [] }); } catch {}
       });
+
     } catch {
       try {
         if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "⚠️", ephemeral: true });
