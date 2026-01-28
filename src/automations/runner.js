@@ -2,21 +2,18 @@
 // Automation runner — CommonJS — MULTI JOBS
 //
 // ✅ PSEUDO
-// - Lance l'automatisation /pseudo toutes les heures à HH:<minute> (défaut 10)
-// - Respecte cfg.automations.enabled === true
-// - Respecte cfg.automations.pseudo.enabled === true (si présent), sinon fallback sur cfg.automations.enabled
-//
 // ✅ CHECK_DISPO (AUTO REPORT)
-// - Poste un embed NON-EPHEMERE dans le salon Staff (cfg.staffReportsChannelId)
-// - Analyse le jour "aujourd’hui" (Lun..Dim) via cfg.dispoMessageIds[0..6]
-// - Respecte cfg.automations.checkDispo.enabled === true
-// - Déclenchements configurables via cfg.automations.checkDispo.times = ["21:10","22:10", ...]
-//   (format 24h, Paris). Si absent -> aucun run automatique.
+// ✅ REMINDER_DISPO (AUTO REMIND)
+// - Rappelle les joueurs (cfg.playerRoleIds) qui n'ont pas réagi ✅/❌ au message du jour
+// - Mode: channel | dm | both
+// - Salon: cfg.automations.reminderDispo.channelId (fallback staffReportsChannelId)
+// - Horaires: cfg.automations.reminderDispo.times = ["HH:MM", ...]
 //
 // ⚠️ Le bot doit avoir:
 // - Manage Nicknames (pour PSEUDO)
-// - accès lecture aux messages de dispos + lecture réactions (pour CHECK_DISPO)
+// - accès lecture aux messages de dispos + lecture réactions (pour CHECK_DISPO / REMINDER_DISPO)
 // - droit d'envoyer embeds dans le salon staffReportsChannelId
+// - droit d'envoyer messages dans le salon reminder (si mode channel/both)
 
 const { EmbedBuilder } = require("discord.js");
 
@@ -148,12 +145,7 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
 
       if (storedCount > 0) {
         importAllPseudos(
-          {
-            version: 1,
-            guilds: {
-              [String(guild.id)]: { users: usersPayload },
-            },
-          },
+          { version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } },
           { replace: false }
         );
       }
@@ -256,7 +248,10 @@ async function collectReactionUserIds(message, emojiName) {
 
 function resolveDispoChannelId(cfg) {
   // checkDispoChannelId prioritaire, sinon disposChannelId
-  const v = cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null" ? cfg.checkDispoChannelId : cfg?.disposChannelId;
+  const v =
+    cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null"
+      ? cfg.checkDispoChannelId
+      : cfg?.disposChannelId;
   return v ? String(v) : null;
 }
 
@@ -296,19 +291,12 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     .setTitle(`📊 Check Dispo — ${dayLabel}`)
     .setColor(0x5865f2)
     .setDescription(
-      `Salon : <#${disposChannelId}>\n` +
-      `Filtre : rôles Joueurs (👟)\n` +
-      `Joueurs détectés : **${playerIds.size}**`
+      `Salon : <#${disposChannelId}>\n` + `Filtre : rôles Joueurs (👟)\n` + `Joueurs détectés : **${playerIds.size}**`
     )
     .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
   if (!mid) {
-    embed.addFields({
-      name: "⚠️ Message",
-      value: "ID du message non configuré pour ce jour (Lun..Dim).",
-      inline: false,
-    });
-
+    embed.addFields({ name: "⚠️ Message", value: "ID du message non configuré pour ce jour (Lun..Dim).", inline: false });
     await reportChannel.send({ embeds: [embed] }).catch(() => null);
     if (throttleMs) await sleep(throttleMs);
     return { ok: true, dayIndex: idx, dayLabel, mid: null };
@@ -316,12 +304,7 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
   const msg = await safeFetchMessage(dispoChannel, mid);
   if (!msg) {
-    embed.addFields({
-      name: "⚠️ Message",
-      value: `Message introuvable (ID: \`${mid}\`).`,
-      inline: false,
-    });
-
+    embed.addFields({ name: "⚠️ Message", value: `Message introuvable (ID: \`${mid}\`).`, inline: false });
     await reportChannel.send({ embeds: [embed] }).catch(() => null);
     if (throttleMs) await sleep(throttleMs);
     return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true };
@@ -349,6 +332,140 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 }
 
 // --------------------
+// REMINDER_DISPO — job auto (rappel aux "sans réaction")
+// --------------------
+function buildMessageLink(guildId, channelId, messageId) {
+  if (!guildId || !channelId || !messageId) return null;
+  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+}
+
+function normalizeReminderMode(v) {
+  const s = String(v || "").toLowerCase().trim();
+  if (s === "dm" || s === "mp") return "dm";
+  if (s === "both" || s === "2") return "both";
+  return "channel";
+}
+
+async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
+  if (!guild) return { ok: false, reason: "no_guild" };
+
+  const disposChannelId = resolveDispoChannelId(cfg);
+  if (!disposChannelId) return { ok: false, reason: "no_dispo_channel" };
+
+  const messageIds = getDispoMessageIds(cfg);
+  const idx = dayIndexFromDate(new Date());
+  const dayLabel = DAYS[idx];
+  const mid = messageIds[idx];
+
+  // salon dispo (pour lire réactions)
+  const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
+  if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
+
+  // Fetch membres pour filtrer joueurs
+  await guild.members.fetch().catch(() => null);
+
+  const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
+  if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
+
+  const players = guild.members.cache
+    .filter((m) => m && !m.user.bot)
+    .filter((m) => hasAnyRoleId(m, playerRoleIds));
+
+  const playerIds = new Set(players.map((m) => m.user.id));
+
+  // si pas de message id -> pas de rappel utile
+  if (!mid) return { ok: true, dayIndex: idx, dayLabel, mid: null, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+
+  const msg = await safeFetchMessage(dispoChannel, mid);
+  if (!msg) return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+
+  // réactions ✅/❌
+  const okSet = await collectReactionUserIds(msg, "✅");
+  const noSet = await collectReactionUserIds(msg, "❌");
+
+  const okPlayers = Array.from(okSet).filter((id) => playerIds.has(id));
+  const noPlayers = Array.from(noSet).filter((id) => playerIds.has(id));
+  const reacted = new Set([...okPlayers, ...noPlayers]);
+  const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
+
+  if (!missing.length) {
+    return { ok: true, dayIndex: idx, dayLabel, mid, missing, sentChannel: false, sentDm: 0, dmFail: 0, nothingToDo: true };
+  }
+
+  // config reminder
+  const r = cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object" ? cfg.automations.reminderDispo : {};
+  const mode = normalizeReminderMode(r.mode);
+  const targetChannelId = r.channelId ? String(r.channelId) : (cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null);
+
+  const link = buildMessageLink(guild.id, disposChannelId, mid);
+  const baseText =
+    `⏰ **Rappel Dispo — ${dayLabel}**\n` +
+    `Merci de répondre sur le message Dispo (✅ ou ❌).` +
+    (link ? `\n➡️ ${link}` : "");
+
+  // 1) Channel
+  let sentChannel = false;
+  if ((mode === "channel" || mode === "both") && targetChannelId) {
+    const ch = await guild.channels.fetch(targetChannelId).catch(() => null);
+    if (ch && ch.isTextBased?.()) {
+      const content = `${baseText}\n\n${mentionList(missing, { max: 60, empty: "—" })}`;
+      await ch.send({ content }).catch(() => null);
+      sentChannel = true;
+    }
+  }
+
+  // 2) DM
+  let sentDm = 0;
+  let dmFail = 0;
+  if (mode === "dm" || mode === "both") {
+    for (const uid of missing) {
+      try {
+        const user = await guild.client.users.fetch(uid).catch(() => null);
+        if (!user) {
+          dmFail++;
+          continue;
+        }
+        await user.send({ content: baseText }).catch(() => {
+          dmFail++;
+        });
+        sentDm++;
+      } catch {
+        dmFail++;
+      }
+      if (throttleMs) await sleep(throttleMs);
+    }
+  }
+
+  // 3) Résumé staff (si possible)
+  const staffReportsId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
+  if (staffReportsId) {
+    const reportCh = await guild.channels.fetch(staffReportsId).catch(() => null);
+    if (reportCh && reportCh.isTextBased?.()) {
+      const emb = new EmbedBuilder()
+        .setTitle(`⏰ Rappel Dispo — ${dayLabel}`)
+        .setColor(0x5865f2)
+        .setDescription(
+          `Message : \`${mid}\`\n` +
+          `Salon Dispo : <#${disposChannelId}>\n` +
+          `Cible (sans réaction) : **${missing.length}**\n` +
+          `Mode : **${mode}**`
+        )
+        .addFields(
+          { name: "📣 Salon", value: sentChannel ? "oui" : "non", inline: true },
+          { name: "✉️ MP envoyés", value: String(sentDm), inline: true },
+          { name: "🚫 MP échoués", value: String(dmFail), inline: true },
+          { name: "👥 Cibles", value: mentionList(missing), inline: false }
+        )
+        .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+      await reportCh.send({ embeds: [emb] }).catch(() => null);
+    }
+  }
+
+  return { ok: true, dayIndex: idx, dayLabel, mid, missing, sentChannel, sentDm, dmFail };
+}
+
+// --------------------
 // Scheduler (HH:MM) — anti double-run
 // --------------------
 function pad2(n) {
@@ -372,6 +489,9 @@ function startAutomationRunner(client, opts = {}) {
   const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
   const throttleMsPseudo = typeof opts.throttleMsPseudo === "number" ? opts.throttleMsPseudo : 850;
   const throttleMsCheck = typeof opts.throttleMsCheck === "number" ? opts.throttleMsCheck : 0;
+
+  // throttle DM reminder (anti rate-limit)
+  const throttleMsReminder = typeof opts.throttleMsReminder === "number" ? opts.throttleMsReminder : 650;
 
   // tick loop fréquence (plus petit = plus précis, mais inutilement agressif)
   const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000; // 20s
@@ -416,7 +536,6 @@ function startAutomationRunner(client, opts = {}) {
         const cdEnabled = cfg?.automations?.checkDispo?.enabled === true;
         if (cdEnabled) {
           const times = Array.isArray(cfg?.automations?.checkDispo?.times) ? cfg.automations.checkDispo.times : [];
-          // ex: ["21:10","22:10"]
           for (const t of times) {
             const parsed = parseHHMM(t);
             if (!parsed) continue;
@@ -430,9 +549,27 @@ function startAutomationRunner(client, opts = {}) {
             }
           }
         }
+
+        // ---------- REMINDER_DISPO ----------
+        const rdEnabled = cfg?.automations?.reminderDispo?.enabled === true;
+        if (rdEnabled) {
+          const times = Array.isArray(cfg?.automations?.reminderDispo?.times) ? cfg.automations.reminderDispo.times : [];
+          for (const t of times) {
+            const parsed = parseHHMM(t);
+            if (!parsed) continue;
+
+            if (hh === parsed.hh && mm === parsed.mm) {
+              const key = `${guild.id}:reminder_dispo:${t}`;
+              if (lastRun.get(key) !== mKey) {
+                lastRun.set(key, mKey);
+                await runReminderDispoForGuild(guild, cfg, { throttleMs: throttleMsReminder });
+              }
+            }
+          }
+        }
       }
     } catch {
-      // silencieux volontairement (évite spam logs)
+      // silencieux volontairement
     }
   }
 
