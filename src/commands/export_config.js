@@ -8,30 +8,16 @@ const { exportAllConfig, getGuildConfig, CONFIG_PATH } = require("../core/guildC
 // Même helper que /setup et /pseudo
 function isStaff(member, cfg) {
   if (!member) return false;
-
-  // Admin bypass
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
 
   const ids = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
-
-  // ✅ si aucun rôle staff configuré (premier run), on refuse hors admin
-  if (!ids.length) return false;
-
+  if (!ids.length) return false; // si aucun rôle staff configuré, admin only
   return ids.some((id) => id && member.roles?.cache?.has?.(String(id)));
 }
 
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function stamp(d = new Date()) {
-  const yyyy = String(d.getFullYear());
-  const mm = pad2(d.getMonth() + 1);
-  const dd = pad2(d.getDate());
-  const hh = pad2(d.getHours());
-  const mi = pad2(d.getMinutes());
-  return `${yyyy}-${mm}-${dd}_${hh}-${mi}`;
-}
+const pad2 = (n) => String(n).padStart(2, "0");
+const stamp = (d = new Date()) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}_${pad2(d.getHours())}-${pad2(d.getMinutes())}`;
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -41,13 +27,9 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) {
-        return interaction.reply({ content: "⛔", ephemeral: true });
-      }
+      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
 
       const cfg = getGuildConfig(interaction.guildId) || {};
-
-      // ✅ STAFF ONLY
       if (!isStaff(interaction.member, cfg)) {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
@@ -55,16 +37,18 @@ module.exports = {
       const data = exportAllConfig() || { version: 1, guilds: {} };
       const json = JSON.stringify(data, null, 2);
 
-      const ts = stamp(new Date());
-      const filename = `servers_${ts}.json`;
-
+      const filename = `servers_${stamp()}.json`;
       const attachment = new AttachmentBuilder(Buffer.from(json, "utf8"), { name: filename });
 
-      // Debug infos (non bloquant)
       const guildCount = Object.keys(data?.guilds || {}).length;
-      const thisGuild = data?.guilds?.[String(interaction.guildId)] || {};
-      const hasDispoIds = Array.isArray(thisGuild.dispoMessageIds) && thisGuild.dispoMessageIds.length === 7;
-      const hasCheckDispoCh = !!thisGuild.checkDispoChannelId;
+      const g = data?.guilds?.[String(interaction.guildId)] || {};
+      const auto = g?.automations || {};
+
+      const hasDispoIds = Array.isArray(g.dispoMessageIds) && g.dispoMessageIds.length === 7;
+      const hasCheckDispoCh = !!g.checkDispoChannelId;
+
+      const cd = auto?.checkDispo || {};
+      const rd = auto?.reminderDispo || {};
 
       return interaction.reply({
         content:
@@ -73,19 +57,18 @@ module.exports = {
           `Chemin interne : \`${CONFIG_PATH}\`\n` +
           `Guilds exportées: **${guildCount}**\n` +
           `checkDispoChannelId (ce serveur): **${hasCheckDispoCh ? "oui" : "non"}**\n` +
-          `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**`,
+          `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**\n` +
+          `automations.global: **${auto?.enabled ? "ON" : "OFF"}**\n` +
+          `auto.checkDispo: **${cd?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(cd?.times) ? cd.times.length : 0}**\n` +
+          `auto.reminderDispo: **${rd?.enabled ? "ON" : "OFF"}** — mode: \`${rd?.mode || "channel"}\` — times: **${Array.isArray(rd?.times) ? rd.times.length : 0}**`,
         files: [attachment],
         ephemeral: true,
       });
     } catch {
       try {
-        if (interaction.deferred) {
-          await interaction.editReply({ content: "⚠️" }).catch(() => {});
-        } else if (!interaction.replied) {
-          await interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
-        } else {
-          await interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
-        }
+        if (interaction.deferred) return interaction.editReply({ content: "⚠️" }).catch(() => {});
+        if (!interaction.replied) return interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
+        return interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
       } catch {}
     }
   },
