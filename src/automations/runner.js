@@ -51,6 +51,7 @@ function uniq(arr) {
   return Array.from(new Set((arr || []).map(String))).filter(Boolean);
 }
 
+// construit une liste de mentions, mais peut être trop long pour Discord
 function mentionList(ids, { empty = "—", max = 40 } = {}) {
   const u = uniq(ids);
   if (!u.length) return empty;
@@ -58,6 +59,16 @@ function mentionList(ids, { empty = "—", max = 40 } = {}) {
   const sliced = u.slice(0, max).map((id) => `<@${id}>`);
   const more = u.length > max ? `\n… +${u.length - max}` : "";
   return sliced.join(" ") + more;
+}
+
+// ✅ chunk pour éviter >2000 chars
+function chunkMentions(ids, { chunkSize = 30 } = {}) {
+  const u = uniq(ids);
+  const chunks = [];
+  for (let i = 0; i < u.length; i += chunkSize) {
+    chunks.push(u.slice(i, i + chunkSize).map((id) => `<@${id}>`).join(" "));
+  }
+  return chunks;
 }
 
 // --------------------
@@ -291,7 +302,9 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     .setTitle(`📊 Check Dispo — ${dayLabel}`)
     .setColor(0x5865f2)
     .setDescription(
-      `Salon : <#${disposChannelId}>\n` + `Filtre : rôles Joueurs (👟)\n` + `Joueurs détectés : **${playerIds.size}**`
+      `Salon : <#${disposChannelId}>\n` +
+      `Filtre : rôles Joueurs (👟)\n` +
+      `Joueurs détectés : **${playerIds.size}**`
     )
     .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -357,11 +370,9 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
   const dayLabel = DAYS[idx];
   const mid = messageIds[idx];
 
-  // salon dispo (pour lire réactions)
   const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
   if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
 
-  // Fetch membres pour filtrer joueurs
   await guild.members.fetch().catch(() => null);
 
   const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
@@ -373,13 +384,15 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
 
   const playerIds = new Set(players.map((m) => m.user.id));
 
-  // si pas de message id -> pas de rappel utile
-  if (!mid) return { ok: true, dayIndex: idx, dayLabel, mid: null, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+  if (!mid) {
+    return { ok: true, dayIndex: idx, dayLabel, mid: null, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+  }
 
   const msg = await safeFetchMessage(dispoChannel, mid);
-  if (!msg) return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+  if (!msg) {
+    return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [], sentChannel: false, sentDm: 0, dmFail: 0 };
+  }
 
-  // réactions ✅/❌
   const okSet = await collectReactionUserIds(msg, "✅");
   const noSet = await collectReactionUserIds(msg, "❌");
 
@@ -392,10 +405,15 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, missing, sentChannel: false, sentDm: 0, dmFail: 0, nothingToDo: true };
   }
 
-  // config reminder
-  const r = cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object" ? cfg.automations.reminderDispo : {};
+  const r =
+    cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object"
+      ? cfg.automations.reminderDispo
+      : {};
+
   const mode = normalizeReminderMode(r.mode);
-  const targetChannelId = r.channelId ? String(r.channelId) : (cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null);
+  const targetChannelId = r.channelId
+    ? String(r.channelId)
+    : (cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null);
 
   const link = buildMessageLink(guild.id, disposChannelId, mid);
   const baseText =
@@ -403,40 +421,52 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
     `Merci de répondre sur le message Dispo (✅ ou ❌).` +
     (link ? `\n➡️ ${link}` : "");
 
-  // 1) Channel
+  // 1) Channel (chunk mentions)
   let sentChannel = false;
   if ((mode === "channel" || mode === "both") && targetChannelId) {
     const ch = await guild.channels.fetch(targetChannelId).catch(() => null);
     if (ch && ch.isTextBased?.()) {
-      const content = `${baseText}\n\n${mentionList(missing, { max: 60, empty: "—" })}`;
-      await ch.send({ content }).catch(() => null);
-      sentChannel = true;
+      const chunks = chunkMentions(missing, { chunkSize: 30 });
+
+      // 1er message = texte + 1er chunk
+      const first = chunks.shift() || "—";
+      const ok = await ch.send({ content: `${baseText}\n\n${first}` }).then(() => true).catch(() => false);
+      if (ok) sentChannel = true;
+
+      // suivants = mentions seules
+      for (const part of chunks) {
+        await ch.send({ content: part }).catch(() => null);
+      }
     }
   }
 
   // 2) DM
   let sentDm = 0;
   let dmFail = 0;
+
   if (mode === "dm" || mode === "both") {
     for (const uid of missing) {
       try {
-        const user = await guild.client.users.fetch(uid).catch(() => null);
+        // priorité member cache (plus rapide)
+        const member = guild.members.cache.get(uid) || null;
+        const user = member?.user || (await guild.client.users.fetch(uid).catch(() => null));
         if (!user) {
           dmFail++;
           continue;
         }
-        await user.send({ content: baseText }).catch(() => {
-          dmFail++;
-        });
-        sentDm++;
+
+        const ok = await user.send({ content: baseText }).then(() => true).catch(() => false);
+        if (ok) sentDm++;
+        else dmFail++;
       } catch {
         dmFail++;
       }
+
       if (throttleMs) await sleep(throttleMs);
     }
   }
 
-  // 3) Résumé staff (si possible)
+  // 3) Résumé staff
   const staffReportsId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
   if (staffReportsId) {
     const reportCh = await guild.channels.fetch(staffReportsId).catch(() => null);
@@ -454,7 +484,7 @@ async function runReminderDispoForGuild(guild, cfg, { throttleMs = 600 } = {}) {
           { name: "📣 Salon", value: sentChannel ? "oui" : "non", inline: true },
           { name: "✉️ MP envoyés", value: String(sentDm), inline: true },
           { name: "🚫 MP échoués", value: String(dmFail), inline: true },
-          { name: "👥 Cibles", value: mentionList(missing), inline: false }
+          { name: "👥 Cibles", value: mentionList(missing, { max: 60 }), inline: false }
         )
         .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -489,14 +519,9 @@ function startAutomationRunner(client, opts = {}) {
   const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
   const throttleMsPseudo = typeof opts.throttleMsPseudo === "number" ? opts.throttleMsPseudo : 850;
   const throttleMsCheck = typeof opts.throttleMsCheck === "number" ? opts.throttleMsCheck : 0;
-
-  // throttle DM reminder (anti rate-limit)
   const throttleMsReminder = typeof opts.throttleMsReminder === "number" ? opts.throttleMsReminder : 650;
-
-  // tick loop fréquence (plus petit = plus précis, mais inutilement agressif)
   const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000; // 20s
 
-  // anti double-run: Map<guildId:job, lastMinuteKey>
   const lastRun = new Map();
 
   async function tick() {
@@ -512,7 +537,6 @@ function startAutomationRunner(client, opts = {}) {
         const cfg = getGuildConfig(guild.id);
         if (!cfg) continue;
 
-        // switch global
         if (cfg?.automations?.enabled !== true) continue;
 
         // ---------- PSEUDO ----------
@@ -573,11 +597,9 @@ function startAutomationRunner(client, opts = {}) {
     }
   }
 
-  // start loop
   const timer = setInterval(tick, loopMs);
   timer.unref?.();
 
-  // run immédiat optionnel (utile pour vérifier que ça tourne)
   if (opts.runOnStart === true) tick();
 
   return () => clearInterval(timer);
