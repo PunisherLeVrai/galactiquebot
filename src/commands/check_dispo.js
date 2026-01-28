@@ -2,6 +2,14 @@
 // /check_dispo — STAFF ONLY — NON EPHEMERE — Embed
 // Vérifie réactions sur 1 jour choisi (obligatoire)
 // Filtre : doit avoir ≥1 rôle dans cfg.playerRoleIds
+//
+// 🔒 Renforcement MAX des réactions / fetch (même logique que runner.js):
+// - Fetch message via channel.messages.fetch(id)
+// - Re-fetch du message via msg.fetch() avant lecture
+// - Tentative message.reactions.fetch() si dispo (et si cache vide / incomplet)
+// - Recherche réaction par emoji.name OU emoji.toString()
+// - Fetch users via reaction.users.fetch() (source de vérité)
+// - Si réactions indisponibles: embed explicite + hints permissions/intents
 
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require("discord.js");
 const { getGuildConfig } = require("../core/guildConfig");
@@ -35,6 +43,9 @@ function mentionList(ids, { empty = "—", max = 40 } = {}) {
   return sliced.join(" ") + more;
 }
 
+// --------------------
+// 🔒 Message / Reactions hardening
+// --------------------
 async function safeFetchMessage(channel, messageId) {
   if (!channel || !messageId) return null;
   try {
@@ -44,32 +55,95 @@ async function safeFetchMessage(channel, messageId) {
   }
 }
 
-async function collectReactionUserIds(message, emojiName) {
-  const out = new Set();
-  if (!message?.reactions?.cache) return out;
-
-  // recherche unicode ou custom
-  const reaction =
-    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
-    message.reactions.cache.find((r) => r.emoji.toString?.() === emojiName);
-
-  if (!reaction) return out;
-
+async function ensureFreshMessage(msg) {
+  if (!msg) return null;
   try {
-    const users = await reaction.users.fetch();
+    const fresh = await msg.fetch().catch(() => null);
+    return fresh || msg;
+  } catch {
+    return msg;
+  }
+}
+
+function findReactionInCache(message, emojiName) {
+  if (!message?.reactions?.cache) return null;
+
+  return (
+    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
+    message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName)
+  );
+}
+
+async function tryFetchReactions(message) {
+  try {
+    if (message?.reactions?.fetch) {
+      await message.reactions.fetch().catch(() => null);
+    }
+  } catch {}
+}
+
+async function collectReactionUserIdsStrong(message, emojiName) {
+  const out = new Set();
+
+  if (!message) {
+    return { ok: false, reason: "no_message", users: out };
+  }
+
+  // 1) Refetch message (partials/cache stale)
+  const fresh = await ensureFreshMessage(message);
+
+  // 2) si cache reactions vide -> tentative fetch
+  const cacheSize = fresh?.reactions?.cache?.size ?? 0;
+  if (cacheSize === 0) {
+    await tryFetchReactions(fresh);
+  }
+
+  // 3) trouver réaction
+  let reaction = findReactionInCache(fresh, emojiName);
+
+  // 4) retenter si pas trouvé (parfois 1er fetch ne remplit pas)
+  if (!reaction) {
+    await tryFetchReactions(fresh);
+    reaction = findReactionInCache(fresh, emojiName);
+  }
+
+  if (!reaction) {
+    const finalCacheSize = fresh?.reactions?.cache?.size ?? 0;
+
+    // cache toujours vide => probablement permissions/intents
+    if (finalCacheSize === 0) {
+      return { ok: false, reason: "reactions_unavailable", users: out };
+    }
+
+    // cache non vide mais pas cet emoji => normal
+    return { ok: true, reason: "emoji_not_found", users: out };
+  }
+
+  // 5) fetch users = vérité
+  try {
+    const users = await reaction.users.fetch().catch(() => null);
+    if (!users) return { ok: false, reason: "users_fetch_failed", users: out };
+
     for (const u of users.values()) {
       if (!u?.id) continue;
       if (u.bot) continue;
       out.add(u.id);
     }
-  } catch {}
+  } catch {
+    return { ok: false, reason: "users_fetch_threw", users: out };
+  }
 
-  return out;
+  return { ok: true, reason: "ok", users: out };
 }
 
+// --------------------
+// Config helpers
+// --------------------
 function getDispoMessageIds(cfg) {
   if (Array.isArray(cfg?.dispoMessageIds)) {
-    return cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
+    const a = cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
+    while (a.length < 7) a.push(null);
+    return a;
   }
 
   // fallback (ancien format)
@@ -77,7 +151,16 @@ function getDispoMessageIds(cfg) {
   for (let i = 0; i < 7; i++) {
     legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
   }
-  return legacy;
+  while (legacy.length < 7) legacy.push(null);
+  return legacy.slice(0, 7);
+}
+
+function resolveDispoChannelId(cfg) {
+  const v =
+    cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null"
+      ? cfg.checkDispoChannelId
+      : cfg?.disposChannelId;
+  return v ? String(v) : null;
 }
 
 module.exports = {
@@ -112,12 +195,7 @@ module.exports = {
         return interaction.reply("⛔ Accès réservé au STAFF.");
       }
 
-      // salon dispo
-      const disposChannelId =
-        cfg?.checkDispoChannelId && cfg.checkDispoChannelId !== "null"
-          ? cfg.checkDispoChannelId
-          : cfg?.disposChannelId;
-
+      const disposChannelId = resolveDispoChannelId(cfg);
       if (!disposChannelId) {
         return interaction.reply("⚠️ Aucun salon configuré dans /setup.");
       }
@@ -133,7 +211,7 @@ module.exports = {
         return interaction.reply("⚠️ Le salon Dispo/Check Dispo doit être un salon texte.");
       }
 
-      // fetch membres
+      // fetch membres (filtre players)
       await interaction.guild.members.fetch().catch(() => null);
 
       const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
@@ -183,15 +261,41 @@ module.exports = {
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
 
-      // réactions
-      const ok = await collectReactionUserIds(msg, "✅");
-      const no = await collectReactionUserIds(msg, "❌");
+      // 🔒 réactions (fortifiées)
+      const okRes = await collectReactionUserIdsStrong(msg, "✅");
+      const noRes = await collectReactionUserIdsStrong(msg, "❌");
+
+      // réactions indisponibles (permissions/intents/cache)
+      if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
+        const embed = new EmbedBuilder()
+          .setTitle(`📊 Check Dispo — ${dayLabel}`)
+          .setColor(0x5865f2)
+          .setDescription(
+            `Salon : <#${disposChannelId}>\n` +
+            `Message : \`${mid}\`\n` +
+            `Joueurs détectés : **${playerIds.size}**\n\n` +
+            `🚫 **Impossible de lire les réactions.**\n` +
+            `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
+          )
+          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+        return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
+      }
+
+      const ok = okRes.users;
+      const no = noRes.users;
 
       const okPlayers = Array.from(ok).filter((id) => playerIds.has(id));
       const noPlayers = Array.from(no).filter((id) => playerIds.has(id));
 
       const reacted = new Set([...okPlayers, ...noPlayers]);
       const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
+
+      // hint si lecture partielle
+      const warn =
+        (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
+          ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
+          : "";
 
       // embed final
       const embed = new EmbedBuilder()
@@ -200,7 +304,8 @@ module.exports = {
         .setDescription(
           `Salon : <#${disposChannelId}>\n` +
           `Message : \`${mid}\`\n` +
-          `Joueurs détectés : **${playerIds.size}**`
+          `Joueurs détectés : **${playerIds.size}**` +
+          warn
         )
         .addFields(
           { name: `🟩 Présents (${okPlayers.length})`, value: mentionList(okPlayers) },
@@ -211,13 +316,10 @@ module.exports = {
 
       return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
 
-    } catch (e) {
+    } catch {
       try {
-        if (interaction.replied) {
-          await interaction.followUp("⚠️ Erreur inconnue.");
-        } else {
-          await interaction.reply("⚠️ Erreur inconnue.");
-        }
+        if (interaction.replied) await interaction.followUp("⚠️ Erreur inconnue.");
+        else await interaction.reply("⚠️ Erreur inconnue.");
       } catch {}
     }
   },
