@@ -2,12 +2,7 @@
 // Export complet servers.json — STAFF ONLY — ephemeral
 // CommonJS — discord.js v14
 
-const {
-  SlashCommandBuilder,
-  PermissionFlagsBits,
-  AttachmentBuilder,
-} = require("discord.js");
-
+const { SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder } = require("discord.js");
 const { exportAllConfig, getGuildConfig, CONFIG_PATH } = require("../core/guildConfig");
 
 // Même helper que /setup et /pseudo
@@ -42,8 +37,6 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
     .setDescription("Export de la configuration du serveur (servers.json).")
-    // IMPORTANT: sinon seuls les admins voient la commande.
-    // Le vrai contrôle est fait par isStaff() ci-dessous.
     .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
@@ -59,7 +52,7 @@ module.exports = {
         return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
-      const data = exportAllConfig(); // exporte tout ce que guildConfig normalise
+      const data = exportAllConfig() || { version: 1, guilds: {} };
       const json = JSON.stringify(data, null, 2);
 
       const ts = stamp(new Date());
