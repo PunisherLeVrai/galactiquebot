@@ -70,7 +70,7 @@ const DEFAULT_GUILD = {
       enabled: false,
       mode: "channel", // "channel" | "dm" | "both"
       channelId: null, // salon rappel (fallback: staffReportsChannelId)
-      times: [], // ["21:10", ...]
+      times: [], // ["HH:MM", ...]
     },
   },
 
@@ -265,20 +265,30 @@ function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
   const out = { ...DEFAULT_GUILD, ...c };
 
+  // ✅ automations
   out.automations = normalizeAutomations(c.automations);
 
+  // ✅ roles multi
   out.staffRoleIds = uniqIds(out.staffRoleIds);
   out.playerRoleIds = uniqIds(out.playerRoleIds);
 
+  // ✅ compat legacy roles (staffRoleId / playerRoleId)
   if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
   if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
 
+  // ✅ postes
   const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
   const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
   out.posts = buildLegacyPostsFromIds(out.postRoleIds);
 
+  // ✅ dispo ids (7)
   out.dispoMessageIds = normalizeDispoMessageIds(c.dispoMessageIds);
+
+  // ✅ salons: toujours string ou null (évite bugs menus defaults)
+  out.disposChannelId = c.disposChannelId ? String(c.disposChannelId) : null;
+  out.staffReportsChannelId = c.staffReportsChannelId ? String(c.staffReportsChannelId) : null;
+  out.pseudoScanChannelId = c.pseudoScanChannelId ? String(c.pseudoScanChannelId) : null;
   out.checkDispoChannelId = c.checkDispoChannelId ? String(c.checkDispoChannelId) : null;
 
   return out;
