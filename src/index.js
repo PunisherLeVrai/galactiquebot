@@ -2,7 +2,7 @@
 // XIG BLAUGRANA FC Staff — minimal multi-serveur
 // - charge les commandes depuis src/commands/*.js
 // - route interactionCreate (slash commands)
-// - démarre le runner d'automatisation (pseudo hourly)
+// - démarre le runner d'automatisation (pseudo hourly + check_dispo times)
 
 require("dotenv").config();
 const { Client, GatewayIntentBits, Collection, Partials } = require("discord.js");
@@ -21,10 +21,20 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+
+    // ✅ nécessaire si tu fetch des messages (scan pseudo + fetch message dispo)
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent, // ⚠️ intent privilégié (scanner salon pseudo)
+
+    // ✅ nécessaire pour lire les réactions ✅/❌ sur les messages de dispo
+    GatewayIntentBits.GuildMessageReactions,
   ],
-  partials: [Partials.Channel],
+  partials: [
+    Partials.Channel,
+    Partials.Message,   // utile pour fetch message / cache incomplet
+    Partials.Reaction,  // utile pour réactions partielles
+    Partials.User,      // utile pour users dans réactions
+  ],
 });
 
 client.commands = new Collection();
@@ -53,17 +63,19 @@ if (!fs.existsSync(cmdDir)) {
 client.once("ready", () => {
   console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
 
-  // ---------- Automation runner (pseudo) ----------
-  // Toutes les heures (par défaut).
-  // Le runner respecte cfg.automations.enabled === true
+  // ---------- Automation runner ----------
+  // Le runner tick toutes les loopMs et déclenche:
+  // - pseudo à HH:minute (cfg.automations.pseudo.minute)
+  // - check_dispo aux times ["HH:MM", ...] (cfg.automations.checkDispo.times)
   try {
     startAutomationRunner(client, {
-      everyMs: 60 * 60 * 1000, // 1h
-      throttleMs: 850,
-      scanLimit: 300,
+      loopMs: 20_000,        // tick toutes les 20s (recommandé)
+      scanLimit: 300,        // scan pseudo channel
+      throttleMsPseudo: 850, // anti rate-limit nicknames
+      throttleMsCheck: 0,    // pas de throttle pour le report
       runOnStart: true,
     });
-    console.log("[AUTO] Runner démarré (pseudo hourly).");
+    console.log("[AUTO] Runner démarré (pseudo + check_dispo).");
   } catch (e) {
     console.error("[AUTO] Impossible de démarrer le runner.", e);
   }
