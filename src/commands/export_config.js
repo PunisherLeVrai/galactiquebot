@@ -2,16 +2,27 @@
 // Export complet servers.json — STAFF ONLY — ephemeral
 // CommonJS — discord.js v14
 
-const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
+const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  AttachmentBuilder,
+} = require("discord.js");
+
 const { exportAllConfig, getGuildConfig, CONFIG_PATH } = require("../core/guildConfig");
 
 // Même helper que /setup et /pseudo
 function isStaff(member, cfg) {
   if (!member) return false;
+
+  // Admin bypass
   if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
 
   const ids = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
-  return ids.some((id) => id && member.roles.cache.has(String(id)));
+
+  // ✅ si aucun rôle staff configuré (premier run), on refuse hors admin
+  if (!ids.length) return false;
+
+  return ids.some((id) => id && member.roles?.cache?.has?.(String(id)));
 }
 
 function pad2(n) {
@@ -37,7 +48,9 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
+      if (!interaction.inGuild()) {
+        return interaction.reply({ content: "⛔", ephemeral: true });
+      }
 
       const cfg = getGuildConfig(interaction.guildId) || {};
 
@@ -48,10 +61,11 @@ module.exports = {
 
       const data = exportAllConfig(); // exporte tout ce que guildConfig normalise
       const json = JSON.stringify(data, null, 2);
-      const buffer = Buffer.from(json, "utf8");
 
       const ts = stamp(new Date());
       const filename = `servers_${ts}.json`;
+
+      const attachment = new AttachmentBuilder(Buffer.from(json, "utf8"), { name: filename });
 
       // Debug infos (non bloquant)
       const guildCount = Object.keys(data?.guilds || {}).length;
@@ -67,7 +81,7 @@ module.exports = {
           `Guilds exportées: **${guildCount}**\n` +
           `checkDispoChannelId (ce serveur): **${hasCheckDispoCh ? "oui" : "non"}**\n` +
           `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**`,
-        files: [{ attachment: buffer, name: filename }],
+        files: [attachment],
         ephemeral: true,
       });
     } catch {
