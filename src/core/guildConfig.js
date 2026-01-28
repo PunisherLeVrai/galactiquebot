@@ -3,6 +3,11 @@
 // ✅ staffRoleIds (multi) + playerRoleIds (multi)
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
 // ✅ dispoMessageIds (7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
+// ✅ checkDispoChannelId (opt) : salon où sont les 7 messages (sinon disposChannelId)
+// ✅ automations:
+//    - enabled (global)
+//    - pseudo: { enabled, minute } => run à HH:minute (ex minute=10 => HH:10)
+//    - checkDispo: { enabled, times: ["HH:MM", ...] } => publications aux horaires choisis
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ utilitaires export/import/reset
 //
@@ -24,6 +29,9 @@ const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
 const DEFAULT_DATA = { version: 1, guilds: {} };
 
+// -----------
+// Defaults
+// -----------
 const DEFAULT_GUILD = {
   botLabel: "XIG BLAUGRANA FC Staff",
 
@@ -32,12 +40,10 @@ const DEFAULT_GUILD = {
   staffReportsChannelId: null,
   pseudoScanChannelId: null,
 
-  // ✅ (optionnel) salon où se trouvent les 7 messages de dispo
-  // si null, on utilisera disposChannelId
+  // (optionnel) salon où se trouvent les 7 messages de dispo (sinon disposChannelId)
   checkDispoChannelId: null,
 
-  // ✅ IDs de messages (7) = Lundi..Dimanche (index 0..6)
-  // ex: ["msgIdLun","msgIdMar",...]
+  // IDs de messages (7) = Lundi..Dimanche (index 0..6)
   dispoMessageIds: [null, null, null, null, null, null, null],
 
   // rôles
@@ -50,13 +56,27 @@ const DEFAULT_GUILD = {
   // compat legacy : [{ roleId, label }]
   posts: [],
 
-  automations: { enabled: false },
+  // ✅ automations (nouveau format étendu)
+  automations: {
+    enabled: false, // switch global
+    pseudo: {
+      enabled: true,
+      minute: 10, // HH:10 par défaut
+    },
+    checkDispo: {
+      enabled: false,
+      times: [], // ["21:10", "17:10", ...]
+    },
+  },
 
   setupBy: null,
   setupAt: null,
   updatedAt: null,
 };
 
+// -----------
+// IO helpers
+// -----------
 function ensureFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -128,7 +148,87 @@ function normalizeDispoMessageIds(input) {
   return out;
 }
 
+// --------------------
+// ✅ Automations normalisation
+// --------------------
+function toBool(v, fallback = false) {
+  if (v === true) return true;
+  if (v === false) return false;
+  return fallback;
+}
+
+function clampInt(n, { min = 0, max = 60, fallback = 0 } = {}) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  const i = Math.trunc(x);
+  if (i < min) return min;
+  if (i > max) return max;
+  return i;
+}
+
+// "HH:MM" (24h) -> "HH:MM" ou null
+function normalizeTimeStr(v) {
+  const s = String(v || "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
+  if (hh < 0 || hh > 23) return null;
+  if (mm < 0 || mm > 59) return null;
+
+  return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+}
+
+function normalizeTimes(arr, { max = 12 } = {}) {
+  const src = Array.isArray(arr) ? arr : [];
+  const out = [];
+  const seen = new Set();
+
+  for (const v of src) {
+    const t = normalizeTimeStr(v);
+    if (!t) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= max) break;
+  }
+
+  // tri chronologique (facilite lecture)
+  out.sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+function normalizeAutomations(a) {
+  const src = a && typeof a === "object" ? a : {};
+
+  // compat legacy: si automations était {enabled: bool} uniquement
+  const globalEnabled = toBool(src.enabled, DEFAULT_GUILD.automations.enabled);
+
+  const pseudoSrc = src.pseudo && typeof src.pseudo === "object" ? src.pseudo : {};
+  const checkSrc = src.checkDispo && typeof src.checkDispo === "object" ? src.checkDispo : {};
+
+  const pseudoMinute = clampInt(pseudoSrc.minute, { min: 0, max: 59, fallback: DEFAULT_GUILD.automations.pseudo.minute });
+
+  return {
+    enabled: globalEnabled,
+
+    pseudo: {
+      enabled: toBool(pseudoSrc.enabled, DEFAULT_GUILD.automations.pseudo.enabled),
+      minute: pseudoMinute,
+    },
+
+    checkDispo: {
+      enabled: toBool(checkSrc.enabled, DEFAULT_GUILD.automations.checkDispo.enabled),
+      times: normalizeTimes(checkSrc.times, { max: 12 }),
+    },
+  };
+}
+
+// --------------------
 // legacy posts -> ids
+// --------------------
 function extractPostRoleIdsFromLegacyPosts(posts) {
   if (!Array.isArray(posts)) return [];
   return uniqIds(
@@ -145,14 +245,19 @@ function buildLegacyPostsFromIds(postRoleIds) {
   return ids.map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 }
 
+// --------------------
+// Normalize guild
+// --------------------
 function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
 
   const out = {
     ...DEFAULT_GUILD,
     ...c,
-    automations: { ...DEFAULT_GUILD.automations, ...(c.automations || {}) },
   };
+
+  // ✅ automations (deep normalize)
+  out.automations = normalizeAutomations(c.automations);
 
   // roles arrays
   out.staffRoleIds = uniqIds(out.staffRoleIds);
@@ -165,7 +270,6 @@ function normalizeGuild(cfg) {
   // postes: source de vérité = postRoleIds, sinon conversion depuis posts legacy
   const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
   const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
-
   out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
 
   // posts legacy reconstruit
@@ -180,6 +284,9 @@ function normalizeGuild(cfg) {
   return out;
 }
 
+// --------------------
+// CRUD
+// --------------------
 function getGuildConfig(guildId) {
   if (!guildId) return null;
   const data = readAll();
@@ -203,7 +310,7 @@ function upsertGuildConfig(guildId, patch) {
   if (Array.isArray(p.postRoleIds)) postRoleIds = p.postRoleIds;
   else if (Array.isArray(p.posts)) postRoleIds = extractPostRoleIdsFromLegacyPosts(p.posts);
 
-  // ✅ dispoMessageIds : si patch fourni -> on prend (et on normalise), sinon on garde
+  // ✅ dispoMessageIds : si patch fourni -> on prend (puis normalizeGuild normalise), sinon on garde
   const dispoMessageIds = Array.isArray(p.dispoMessageIds) ? p.dispoMessageIds : current.dispoMessageIds;
 
   // ✅ checkDispoChannelId : si patch fourni explicitement (même null) -> on prend, sinon on garde
@@ -211,10 +318,17 @@ function upsertGuildConfig(guildId, patch) {
     ? p.checkDispoChannelId
     : current.checkDispoChannelId;
 
+  // ✅ automations : merge fin
+  const mergedAutomations = normalizeAutomations({
+    ...current.automations,
+    ...(p.automations || {}),
+    pseudo: { ...(current.automations?.pseudo || {}), ...(p.automations?.pseudo || {}) },
+    checkDispo: { ...(current.automations?.checkDispo || {}), ...(p.automations?.checkDispo || {}) },
+  });
+
   const merged = normalizeGuild({
     ...current,
     ...p,
-    automations: { ...current.automations, ...(p.automations || {}) },
 
     staffRoleIds,
     playerRoleIds,
@@ -222,6 +336,8 @@ function upsertGuildConfig(guildId, patch) {
 
     dispoMessageIds,
     checkDispoChannelId,
+
+    automations: mergedAutomations,
   });
 
   merged.updatedAt = new Date().toISOString();
@@ -231,6 +347,9 @@ function upsertGuildConfig(guildId, patch) {
   return merged;
 }
 
+// --------------------
+// Export / Import / Reset
+// --------------------
 function exportAllConfig() {
   const data = readAll();
   const out = { ...data, guilds: {} };
