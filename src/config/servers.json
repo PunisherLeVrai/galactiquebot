@@ -100,11 +100,22 @@
         }
       ],
       "automations": {
-        "enabled": true
+        "enabled": true,
+        "pseudo": {
+          "enabled": true,
+          "minute": 10
+        },
+        "checkDispo": {
+          "enabled": true,
+          "times": [
+            "12:00",
+            "17:00"
+          ]
+        }
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-01-27T17:27:27.505Z",
-      "updatedAt": "2026-01-27T17:27:27.505Z",
+      "setupAt": "2026-01-28T20:58:01.274Z",
+      "updatedAt": "2026-01-28T20:58:01.274Z",
       "staffRoleId": "1393784275853246666"
     },
     "1410246320324870217": {
@@ -134,7 +145,15 @@
       "postRoleIds": [],
       "posts": [],
       "automations": {
-        "enabled": true
+        "enabled": true,
+        "pseudo": {
+          "enabled": true,
+          "minute": 10
+        },
+        "checkDispo": {
+          "enabled": false,
+          "times": []
+        }
       },
       "setupBy": "448539638420733963",
       "setupAt": "2026-01-26T17:23:57.099Z",
