@@ -3,6 +3,15 @@
 // Modes: salon | mp | les2
 // Filtre : doit avoir ≥1 rôle dans cfg.playerRoleIds
 // CommonJS — discord.js v14
+//
+// 🔒 Renforcement MAX des réactions (même procédé que check_dispo/runner):
+// - Fetch message via channel.messages.fetch(id)
+// - Re-fetch du message via msg.fetch() avant lecture
+// - Tentative message.reactions.fetch() si dispo (et si cache vide / incomplet)
+// - Recherche réaction par emoji.name OU emoji.toString()
+// - Fetch users via reaction.users.fetch() (source de vérité)
+// - Pagination users.fetch({limit, after}) si utile
+// - Si réactions indisponibles: message clair (permissions/intents)
 
 const {
   SlashCommandBuilder,
@@ -39,6 +48,9 @@ function mentionList(ids, { empty = "—", max = 40 } = {}) {
   return sliced.join(" ") + more;
 }
 
+// --------------------
+// 🔒 Message / Reactions hardening
+// --------------------
 async function safeFetchMessage(channel, messageId) {
   if (!channel || !messageId) return null;
   try {
@@ -48,29 +60,38 @@ async function safeFetchMessage(channel, messageId) {
   }
 }
 
-function getDispoMessageIds(cfg) {
-  if (Array.isArray(cfg?.dispoMessageIds)) {
-    return cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
+async function ensureFreshMessage(msg) {
+  if (!msg) return null;
+  try {
+    const fresh = await msg.fetch().catch(() => null);
+    return fresh || msg;
+  } catch {
+    return msg;
   }
-  // fallback (ancien format)
-  const legacy = [];
-  for (let i = 0; i < 7; i++) {
-    legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
-  }
-  return legacy;
 }
 
-// Pagination safe (au cas où beaucoup de réactions)
-async function collectReactionUserIds(message, emojiName) {
-  const out = new Set();
-  if (!message?.reactions?.cache) return out;
+function findReactionInCache(message, emojiName) {
+  if (!message?.reactions?.cache) return null;
 
-  const reaction =
+  return (
     message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
-    message.reactions.cache.find((r) => r.emoji.toString?.() === emojiName);
+    message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName)
+  );
+}
 
+async function tryFetchReactions(message) {
+  try {
+    if (message?.reactions?.fetch) {
+      await message.reactions.fetch().catch(() => null);
+    }
+  } catch {}
+}
+
+async function fetchAllReactionUserIds(reaction) {
+  const out = new Set();
   if (!reaction) return out;
 
+  // pagination safe
   let after;
   while (true) {
     const users = await reaction.users.fetch({ limit: 100, after }).catch(() => null);
@@ -81,11 +102,87 @@ async function collectReactionUserIds(message, emojiName) {
       if (u.bot) continue;
       out.add(u.id);
     }
+
     after = users.last()?.id;
     if (!after || users.size < 100) break;
   }
 
   return out;
+}
+
+async function collectReactionUserIdsStrong(message, emojiName) {
+  const empty = new Set();
+
+  if (!message) {
+    return { ok: false, reason: "no_message", users: empty };
+  }
+
+  // 1) Refetch message (partials/cache stale)
+  const fresh = await ensureFreshMessage(message);
+
+  // 2) si cache reactions vide -> tentative fetch
+  const cacheSize = fresh?.reactions?.cache?.size ?? 0;
+  if (cacheSize === 0) {
+    await tryFetchReactions(fresh);
+  }
+
+  // 3) trouver réaction
+  let reaction = findReactionInCache(fresh, emojiName);
+
+  // 4) retenter si pas trouvé (parfois 1er fetch ne remplit pas)
+  if (!reaction) {
+    await tryFetchReactions(fresh);
+    reaction = findReactionInCache(fresh, emojiName);
+  }
+
+  if (!reaction) {
+    const finalCacheSize = fresh?.reactions?.cache?.size ?? 0;
+
+    // cache toujours vide => probablement permissions/intents
+    if (finalCacheSize === 0) {
+      return { ok: false, reason: "reactions_unavailable", users: empty };
+    }
+
+    // cache non vide mais pas cet emoji => normal
+    return { ok: true, reason: "emoji_not_found", users: empty };
+  }
+
+  // 5) fetch users (pagination)
+  try {
+    const users = await fetchAllReactionUserIds(reaction);
+    return { ok: true, reason: "ok", users };
+  } catch {
+    return { ok: false, reason: "users_fetch_failed", users: empty };
+  }
+}
+
+// --------------------
+// Config helpers
+// --------------------
+function getDispoMessageIds(cfg) {
+  if (Array.isArray(cfg?.dispoMessageIds)) {
+    const a = cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
+    while (a.length < 7) a.push(null);
+    return a;
+  }
+  // fallback (ancien format)
+  const legacy = [];
+  for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
+  while (legacy.length < 7) legacy.push(null);
+  return legacy.slice(0, 7);
+}
+
+function resolveDispoChannelId(cfg) {
+  const v =
+    cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null"
+      ? cfg.checkDispoChannelId
+      : cfg?.disposChannelId;
+  return v ? String(v) : null;
+}
+
+function buildMessageLink(guildId, channelId, messageId) {
+  if (!guildId || !channelId || !messageId) return null;
+  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
 }
 
 module.exports = {
@@ -150,11 +247,7 @@ module.exports = {
       const customMsg = interaction.options.getString("message") || null;
 
       // salon dispo (même logique que /check_dispo)
-      const disposChannelId =
-        cfg?.checkDispoChannelId && cfg.checkDispoChannelId !== "null"
-          ? cfg.checkDispoChannelId
-          : cfg?.disposChannelId;
-
+      const disposChannelId = resolveDispoChannelId(cfg);
       if (!disposChannelId) {
         return interaction.reply("⚠️ Aucun salon configuré dans /setup.");
       }
@@ -192,9 +285,29 @@ module.exports = {
         return interaction.editReply(`⚠️ Message introuvable (ID: \`${mid}\`).`);
       }
 
-      // réactions => répondants
-      const ok = await collectReactionUserIds(msg, "✅");
-      const no = await collectReactionUserIds(msg, "❌");
+      // 🔒 réactions => répondants (fortifiées + pagination)
+      const okRes = await collectReactionUserIdsStrong(msg, "✅");
+      const noRes = await collectReactionUserIdsStrong(msg, "❌");
+
+      // réactions indisponibles (permissions/intents/cache)
+      if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
+        const embed = new EmbedBuilder()
+          .setTitle(`📣 Rappel Dispo — ${dayLabel}`)
+          .setColor(0x5865f2)
+          .setDescription(
+            `Salon source : <#${disposChannelId}>\n` +
+            `Message : \`${mid}\`\n` +
+            `Joueurs détectés : **${playerIds.size}**\n\n` +
+            `🚫 **Impossible de lire les réactions.**\n` +
+            `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
+          )
+          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+        return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
+      }
+
+      const ok = okRes.users;
+      const no = noRes.users;
 
       const okPlayers = Array.from(ok).filter((id) => playerIds.has(id));
       const noPlayers = Array.from(no).filter((id) => playerIds.has(id));
@@ -206,10 +319,12 @@ module.exports = {
         return interaction.editReply(`✅ Personne à relancer pour **${dayLabel}**.`);
       }
 
-      // Message rappel
+      // Message rappel + lien direct
+      const link = buildMessageLink(interaction.guildId, disposChannelId, mid);
       const baseText =
         customMsg ||
-        `📌 **Rappel Dispo — ${dayLabel}**\nMerci de répondre sur le message de dispo avec ✅ ou ❌.`;
+        `📌 **Rappel Dispo — ${dayLabel}**\nMerci de répondre sur le message de dispo avec ✅ ou ❌.` +
+          (link ? `\n➡️ ${link}` : "");
 
       // Salon cible si besoin
       let outChannel = null;
@@ -228,12 +343,12 @@ module.exports = {
       // 1) En salon
       let salonSent = false;
       if (outChannel) {
-        // ping users (évite @everyone / rôles)
         const mention = mentionList(missing, { max: 80, empty: "—" });
         await outChannel
           .send({
             content: `${mention}\n\n${baseText}`,
-            allowedMentions: { users: missing, roles: [], repliedUser: false },
+            // IMPORTANT: on limite les mentions au strict nécessaire
+            allowedMentions: { users: missing.slice(0, 100), roles: [], repliedUser: false },
           })
           .catch(() => {});
         salonSent = true;
@@ -252,11 +367,19 @@ module.exports = {
         }
       }
 
+      const warn =
+        (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
+          ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
+          : "";
+
       const embed = new EmbedBuilder()
         .setTitle(`📣 Rappel Dispo — ${dayLabel}`)
         .setColor(0x5865f2)
         .setDescription(
-          `Salon source : <#${disposChannelId}>\nMessage : \`${mid}\`\nJoueurs détectés : **${playerIds.size}**`
+          `Salon source : <#${disposChannelId}>\n` +
+          `Message : \`${mid}\`\n` +
+          `Joueurs détectés : **${playerIds.size}**` +
+          warn
         )
         .addFields(
           { name: `🟦 Sans réaction (${missing.length})`, value: mentionList(missing) },
