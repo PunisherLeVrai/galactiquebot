@@ -20,6 +20,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  MessageFlags, // ✅ FIX warning ephemeral deprecated
 } = require("discord.js");
 
 const { getGuildConfig, upsertGuildConfig } = require("../core/guildConfig");
@@ -227,7 +228,6 @@ function buildEmbed(guild, draft) {
 }
 
 const inScope = (i, scope) => typeof i.customId === "string" && i.customId.endsWith(scope);
-
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
@@ -236,14 +236,18 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) return interaction.reply({ content: ICON.no, ephemeral: true });
+      if (!interaction.inGuild()) {
+        return interaction.reply({ content: ICON.no, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
 
       const guild = interaction.guild;
       const guildId = guild.id;
       const saved = getGuildConfig(guildId) || {};
 
       if (!isStaff(interaction.member, saved)) {
-        return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, ephemeral: true });
+        return interaction
+          .reply({ content: `${ICON.no} Accès réservé au STAFF.`, flags: MessageFlags.Ephemeral })
+          .catch(() => {});
       }
 
       const legacyPostRoleIds = Array.isArray(saved.posts)
@@ -417,14 +421,15 @@ module.exports = {
       await interaction.reply({
         embeds: [buildEmbed(guild, draft)],
         components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral, // ✅
       });
 
       const msg2 = await interaction.followUp({
         content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
         components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral, // ✅
       });
+
       // ---------- UI (message 3) ----------
       const rowCheckDispoChannel = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
@@ -451,7 +456,6 @@ module.exports = {
 
       const preset = PRESET_TIMES.map(normalizeTimeStr).filter(Boolean);
 
-      // ✅ CheckDispo horaires
       const rowTimesSelect = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(CID.checkTimes)
@@ -478,7 +482,6 @@ module.exports = {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      // ✅ Rappel horaires
       const rowRappelTimesSelect = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(CID.rappelTimes)
@@ -523,20 +526,16 @@ module.exports = {
           rowRappelTimesSelect,
           rowRappelButtons,
         ],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral, // ✅
       });
-
-      const mainMsg = await interaction.fetchReply();
 
       // ---------- refresh ----------
       const refresh = async () => {
-        // styles
-        rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Global
-        rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Pseudo
-        rowAutoButtons.components[3].setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // CheckDispo
-        rowAutoButtons.components[4].setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Rappel
+        rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowAutoButtons.components[3].setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+        rowAutoButtons.components[4].setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
-        // defaults
         try {
           rowDispos.components[0].setDefaultChannels(draft.disposChannelId ? [draft.disposChannelId] : []);
           rowStaffReports.components[0].setDefaultChannels(draft.staffReportsChannelId ? [draft.staffReportsChannelId] : []);
@@ -564,10 +563,12 @@ module.exports = {
           );
         } catch {}
 
-        await interaction.editReply({
-          embeds: [buildEmbed(guild, draft)],
-          components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
-        });
+        await interaction
+          .editReply({
+            embeds: [buildEmbed(guild, draft)],
+            components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
+          })
+          .catch(() => {});
 
         await msg2
           .edit({
@@ -594,32 +595,16 @@ module.exports = {
           })
           .catch(() => {});
       };
-
-      // ---------- collectors ----------
-      const col1 = mainMsg.createMessageComponentCollector({ time: 10 * 60 * 1000 });
-      const col2 = msg2.createMessageComponentCollector({ time: 10 * 60 * 1000 });
-      const col3 = msg3.createMessageComponentCollector({ time: 10 * 60 * 1000 });
-
-      const stopAll = () => {
-        try {
-          col1.stop();
-        } catch {}
-        try {
-          col2.stop();
-        } catch {}
-        try {
-          col3.stop();
-        } catch {}
-      };
-
-      async function askMessageId(i, dayLabel) {
+            async function askMessageId(i, dayLabel) {
         const idx = DAY_INDEX[dayLabel];
         if (typeof idx !== "number") return;
 
-        await i.reply({
-          content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
-          ephemeral: true,
-        });
+        await i
+          .reply({
+            content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
 
         const filter = (m) => m.author.id === interaction.user.id;
         const collected = await i.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
@@ -627,7 +612,7 @@ module.exports = {
 
         if (!m) {
           return i
-            .followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", ephemeral: true })
+            .followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", flags: MessageFlags.Ephemeral })
             .catch(() => {});
         }
 
@@ -638,7 +623,7 @@ module.exports = {
 
         if (!isSnowflake(id)) {
           return i
-            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", ephemeral: true })
+            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", flags: MessageFlags.Ephemeral })
             .catch(() => {});
         }
 
@@ -690,25 +675,159 @@ module.exports = {
       };
 
       // ✅ IMPORTANT: pas de interaction.client.on(...) (sinon listeners multiples)
-      const awaitModal = (filter) => interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
-      // ---------- collect 1 ----------
-      col1.on("collect", async (i) => {
-        try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
-          }
+      const awaitModal = (filter) =>
+        interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
 
+      // ✅ FIX: collector sur le salon (pas sur messages ephemeral)
+      const channel = interaction.channel;
+      if (!channel) return;
+
+      const collector = channel.createMessageComponentCollector({
+        time: 10 * 60 * 1000,
+        filter: (i) => i.user.id === interaction.user.id && inScope(i, scope),
+      });
+
+      const stopAll = () => {
+        try {
+          collector.stop();
+        } catch {}
+      };
+
+      collector.on("collect", async (i) => {
+        try {
+          // Channel menus
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
+
             if (i.customId === CID.dispos) draft.disposChannelId = v;
             if (i.customId === CID.staffReports) draft.staffReportsChannelId = v;
             if (i.customId === CID.pseudoScan) draft.pseudoScanChannelId = v;
+            if (i.customId === CID.checkDispo) draft.checkDispoChannelId = v;
+
             await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
+          // Role menus
+          if (i.isRoleSelectMenu()) {
+            if (i.customId === CID.staff) draft.staffRoleIds = uniqIds(i.values, 25);
+            if (i.customId === CID.players) draft.playerRoleIds = uniqIds(i.values, 25);
+            if (i.customId === CID.posts) draft.postRoleIds = uniqIds(i.values, 25);
+
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+
+          // Time selects
+          if (i.isStringSelectMenu()) {
+            if (i.customId === CID.checkTimes) {
+              draft.automations.checkDispo.times = normalizeTimes(i.values, { max: 12 });
+              await i.deferUpdate().catch(() => {});
+              return refresh();
+            }
+            if (i.customId === CID.rappelTimes) {
+              draft.automations.rappel.times = normalizeTimes(i.values, { max: 12 });
+              await i.deferUpdate().catch(() => {});
+              return refresh();
+            }
+          }
+
           if (!i.isButton()) return;
 
+          // Toggles
+          if (i.customId === CID.autoGlobal) {
+            draft.automations.enabled = !draft.automations.enabled;
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+          if (i.customId === CID.autoPseudo) {
+            draft.automations.pseudo.enabled = !draft.automations.pseudo.enabled;
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+          if (i.customId === CID.autoCheck) {
+            draft.automations.checkDispo.enabled = !draft.automations.checkDispo.enabled;
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+          if (i.customId === CID.autoRappel) {
+            draft.automations.rappel.enabled = !draft.automations.rappel.enabled;
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+
+          // Clears
+          if (i.customId === CID.msgClear) {
+            draft.dispoMessageIds = new Array(7).fill(null);
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+          if (i.customId === CID.checkClear) {
+            draft.automations.checkDispo.times = [];
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+          if (i.customId === CID.rappelClear) {
+            draft.automations.rappel.times = [];
+            await i.deferUpdate().catch(() => {});
+            return refresh();
+          }
+
+          // Modals
+          if (i.customId === CID.pseudoMinute) {
+            await openPseudoMinuteModal(i).catch(() => {});
+            const mi = await awaitModal((x) => x.customId === CID.modalPseudoMinute && x.user.id === interaction.user.id);
+            if (!mi) return;
+
+            const minute = clampInt(mi.fields.getTextInputValue("minute"), { fallback: 10 });
+            draft.automations.pseudo.minute = minute;
+
+            await mi
+              .reply({
+                content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
+                flags: MessageFlags.Ephemeral,
+              })
+              .catch(() => {});
+            return refresh();
+          }
+
+          if (i.customId === CID.checkAdd) {
+            await openAddTimeModal(i).catch(() => {});
+            const mi = await awaitModal((x) => x.customId === CID.modalAddTime && x.user.id === interaction.user.id);
+            if (!mi) return;
+
+            const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
+            if (!t) {
+              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 21:10).", flags: MessageFlags.Ephemeral }).catch(() => {});
+              return;
+            }
+
+            draft.automations.checkDispo.times = normalizeTimes([...(draft.automations.checkDispo.times || []), t], { max: 12 });
+            await mi.reply({ content: `✅ Horaire ajouté (CheckDispo): \`${t}\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+            return refresh();
+          }
+
+          if (i.customId === CID.rappelAdd) {
+            await openAddRappelTimeModal(i).catch(() => {});
+            const mi = await awaitModal((x) => x.customId === CID.modalAddRappelTime && x.user.id === interaction.user.id);
+            if (!mi) return;
+
+            const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
+            if (!t) {
+              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 20:45).", flags: MessageFlags.Ephemeral }).catch(() => {});
+              return;
+            }
+
+            draft.automations.rappel.times = normalizeTimes([...(draft.automations.rappel.times || []), t], { max: 12 });
+            await mi.reply({ content: `✅ Horaire ajouté (Rappel): \`${t}\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+            return refresh();
+          }
+
+          // Jours
+          const day = DAYS.find((d) => i.customId === CID.msg(d));
+          if (day) return askMessageId(i, day);
+
+          // Reset
           if (i.customId === CID.reset) {
             draft.disposChannelId = null;
             draft.staffReportsChannelId = null;
@@ -732,18 +851,15 @@ module.exports = {
             return refresh();
           }
 
+          // Save
           if (i.customId === CID.save) {
             const requiredOk =
               !!draft.disposChannelId &&
               !!draft.staffReportsChannelId &&
-              Array.isArray(draft.staffRoleIds) &&
-              draft.staffRoleIds.length > 0 &&
-              Array.isArray(draft.playerRoleIds) &&
-              draft.playerRoleIds.length > 0;
+              (draft.staffRoleIds || []).length > 0 &&
+              (draft.playerRoleIds || []).length > 0;
 
-            if (!requiredOk) {
-              return i.reply({ content: ICON.warn, ephemeral: true }).catch(() => {});
-            }
+            if (!requiredOk) return i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral }).catch(() => {});
 
             const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 
@@ -760,7 +876,6 @@ module.exports = {
               playerRoleIds: uniqIds(draft.playerRoleIds, 25),
               postRoleIds: uniqIds(draft.postRoleIds, 25),
 
-              // compat
               staffRoleId: draft.staffRoleIds[0] || null,
               posts: legacyPosts,
 
@@ -789,73 +904,10 @@ module.exports = {
             await i.update({ content: `${ICON.save} Saved`, embeds: [buildEmbed(guild, draft)], components: [] }).catch(() => {});
             await msg2.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
             await msg3.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
-          }
-        } catch {
-          try {
-            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
-          } catch {}
-        }
-      });
-
-      // ---------- collect 2 ----------
-      col2.on("collect", async (i) => {
-        try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+            return;
           }
 
-          if (i.isRoleSelectMenu()) {
-            if (i.customId === CID.staff) draft.staffRoleIds = uniqIds(i.values, 25);
-            if (i.customId === CID.players) draft.playerRoleIds = uniqIds(i.values, 25);
-            if (i.customId === CID.posts) draft.postRoleIds = uniqIds(i.values, 25);
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (!i.isButton()) return;
-
-          if (i.customId === CID.autoGlobal) {
-            draft.automations.enabled = !draft.automations.enabled;
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.autoPseudo) {
-            draft.automations.pseudo.enabled = !draft.automations.pseudo.enabled;
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.pseudoMinute) {
-            await openPseudoMinuteModal(i).catch(() => {});
-            const mi = await awaitModal((x) => x.customId === CID.modalPseudoMinute && x.user.id === interaction.user.id);
-            if (!mi) return;
-
-            const minute = clampInt(mi.fields.getTextInputValue("minute"), { fallback: 10 });
-            draft.automations.pseudo.minute = minute;
-
-            await mi
-              .reply({
-                content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
-                ephemeral: true,
-              })
-              .catch(() => {});
-
-            return refresh();
-          }
-
-          if (i.customId === CID.autoCheck) {
-            draft.automations.checkDispo.enabled = !draft.automations.checkDispo.enabled;
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.autoRappel) {
-            draft.automations.rappel.enabled = !draft.automations.rappel.enabled;
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
+          // Cancel
           if (i.customId === CID.cancel) {
             stopAll();
             await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
@@ -868,103 +920,16 @@ module.exports = {
             try {
               await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] });
             } catch {}
+            return;
           }
         } catch {
           try {
-            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
+            if (!i.replied && !i.deferred) await i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral });
           } catch {}
         }
       });
 
-      // ---------- collect 3 ----------
-      col3.on("collect", async (i) => {
-        try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
-            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
-          }
-
-          if (i.isChannelSelectMenu()) {
-            const v = i.values?.[0] || null;
-            if (i.customId === CID.checkDispo) draft.checkDispoChannelId = v;
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.isStringSelectMenu() && i.customId === CID.checkTimes) {
-            draft.automations.checkDispo.times = normalizeTimes(i.values, { max: 12 });
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.isStringSelectMenu() && i.customId === CID.rappelTimes) {
-            draft.automations.rappel.times = normalizeTimes(i.values, { max: 12 });
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (!i.isButton()) return;
-
-          if (i.customId === CID.msgClear) {
-            draft.dispoMessageIds = new Array(7).fill(null);
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.checkClear) {
-            draft.automations.checkDispo.times = [];
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.rappelClear) {
-            draft.automations.rappel.times = [];
-            await i.deferUpdate().catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.checkAdd) {
-            await openAddTimeModal(i).catch(() => {});
-            const mi = await awaitModal((x) => x.customId === CID.modalAddTime && x.user.id === interaction.user.id);
-            if (!mi) return;
-
-            const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
-            if (!t) {
-              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 21:10).", ephemeral: true }).catch(() => {});
-              return;
-            }
-
-            draft.automations.checkDispo.times = normalizeTimes([...(draft.automations.checkDispo.times || []), t], { max: 12 });
-            await mi.reply({ content: `✅ Horaire ajouté (CheckDispo): \`${t}\``, ephemeral: true }).catch(() => {});
-            return refresh();
-          }
-
-          if (i.customId === CID.rappelAdd) {
-            await openAddRappelTimeModal(i).catch(() => {});
-            const mi = await awaitModal((x) => x.customId === CID.modalAddRappelTime && x.user.id === interaction.user.id);
-            if (!mi) return;
-
-            const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
-            if (!t) {
-              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 20:45).", ephemeral: true }).catch(() => {});
-              return;
-            }
-
-            draft.automations.rappel.times = normalizeTimes([...(draft.automations.rappel.times || []), t], { max: 12 });
-            await mi.reply({ content: `✅ Horaire ajouté (Rappel): \`${t}\``, ephemeral: true }).catch(() => {});
-            return refresh();
-          }
-
-          // boutons jours
-          const day = DAYS.find((d) => i.customId === CID.msg(d));
-          if (day) return askMessageId(i, day);
-        } catch {
-          try {
-            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
-          } catch {}
-        }
-      });
-
-      col1.on("end", async () => {
+      collector.on("end", async () => {
         try {
           await interaction.editReply({ content: ICON.time, embeds: [], components: [] });
         } catch {}
@@ -977,8 +942,11 @@ module.exports = {
       });
     } catch {
       try {
-        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "⚠️", ephemeral: true });
-        else await interaction.followUp({ content: "⚠️", ephemeral: true });
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: "⚠️", flags: MessageFlags.Ephemeral });
+        } else {
+          await interaction.followUp({ content: "⚠️", flags: MessageFlags.Ephemeral });
+        }
       } catch {}
     }
   },
