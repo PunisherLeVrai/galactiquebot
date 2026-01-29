@@ -335,7 +335,7 @@ function upsertGuildConfig(guildId, patch) {
   const dispoMessageIds = Array.isArray(p.dispoMessageIds) ? p.dispoMessageIds : current.dispoMessageIds;
 
   const checkDispoChannelId = Object.prototype.hasOwnProperty.call(p, "checkDispoChannelId")
-    ? p.checkDispoChannelId
+    ? (p.checkDispoChannelId ? String(p.checkDispoChannelId) : null)
     : current.checkDispoChannelId;
 
   // ✅ merge automations (simple) + compat reminderDispo
@@ -345,10 +345,7 @@ function upsertGuildConfig(guildId, patch) {
     pseudo: { ...(current.automations?.pseudo || {}), ...(p.automations?.pseudo || {}) },
     checkDispo: { ...(current.automations?.checkDispo || {}), ...(p.automations?.checkDispo || {}) },
     rappel: { ...(current.automations?.rappel || {}), ...(p.automations?.rappel || {}) },
-    reminderDispo: {
-      // compat si un ancien patch envoie reminderDispo
-      ...(p.automations?.reminderDispo || {}),
-    },
+    reminderDispo: { ...(p.automations?.reminderDispo || {}) },
   });
 
   const merged = normalizeGuild({
@@ -379,7 +376,6 @@ function exportAllConfig() {
   for (const [gid, cfg] of Object.entries(data.guilds || {})) {
     out.guilds[gid] = normalizeGuild(cfg);
   }
-
   return out;
 }
 
