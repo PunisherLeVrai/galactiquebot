@@ -20,7 +20,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  MessageFlags, // ✅ FIX warning ephemeral deprecated
+  MessageFlags,
 } = require("discord.js");
 
 const { getGuildConfig, upsertGuildConfig } = require("../core/guildConfig");
@@ -228,6 +228,18 @@ function buildEmbed(guild, draft) {
 }
 
 const inScope = (i, scope) => typeof i.customId === "string" && i.customId.endsWith(scope);
+
+// ✅ désactive les composants à la fin (évite clics -> interaction failed)
+function disableComponents(rows) {
+  return rows.map((row) => {
+    const r = ActionRowBuilder.from(row);
+    r.components = r.components.map((c) => {
+      if (typeof c.setDisabled === "function") c.setDisabled(true);
+      return c;
+    });
+    return r;
+  });
+}
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
@@ -407,29 +419,6 @@ module.exports = {
         new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Cancel`).setStyle(ButtonStyle.Danger)
       );
 
-      // defaults UI (menus)
-      try {
-        if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
-        if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
-        if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
-
-        if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
-        if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
-        if (draft.postRoleIds.length) rowRolePosts.components[0].setDefaultRoles(draft.postRoleIds.slice(0, 25));
-      } catch {}
-
-      await interaction.reply({
-        embeds: [buildEmbed(guild, draft)],
-        components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
-        flags: MessageFlags.Ephemeral, // ✅
-      });
-
-      const msg2 = await interaction.followUp({
-        content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
-        components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
-        flags: MessageFlags.Ephemeral, // ✅
-      });
-
       // ---------- UI (message 3) ----------
       const rowCheckDispoChannel = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
@@ -472,14 +461,8 @@ module.exports = {
       );
 
       const rowTimesButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(CID.checkAdd)
-          .setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`)
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(CID.checkClear)
-          .setLabel(`${ICON.broom} Clear CheckDispo`)
-          .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(CID.checkAdd).setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.checkClear).setLabel(`${ICON.broom} Clear CheckDispo`).setStyle(ButtonStyle.Secondary)
       );
 
       const rowRappelTimesSelect = new ActionRowBuilder().addComponents(
@@ -498,19 +481,33 @@ module.exports = {
       );
 
       const rowRappelButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(CID.rappelAdd)
-          .setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`)
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(CID.rappelClear)
-          .setLabel(`${ICON.broom} Clear Rappel`)
-          .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(CID.rappelAdd).setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(CID.rappelClear).setLabel(`${ICON.broom} Clear Rappel`).setStyle(ButtonStyle.Secondary)
       );
 
+      // defaults UI
       try {
+        if (draft.disposChannelId) rowDispos.components[0].setDefaultChannels([draft.disposChannelId]);
+        if (draft.staffReportsChannelId) rowStaffReports.components[0].setDefaultChannels([draft.staffReportsChannelId]);
+        if (draft.pseudoScanChannelId) rowPseudoScan.components[0].setDefaultChannels([draft.pseudoScanChannelId]);
         if (draft.checkDispoChannelId) rowCheckDispoChannel.components[0].setDefaultChannels([draft.checkDispoChannelId]);
+
+        if (draft.staffRoleIds.length) rowRoleStaff.components[0].setDefaultRoles(draft.staffRoleIds.slice(0, 25));
+        if (draft.playerRoleIds.length) rowRolePlayers.components[0].setDefaultRoles(draft.playerRoleIds.slice(0, 25));
+        if (draft.postRoleIds.length) rowRolePosts.components[0].setDefaultRoles(draft.postRoleIds.slice(0, 25));
       } catch {}
+
+      await interaction.reply({
+        embeds: [buildEmbed(guild, draft)],
+        components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
+        flags: MessageFlags.Ephemeral,
+      });
+
+      const msg2 = await interaction.followUp({
+        content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
+        components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
+        flags: MessageFlags.Ephemeral,
+      });
 
       const msg3 = await interaction.followUp({
         content:
@@ -526,16 +523,17 @@ module.exports = {
           rowRappelTimesSelect,
           rowRappelButtons,
         ],
-        flags: MessageFlags.Ephemeral, // ✅
+        flags: MessageFlags.Ephemeral,
       });
 
-      // ---------- refresh ----------
       const refresh = async () => {
+        // styles
         rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
         rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
         rowAutoButtons.components[3].setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
         rowAutoButtons.components[4].setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
 
+        // defaults
         try {
           rowDispos.components[0].setDefaultChannels(draft.disposChannelId ? [draft.disposChannelId] : []);
           rowStaffReports.components[0].setDefaultChannels(draft.staffReportsChannelId ? [draft.staffReportsChannelId] : []);
@@ -547,84 +545,62 @@ module.exports = {
           rowRolePosts.components[0].setDefaultRoles((draft.postRoleIds || []).slice(0, 25));
 
           rowTimesSelect.components[0].setOptions(
-            preset.map((t) => ({
-              label: t,
-              value: t,
-              default: (draft.automations.checkDispo.times || []).includes(t),
-            }))
+            preset.map((t) => ({ label: t, value: t, default: (draft.automations.checkDispo.times || []).includes(t) }))
           );
-
           rowRappelTimesSelect.components[0].setOptions(
-            preset.map((t) => ({
-              label: t,
-              value: t,
-              default: (draft.automations.rappel.times || []).includes(t),
-            }))
+            preset.map((t) => ({ label: t, value: t, default: (draft.automations.rappel.times || []).includes(t) }))
           );
         } catch {}
 
-        await interaction
-          .editReply({
-            embeds: [buildEmbed(guild, draft)],
-            components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
-          })
-          .catch(() => {});
+        await interaction.editReply({
+          embeds: [buildEmbed(guild, draft)],
+          components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
+        }).catch(() => {});
 
-        await msg2
-          .edit({
-            content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
-            components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
-          })
-          .catch(() => {});
+        await msg2.edit({
+          content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
+          components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
+        }).catch(() => {});
 
-        await msg3
-          .edit({
-            content:
-              "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
-              "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
-              "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
-            components: [
-              rowCheckDispoChannel,
-              rowMsgButtons1,
-              rowMsgButtons2,
-              rowTimesSelect,
-              rowTimesButtons,
-              rowRappelTimesSelect,
-              rowRappelButtons,
-            ],
-          })
-          .catch(() => {});
+        await msg3.edit({
+          content:
+            "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+            "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
+            "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
+          components: [
+            rowCheckDispoChannel,
+            rowMsgButtons1,
+            rowMsgButtons2,
+            rowTimesSelect,
+            rowTimesButtons,
+            rowRappelTimesSelect,
+            rowRappelButtons,
+          ],
+        }).catch(() => {});
       };
-            async function askMessageId(i, dayLabel) {
+
+      async function askMessageId(i, dayLabel) {
         const idx = DAY_INDEX[dayLabel];
         if (typeof idx !== "number") return;
 
-        await i
-          .reply({
-            content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
-            flags: MessageFlags.Ephemeral,
-          })
-          .catch(() => {});
+        await i.reply({
+          content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
+          flags: MessageFlags.Ephemeral,
+        }).catch(() => {});
 
         const filter = (m) => m.author.id === interaction.user.id;
         const collected = await i.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
         const m = collected?.first?.() || null;
 
         if (!m) {
-          return i
-            .followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", flags: MessageFlags.Ephemeral })
-            .catch(() => {});
+          return i.followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", flags: MessageFlags.Ephemeral }).catch(() => {});
         }
 
         const id = String(m.content || "").trim();
-        try {
-          await m.delete().catch(() => {});
-        } catch {}
+        try { await m.delete().catch(() => {}); } catch {}
 
         if (!isSnowflake(id)) {
-          return i
-            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", flags: MessageFlags.Ephemeral })
-            .catch(() => {});
+          return i.followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", flags: MessageFlags.Ephemeral }).catch(() => {});
         }
 
         const next = normalizeDispoMessageIds(draft.dispoMessageIds);
@@ -674,28 +650,23 @@ module.exports = {
         return i.showModal(modal);
       };
 
-      // ✅ IMPORTANT: pas de interaction.client.on(...) (sinon listeners multiples)
       const awaitModal = (filter) =>
         interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
 
-      // ✅ FIX: collector sur le salon (pas sur messages ephemeral)
       const channel = interaction.channel;
       if (!channel) return;
-
-      const collector = channel.createMessageComponentCollector({
+            const collector = channel.createMessageComponentCollector({
         time: 10 * 60 * 1000,
         filter: (i) => i.user.id === interaction.user.id && inScope(i, scope),
       });
 
       const stopAll = () => {
-        try {
-          collector.stop();
-        } catch {}
+        try { collector.stop(); } catch {}
       };
 
       collector.on("collect", async (i) => {
         try {
-          // Channel menus
+          // Channel select
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
 
@@ -708,7 +679,7 @@ module.exports = {
             return refresh();
           }
 
-          // Role menus
+          // Role select
           if (i.isRoleSelectMenu()) {
             if (i.customId === CID.staff) draft.staffRoleIds = uniqIds(i.values, 25);
             if (i.customId === CID.players) draft.playerRoleIds = uniqIds(i.values, 25);
@@ -718,7 +689,7 @@ module.exports = {
             return refresh();
           }
 
-          // Time selects
+          // Time select
           if (i.isStringSelectMenu()) {
             if (i.customId === CID.checkTimes) {
               draft.automations.checkDispo.times = normalizeTimes(i.values, { max: 12 });
@@ -782,12 +753,11 @@ module.exports = {
             const minute = clampInt(mi.fields.getTextInputValue("minute"), { fallback: 10 });
             draft.automations.pseudo.minute = minute;
 
-            await mi
-              .reply({
-                content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
-                flags: MessageFlags.Ephemeral,
-              })
-              .catch(() => {});
+            await mi.reply({
+              content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
+              flags: MessageFlags.Ephemeral,
+            }).catch(() => {});
+
             return refresh();
           }
 
@@ -823,7 +793,7 @@ module.exports = {
             return refresh();
           }
 
-          // Jours
+          // Days (ID message)
           const day = DAYS.find((d) => i.customId === CID.msg(d));
           if (day) return askMessageId(i, day);
 
@@ -859,7 +829,9 @@ module.exports = {
               (draft.staffRoleIds || []).length > 0 &&
               (draft.playerRoleIds || []).length > 0;
 
-            if (!requiredOk) return i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral }).catch(() => {});
+            if (!requiredOk) {
+              return i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral }).catch(() => {});
+            }
 
             const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 
@@ -876,6 +848,7 @@ module.exports = {
               playerRoleIds: uniqIds(draft.playerRoleIds, 25),
               postRoleIds: uniqIds(draft.postRoleIds, 25),
 
+              // compat
               staffRoleId: draft.staffRoleIds[0] || null,
               posts: legacyPosts,
 
@@ -911,34 +884,37 @@ module.exports = {
           if (i.customId === CID.cancel) {
             stopAll();
             await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
-            try {
-              await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] });
-            } catch {}
-            try {
-              await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] });
-            } catch {}
-            try {
-              await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] });
-            } catch {}
+            try { await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] }); } catch {}
+            try { await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
+            try { await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
             return;
           }
         } catch {
           try {
-            if (!i.replied && !i.deferred) await i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral });
+            if (!i.replied && !i.deferred) {
+              await i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral });
+            }
           } catch {}
         }
       });
 
       collector.on("end", async () => {
-        try {
-          await interaction.editReply({ content: ICON.time, embeds: [], components: [] });
-        } catch {}
-        try {
-          await msg2.edit({ content: ICON.time, components: [] });
-        } catch {}
-        try {
-          await msg3.edit({ content: ICON.time, components: [] });
-        } catch {}
+        // ✅ disable components (évite clics -> interaction failed)
+        const disabled1 = disableComponents([rowDispos, rowStaffReports, rowPseudoScan, rowActions1]);
+        const disabled2 = disableComponents([rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel]);
+        const disabled3 = disableComponents([
+          rowCheckDispoChannel,
+          rowMsgButtons1,
+          rowMsgButtons2,
+          rowTimesSelect,
+          rowTimesButtons,
+          rowRappelTimesSelect,
+          rowRappelButtons,
+        ]);
+
+        try { await interaction.editReply({ content: ICON.time, embeds: [buildEmbed(guild, draft)], components: disabled1 }); } catch {}
+        try { await msg2.edit({ content: ICON.time, components: disabled2 }); } catch {}
+        try { await msg3.edit({ content: ICON.time, components: disabled3 }); } catch {}
       });
     } catch {
       try {
