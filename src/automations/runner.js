@@ -1,426 +1,695 @@
-// src/core/guildConfig.js
-// Config multi-serveur (servers.json) — CommonJS
-// ✅ Chemin FORCÉ : <projet>/src/config/servers.json (AUCUN override)
+// src/automations/runner.js
+// Automation runner — CommonJS — MULTI JOBS
 //
-// ✅ staffRoleIds (multi) + playerRoleIds (multi)
-// ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
-// ✅ dispoMessageIds (7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
-// ✅ checkDispoChannelId (opt) : salon où sont les 7 messages (sinon disposChannelId)
-// ✅ automations (SIMPLE aligné /setup):
-//    - enabled (global)
-//    - pseudo: { enabled, minute }
-//    - checkDispo: { enabled, times: ["HH:MM", ...] }
-//    - rappel: { enabled, times: ["HH:MM", ...] }
-// ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
-// ✅ compat legacy reminderDispo -> rappel (enabled + times uniquement)
-// ✅ utilitaires export/import/reset
+// ✅ PSEUDO
+// ✅ CHECK_DISPO (AUTO REPORT)
+// ✅ RAPPEL_DISPO (AUTO REMIND)  <-- aligné sur /setup (cfg.automations.rappel)
+//
+// ✅ LOGIQUE DEMANDÉE :
+// - Présents / Absents : TOUS ceux qui ont répondu (✅/❌) (hors bots)
+// - Sans réaction : UNIQUEMENT le rôle joueur (cfg.playerRoleIds)
+//
+// 🔒 Renforcement MAX des réactions / fetch (inchangé)
+// 🧠 Fix circular dependency: lazy-require dans tick() / fonctions
 
-const fs = require("fs");
-const path = require("path");
+const { EmbedBuilder } = require("discord.js");
 
-// SRC_DIR = dossier src (car ce fichier est dans src/core)
-const SRC_DIR = path.join(__dirname, "..");
+// --------------------
+// Constantes
+// --------------------
+const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 
-// ✅ Direction OBLIGATOIRE: src/config/servers.json
-const DATA_DIR = path.join(SRC_DIR, "config");
-const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
-
-const DEFAULT_DATA = { version: 1, guilds: {} };
-
-// -----------
-// Defaults
-// -----------
-const DEFAULT_GUILD = {
-  botLabel: "XIG BLAUGRANA FC Staff",
-
-  // salons
-  disposChannelId: null,
-  staffReportsChannelId: null,
-  pseudoScanChannelId: null,
-
-  // (optionnel) salon où se trouvent les 7 messages de dispo (sinon disposChannelId)
-  checkDispoChannelId: null,
-
-  // IDs de messages (7) = Lundi..Dimanche (index 0..6)
-  dispoMessageIds: [null, null, null, null, null, null, null],
-
-  // rôles
-  staffRoleIds: [],
-  playerRoleIds: [],
-
-  // postes (0..25) : utilisés par /pseudo (sans label)
-  postRoleIds: [],
-  posts: [], // compat legacy : [{ roleId, label }]
-
-  // ✅ automations (format SIMPLE)
-  automations: {
-    enabled: false, // switch global
-
-    pseudo: {
-      enabled: true,
-      minute: 10, // HH:10 par défaut
-    },
-
-    checkDispo: {
-      enabled: false,
-      times: [], // ["21:10", ...]
-    },
-
-    // ✅ rappel simple (aligné /setup)
-    rappel: {
-      enabled: false,
-      times: [], // ["HH:MM", ...]
-    },
-  },
-
-  setupBy: null,
-  setupAt: null,
-  updatedAt: null,
-};
-
-// -----------
-// IO helpers
-// -----------
-function ensureFile() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(CONFIG_PATH)) fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_DATA, null, 2), "utf8");
+// JS getDay(): 0=Dim .. 6=Sam  -> nous: 0=Lun .. 6=Dim
+function dayIndexFromDate(d = new Date()) {
+  const js = d.getDay();
+  return js === 0 ? 6 : js - 1;
 }
 
-function safeReadJson(filePath, fallback) {
+// --------------------
+// Helpers généraux
+// --------------------
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function cleanText(s, max = 64) {
+  return String(s || "")
+    .replace(/[`|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+function uniq(arr) {
+  return Array.from(new Set((arr || []).map(String))).filter(Boolean);
+}
+
+function mentionList(ids, { empty = "—", max = 40 } = {}) {
+  const u = uniq(ids);
+  if (!u.length) return empty;
+
+  const sliced = u.slice(0, max).map((id) => `<@${id}>`);
+  const more = u.length > max ? `\n… +${u.length - max}` : "";
+  return sliced.join(" ") + more;
+}
+
+// --------------------
+// 🔒 Message / Reactions hardening
+// --------------------
+async function safeFetchMessage(channel, messageId) {
+  if (!channel || !messageId) return null;
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const data = JSON.parse(raw);
-    return data && typeof data === "object" ? data : fallback;
+    return await channel.messages.fetch(String(messageId));
   } catch {
-    return fallback;
+    return null;
   }
 }
 
-function readAll() {
-  ensureFile();
-  const data = safeReadJson(CONFIG_PATH, { ...DEFAULT_DATA });
-  if (!data || typeof data !== "object") return { ...DEFAULT_DATA };
-  if (!data.guilds || typeof data.guilds !== "object") data.guilds = {};
-  if (!data.version) data.version = 1;
-  return data;
-}
+async function ensureFreshMessage(msg) {
+  if (!msg) return null;
 
-function writeAll(data) {
-  ensureFile();
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), "utf8");
-}
-
-function uniqIds(arr, { max = null } = {}) {
-  const out = [];
-  const seen = new Set();
-  for (const v of Array.isArray(arr) ? arr : []) {
-    const id = String(v || "").trim();
-    if (!id) continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push(id);
-    if (typeof max === "number" && out.length >= max) break;
+  try {
+    if (msg.partial) {
+      const m = await msg.fetch().catch(() => null);
+      return m || msg;
+    }
+    const m = await msg.fetch({ force: true }).catch(() => null);
+    return m || msg;
+  } catch {
+    try {
+      const m = await msg.fetch().catch(() => null);
+      return m || msg;
+    } catch {
+      return msg;
+    }
   }
-  return out;
 }
 
-// --------------------
-// ✅ Dispo message IDs (Lun..Dim) : tableau FIXE de 7
-// --------------------
-function isSnowflake(id) {
-  const s = String(id || "").trim();
-  return /^[0-9]{15,25}$/.test(s);
-}
+function findReactionInCache(message, emojiName) {
+  if (!message?.reactions?.cache) return null;
 
-function normalizeDispoMessageIds(input) {
-  const src = Array.isArray(input) ? input : [];
-  const out = new Array(7).fill(null);
-  for (let i = 0; i < 7; i++) {
-    const v = src[i];
-    const s = v === null || v === undefined ? "" : String(v).trim();
-    out[i] = isSnowflake(s) ? s : null;
-  }
-  return out;
-}
-
-// --------------------
-// ✅ Automations normalisation (SIMPLE)
-// --------------------
-function toBool(v, fallback = false) {
-  if (v === true) return true;
-  if (v === false) return false;
-  return fallback;
-}
-
-function clampInt(n, { min = 0, max = 59, fallback = 0 } = {}) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return fallback;
-  const i = Math.trunc(x);
-  if (i < min) return min;
-  if (i > max) return max;
-  return i;
-}
-
-// "HH:MM" (24h) -> "HH:MM" ou null
-function normalizeTimeStr(v) {
-  const s = String(v || "").trim();
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
-  if (hh < 0 || hh > 23) return null;
-  if (mm < 0 || mm > 59) return null;
-
-  return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
-}
-
-function normalizeTimes(arr, { max = 12 } = {}) {
-  const src = Array.isArray(arr) ? arr : [];
-  const out = [];
-  const seen = new Set();
-
-  for (const v of src) {
-    const t = normalizeTimeStr(v);
-    if (!t) continue;
-    if (seen.has(t)) continue;
-    seen.add(t);
-    out.push(t);
-    if (out.length >= max) break;
-  }
-
-  out.sort((a, b) => a.localeCompare(b));
-  return out;
-}
-
-/**
- * ✅ compat:
- * - supporte `rappel` (nouveau)
- * - supporte `reminderDispo` (ancien) => converti en `rappel` (enabled + times uniquement)
- */
-function normalizeAutomations(a) {
-  const src = a && typeof a === "object" ? a : {};
-
-  const globalEnabled = toBool(src.enabled, DEFAULT_GUILD.automations.enabled);
-
-  const pseudoSrc = src.pseudo && typeof src.pseudo === "object" ? src.pseudo : {};
-  const checkSrc = src.checkDispo && typeof src.checkDispo === "object" ? src.checkDispo : {};
-
-  // ✅ nouveau
-  const rappelSrc = src.rappel && typeof src.rappel === "object" ? src.rappel : {};
-
-  // ✅ legacy (on ignore mode/channelId)
-  const legacyRemindSrc =
-    src.reminderDispo && typeof src.reminderDispo === "object" ? src.reminderDispo : {};
-
-  const pseudoMinute = clampInt(pseudoSrc.minute, {
-    min: 0,
-    max: 59,
-    fallback: DEFAULT_GUILD.automations.pseudo.minute,
-  });
-
-  // priorité: rappel > reminderDispo
-  const rappelEnabled =
-    Object.prototype.hasOwnProperty.call(rappelSrc, "enabled")
-      ? toBool(rappelSrc.enabled, DEFAULT_GUILD.automations.rappel.enabled)
-      : toBool(legacyRemindSrc.enabled, DEFAULT_GUILD.automations.rappel.enabled);
-
-  const rappelTimes =
-    Array.isArray(rappelSrc.times)
-      ? normalizeTimes(rappelSrc.times, { max: 12 })
-      : normalizeTimes(legacyRemindSrc.times, { max: 12 });
-
-  return {
-    enabled: globalEnabled,
-
-    pseudo: {
-      enabled: toBool(pseudoSrc.enabled, DEFAULT_GUILD.automations.pseudo.enabled),
-      minute: pseudoMinute,
-    },
-
-    checkDispo: {
-      enabled: toBool(checkSrc.enabled, DEFAULT_GUILD.automations.checkDispo.enabled),
-      times: normalizeTimes(checkSrc.times, { max: 12 }),
-    },
-
-    rappel: {
-      enabled: rappelEnabled,
-      times: rappelTimes,
-    },
-  };
-}
-
-// --------------------
-// legacy posts -> ids
-// --------------------
-function extractPostRoleIdsFromLegacyPosts(posts) {
-  if (!Array.isArray(posts)) return [];
-  return uniqIds(
-    posts
-      .filter((p) => p && typeof p === "object" && p.roleId)
-      .map((p) => p.roleId),
-    { max: 25 }
+  return (
+    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
+    message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName)
   );
 }
 
-// ids -> legacy posts (label neutre)
-function buildLegacyPostsFromIds(postRoleIds) {
-  const ids = uniqIds(postRoleIds, { max: 25 });
-  return ids.map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
+async function tryFetchReactions(message) {
+  try {
+    if (message?.reactions?.fetch) {
+      await message.reactions.fetch().catch(() => null);
+    }
+  } catch {}
 }
 
-// --------------------
-// Normalize guild
-// --------------------
-function normalizeGuild(cfg) {
-  const c = cfg && typeof cfg === "object" ? cfg : {};
-  const out = { ...DEFAULT_GUILD, ...c };
+async function ensureFreshReaction(reaction) {
+  if (!reaction) return null;
 
-  // ✅ automations (simple)
-  out.automations = normalizeAutomations(c.automations);
+  try {
+    if (reaction.partial && typeof reaction.fetch === "function") {
+      const r = await reaction.fetch().catch(() => null);
+      return r || reaction;
+    }
+    return reaction;
+  } catch {
+    return reaction;
+  }
+}
 
-  // ✅ roles multi
-  out.staffRoleIds = uniqIds(out.staffRoleIds);
-  out.playerRoleIds = uniqIds(out.playerRoleIds);
+// pagination safe (même si beaucoup de réactions)
+async function fetchAllReactionUsers(reaction, { maxPages = 15 } = {}) {
+  const out = new Set();
+  if (!reaction?.users?.fetch) return out;
 
-  // ✅ compat legacy roles (staffRoleId / playerRoleId)
-  if (!out.staffRoleIds.length && c.staffRoleId) out.staffRoleIds = uniqIds([c.staffRoleId]);
-  if (!out.playerRoleIds.length && c.playerRoleId) out.playerRoleIds = uniqIds([c.playerRoleId]);
+  let after = undefined;
+  let pages = 0;
 
-  // ✅ postes
-  const fromPostRoleIds = Array.isArray(c.postRoleIds) ? c.postRoleIds : null;
-  const fromLegacyPosts = extractPostRoleIdsFromLegacyPosts(c.posts);
-  out.postRoleIds = uniqIds(fromPostRoleIds ?? fromLegacyPosts, { max: 25 });
-  out.posts = buildLegacyPostsFromIds(out.postRoleIds);
+  while (pages < maxPages) {
+    pages++;
+    const users = await reaction.users.fetch({ limit: 100, after }).catch(() => null);
+    if (!users || users.size === 0) break;
 
-  // ✅ dispo ids (7)
-  out.dispoMessageIds = normalizeDispoMessageIds(c.dispoMessageIds);
+    for (const u of users.values()) {
+      if (!u?.id) continue;
+      if (u.bot) continue;
+      out.add(u.id);
+    }
 
-  // ✅ salons: toujours string ou null (évite bugs menus defaults)
-  out.disposChannelId = c.disposChannelId ? String(c.disposChannelId) : null;
-  out.staffReportsChannelId = c.staffReportsChannelId ? String(c.staffReportsChannelId) : null;
-  out.pseudoScanChannelId = c.pseudoScanChannelId ? String(c.pseudoScanChannelId) : null;
-  out.checkDispoChannelId = c.checkDispoChannelId ? String(c.checkDispoChannelId) : null;
+    after = users.last()?.id;
+    if (!after || users.size < 100) break;
+  }
 
   return out;
 }
 
-// --------------------
-// CRUD
-// --------------------
-function getGuildConfig(guildId) {
-  if (!guildId) return null;
-  const data = readAll();
-  const cfg = data.guilds[String(guildId)];
-  return cfg ? normalizeGuild(cfg) : null;
-}
+async function collectReactionUserIdsStrong(message, emojiName) {
+  const out = new Set();
 
-function upsertGuildConfig(guildId, patch) {
-  if (!guildId) return null;
+  if (!message) return { ok: false, reason: "no_message", users: out };
 
-  const data = readAll();
-  const gid = String(guildId);
+  const freshMsg = await ensureFreshMessage(message);
 
-  const current = normalizeGuild(data.guilds[gid] || {});
-  const p = patch && typeof patch === "object" ? patch : {};
+  const cacheSize1 = freshMsg?.reactions?.cache?.size ?? 0;
+  if (cacheSize1 === 0) await tryFetchReactions(freshMsg);
 
-  const staffRoleIds = Array.isArray(p.staffRoleIds) ? p.staffRoleIds : current.staffRoleIds;
-  const playerRoleIds = Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds;
+  let reaction = findReactionInCache(freshMsg, emojiName);
 
-  let postRoleIds = current.postRoleIds;
-  if (Array.isArray(p.postRoleIds)) postRoleIds = p.postRoleIds;
-  else if (Array.isArray(p.posts)) postRoleIds = extractPostRoleIdsFromLegacyPosts(p.posts);
-
-  const dispoMessageIds = Array.isArray(p.dispoMessageIds) ? p.dispoMessageIds : current.dispoMessageIds;
-
-  const checkDispoChannelId = Object.prototype.hasOwnProperty.call(p, "checkDispoChannelId")
-    ? (p.checkDispoChannelId ? String(p.checkDispoChannelId) : null)
-    : current.checkDispoChannelId;
-
-  // ✅ merge automations (simple) + compat reminderDispo
-  const mergedAutomations = normalizeAutomations({
-    ...current.automations,
-    ...(p.automations || {}),
-    pseudo: { ...(current.automations?.pseudo || {}), ...(p.automations?.pseudo || {}) },
-    checkDispo: { ...(current.automations?.checkDispo || {}), ...(p.automations?.checkDispo || {}) },
-    rappel: { ...(current.automations?.rappel || {}), ...(p.automations?.rappel || {}) },
-    reminderDispo: { ...(p.automations?.reminderDispo || {}) },
-  });
-
-  const merged = normalizeGuild({
-    ...current,
-    ...p,
-    staffRoleIds,
-    playerRoleIds,
-    postRoleIds,
-    dispoMessageIds,
-    checkDispoChannelId,
-    automations: mergedAutomations,
-  });
-
-  merged.updatedAt = new Date().toISOString();
-
-  data.guilds[gid] = merged;
-  writeAll(data);
-  return merged;
-}
-
-// --------------------
-// Export / Import / Reset
-// --------------------
-function exportAllConfig() {
-  const data = readAll();
-  const out = { ...data, guilds: {} };
-
-  for (const [gid, cfg] of Object.entries(data.guilds || {})) {
-    out.guilds[gid] = normalizeGuild(cfg);
+  if (!reaction) {
+    await tryFetchReactions(freshMsg);
+    reaction = findReactionInCache(freshMsg, emojiName);
   }
+
+  if (!reaction) {
+    const cacheSize2 = freshMsg?.reactions?.cache?.size ?? 0;
+    if (cacheSize2 === 0) return { ok: false, reason: "reactions_unavailable", users: out };
+    return { ok: true, reason: "emoji_not_found", users: out };
+  }
+
+  reaction = await ensureFreshReaction(reaction);
+
+  try {
+    const users = await fetchAllReactionUsers(reaction);
+    for (const id of users) out.add(id);
+  } catch {
+    return { ok: false, reason: "users_fetch_failed", users: out };
+  }
+
+  return { ok: true, reason: "ok", users: out };
+}
+
+// --------------------
+// PSEUDO — scan salon
+// --------------------
+function parsePlatformIdFromContent(content) {
+  const txt = String(content || "");
+  const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i;
+  const m = txt.match(re);
+  if (!m) return null;
+
+  const platform = String(m[1]).toLowerCase();
+  const value = cleanText(m[2], 40);
+  if (!value) return null;
+
+  return { platform, value };
+}
+
+async function scanPseudoChannel(channel, { limit = 300 } = {}) {
+  const out = new Map();
+
+  let lastId = undefined;
+  let fetched = 0;
+
+  while (fetched < limit) {
+    const batchSize = Math.min(100, limit - fetched);
+    const messages = await channel.messages.fetch({ limit: batchSize, before: lastId }).catch(() => null);
+    if (!messages || messages.size === 0) break;
+
+    for (const msg of messages.values()) {
+      if (!msg?.author?.id) continue;
+      if (msg.author.bot) continue;
+
+      const parsed = parsePlatformIdFromContent(msg.content);
+      if (!parsed) continue;
+
+      const userId = msg.author.id;
+      const cur = out.get(userId) || {};
+
+      // du + récent au + ancien -> ne remplace pas si déjà trouvé
+      if (!cur[parsed.platform]) {
+        cur[parsed.platform] = parsed.value;
+        out.set(userId, cur);
+      }
+    }
+
+    fetched += messages.size;
+    lastId = messages.last()?.id;
+    if (!lastId) break;
+  }
+
   return out;
 }
 
-function importAllConfig(payload, { replace = false } = {}) {
-  const data = readAll();
+async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850 } = {}) {
+  if (!guild) return { storedCount: 0, ok: 0, fail: 0, skipped: 0, notManageable: 0, scanned: false };
 
-  const incoming = payload && typeof payload === "object" ? payload : {};
-  const incomingGuilds = incoming.guilds && typeof incoming.guilds === "object" ? incoming.guilds : {};
+  // 🔧 lazy require (anti circular)
+  const { importAllPseudos } = require("../core/pseudoStore");
+  const { buildMemberLine } = require("../core/memberDisplay");
 
-  if (replace) data.guilds = {};
+  // 1) Scan (si salon configuré + accessible)
+  let storedCount = 0;
+  let scanned = false;
 
-  for (const [gid, cfg] of Object.entries(incomingGuilds)) {
-    data.guilds[String(gid)] = normalizeGuild(cfg);
+  const pseudoScanChannelId = cfg?.pseudoScanChannelId;
+  if (pseudoScanChannelId) {
+    const ch = await guild.channels.fetch(pseudoScanChannelId).catch(() => null);
+    if (ch && typeof ch.isTextBased === "function" && ch.isTextBased()) {
+      const scannedMap = await scanPseudoChannel(ch, { limit: scanLimit }).catch(() => new Map());
+
+      const usersPayload = {};
+      for (const [userId, patch] of scannedMap.entries()) {
+        if (!patch || typeof patch !== "object") continue;
+
+        const u = {};
+        if (patch.psn) u.psn = patch.psn;
+        if (patch.xbox) u.xbox = patch.xbox;
+        if (patch.ea) u.ea = patch.ea;
+
+        if (Object.keys(u).length) {
+          usersPayload[String(userId)] = u;
+          storedCount++;
+        }
+      }
+
+      if (storedCount > 0) {
+        importAllPseudos(
+          { version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } },
+          { replace: false }
+        );
+      }
+
+      scanned = true;
+    }
   }
 
-  if (!data.version) data.version = 1;
-  writeAll(data);
-  return exportAllConfig();
+  // 2) Sync nicknames
+  await guild.members.fetch().catch(() => null);
+  const members = guild.members.cache.filter((m) => m && !m.user.bot);
+
+  let ok = 0;
+  let fail = 0;
+  let skipped = 0;
+  let notManageable = 0;
+
+  for (const m of members.values()) {
+    if (!m.manageable) {
+      notManageable++;
+      continue;
+    }
+
+    const line = buildMemberLine(m, cfg);
+    if (!line || line.length < 2) {
+      skipped++;
+      continue;
+    }
+
+    if ((m.nickname || "") === line) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      await m.setNickname(line, "PSEUDO_AUTO_SYNC");
+      ok++;
+    } catch {
+      fail++;
+    }
+
+    await sleep(throttleMs);
+  }
+
+  return { storedCount, ok, fail, skipped, notManageable, scanned };
 }
 
-function resetGuildConfig(guildId) {
-  if (!guildId) return null;
-  const data = readAll();
-  const gid = String(guildId);
-  delete data.guilds[gid];
-  writeAll(data);
-  return true;
+// --------------------
+// CHECK_DISPO — job auto
+// --------------------
+function hasAnyRoleId(member, ids) {
+  const arr = Array.isArray(ids) ? ids : [];
+  return arr.some((id) => id && member.roles.cache.has(String(id)));
+}
+
+function getDispoMessageIds(cfg) {
+  if (Array.isArray(cfg?.dispoMessageIds)) {
+    const a = cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
+    while (a.length < 7) a.push(null);
+    return a;
+  }
+
+  // compat legacy
+  const legacy = [];
+  for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
+  while (legacy.length < 7) legacy.push(null);
+  return legacy.slice(0, 7);
+}
+
+function resolveDispoChannelId(cfg) {
+  const v =
+    cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null"
+      ? cfg.checkDispoChannelId
+      : cfg?.disposChannelId;
+  return v ? String(v) : null;
+}
+
+async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
+  if (!guild) return { ok: false, reason: "no_guild" };
+
+  const reportChannelId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
+  if (!reportChannelId) return { ok: false, reason: "no_staff_reports_channel" };
+
+  const disposChannelId = resolveDispoChannelId(cfg);
+  if (!disposChannelId) return { ok: false, reason: "no_dispo_channel" };
+
+  const messageIds = getDispoMessageIds(cfg);
+  const idx = dayIndexFromDate(new Date());
+  const dayLabel = DAYS[idx];
+  const mid = messageIds[idx];
+
+  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
+  if (!reportChannel || !reportChannel.isTextBased?.()) return { ok: false, reason: "invalid_report_channel" };
+
+  const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
+  if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
+
+  await guild.members.fetch().catch(() => null);
+
+  // ✅ Rôle joueur uniquement pour "Sans réaction"
+  const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
+  if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
+
+  const players = guild.members.cache
+    .filter((m) => m && !m.user.bot)
+    .filter((m) => hasAnyRoleId(m, playerRoleIds));
+
+  const playerIds = new Set(players.map((m) => m.user.id));
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📊 Check Dispo — ${dayLabel}`)
+    .setColor(0x5865f2)
+    .setDescription(
+      `Salon : <#${disposChannelId}>\n` +
+      `Présents/Absents : **tous** les répondants (✅/❌)\n` +
+      `Sans réaction : rôles Joueurs (👟)\n` +
+      `Joueurs détectés : **${playerIds.size}**`
+    )
+    .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+  if (!mid) {
+    embed.addFields({ name: "⚠️ Message", value: "ID du message non configuré pour ce jour (Lun..Dim).", inline: false });
+    await reportChannel.send({ embeds: [embed] }).catch(() => null);
+    if (throttleMs) await sleep(throttleMs);
+    return { ok: true, dayIndex: idx, dayLabel, mid: null };
+  }
+
+  const msg = await safeFetchMessage(dispoChannel, mid);
+  if (!msg) {
+    embed.addFields({ name: "⚠️ Message", value: `Message introuvable (ID: \`${mid}\`).`, inline: false });
+    await reportChannel.send({ embeds: [embed] }).catch(() => null);
+    if (throttleMs) await sleep(throttleMs);
+    return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true };
+  }
+
+  const okRes = await collectReactionUserIdsStrong(msg, "✅");
+  const noRes = await collectReactionUserIdsStrong(msg, "❌");
+
+  const bothUnavailable =
+    !okRes.ok && okRes.reason === "reactions_unavailable" &&
+    !noRes.ok && noRes.reason === "reactions_unavailable";
+
+  if (bothUnavailable) {
+    embed.addFields({
+      name: "🚫 Réactions indisponibles",
+      value:
+        "Impossible de lire les réactions sur ce message.\n" +
+        "Vérifie: **ViewChannel + ReadMessageHistory** sur le salon dispo, et l’intent **GuildMessageReactions**.",
+      inline: false,
+    });
+    await reportChannel.send({ embeds: [embed] }).catch(() => null);
+    if (throttleMs) await sleep(throttleMs);
+    return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true };
+  }
+
+  // ✅ Présents/Absents = TOUT LE MONDE (hors bots) qui a réagi
+  const okAll = Array.from(okRes.users);
+  const noAll = Array.from(noRes.users);
+
+  // ✅ Sans réaction = UNIQUEMENT joueurs
+  const reacted = new Set([...okAll, ...noAll]);
+  const missingPlayers = Array.from(playerIds).filter((id) => !reacted.has(id));
+
+  const warn =
+    (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
+      ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
+      : "";
+
+  embed.setDescription(
+    `Salon : <#${disposChannelId}>\n` +
+    `Présents/Absents : **tous** les répondants (✅/❌)\n` +
+    `Sans réaction : rôles Joueurs (👟)\n` +
+    `Joueurs détectés : **${playerIds.size}**` +
+    warn
+  );
+
+  embed.addFields(
+    { name: `🟩 ✅ Présents (${okAll.length})`, value: mentionList(okAll), inline: false },
+    { name: `🟥 ❌ Absents (${noAll.length})`, value: mentionList(noAll), inline: false },
+    { name: `🟦 ⏳ Sans réaction — Joueurs (${missingPlayers.length})`, value: mentionList(missingPlayers), inline: false }
+  );
+
+  await reportChannel.send({ embeds: [embed] }).catch(() => null);
+  if (throttleMs) await sleep(throttleMs);
+
+  return { ok: true, dayIndex: idx, dayLabel, mid };
+}
+
+// --------------------
+// RAPPEL_DISPO — job auto (aligné /setup)
+// -> envoi dans staffReportsChannelId
+// -> rappel UNIQUEMENT pour joueurs sans réaction
+// --------------------
+function buildMessageLink(guildId, channelId, messageId) {
+  if (!guildId || !channelId || !messageId) return null;
+  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+}
+
+async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
+  if (!guild) return { ok: false, reason: "no_guild" };
+
+  const reportChannelId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
+  if (!reportChannelId) return { ok: false, reason: "no_staff_reports_channel" };
+
+  const disposChannelId = resolveDispoChannelId(cfg);
+  if (!disposChannelId) return { ok: false, reason: "no_dispo_channel" };
+
+  const messageIds = getDispoMessageIds(cfg);
+  const idx = dayIndexFromDate(new Date());
+  const dayLabel = DAYS[idx];
+  const mid = messageIds[idx];
+
+  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
+  if (!reportChannel || !reportChannel.isTextBased?.()) return { ok: false, reason: "invalid_report_channel" };
+
+  const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
+  if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
+
+  await guild.members.fetch().catch(() => null);
+
+  // ✅ Rôle joueur uniquement pour "Sans réaction" / rappel
+  const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
+  if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
+
+  const players = guild.members.cache
+    .filter((m) => m && !m.user.bot)
+    .filter((m) => hasAnyRoleId(m, playerRoleIds));
+
+  const playerIds = new Set(players.map((m) => m.user.id));
+
+  if (!mid) {
+    return { ok: true, dayIndex: idx, dayLabel, mid: null, missing: [], nothingToDo: true };
+  }
+
+  const msg = await safeFetchMessage(dispoChannel, mid);
+  if (!msg) {
+    const emb = new EmbedBuilder()
+      .setTitle(`⏰ Rappel Dispo — ${dayLabel}`)
+      .setColor(0x5865f2)
+      .setDescription(`Message introuvable (ID: \`${mid}\`) dans <#${disposChannelId}>.`)
+      .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+    await reportChannel.send({ embeds: [emb] }).catch(() => null);
+    if (throttleMs) await sleep(throttleMs);
+    return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [] };
+  }
+
+  const okRes = await collectReactionUserIdsStrong(msg, "✅");
+  const noRes = await collectReactionUserIdsStrong(msg, "❌");
+
+  const bothUnavailable =
+    !okRes.ok && okRes.reason === "reactions_unavailable" &&
+    !noRes.ok && noRes.reason === "reactions_unavailable";
+
+  if (bothUnavailable) {
+    const emb = new EmbedBuilder()
+      .setTitle(`🚫 Rappel Dispo — ${dayLabel}`)
+      .setColor(0x5865f2)
+      .setDescription(
+        "Impossible de lire les réactions (permissions/intents/cache).\n" +
+          "Vérifie: **ViewChannel + ReadMessageHistory** et l’intent **GuildMessageReactions**."
+      )
+      .addFields(
+        { name: "Message", value: `\`${mid}\``, inline: true },
+        { name: "Salon", value: `<#${disposChannelId}>`, inline: true }
+      )
+      .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+    await reportChannel.send({ embeds: [emb] }).catch(() => null);
+    if (throttleMs) await sleep(throttleMs);
+    return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true, missing: [] };
+  }
+
+  const okAll = Array.from(okRes.users);
+  const noAll = Array.from(noRes.users);
+  const reacted = new Set([...okAll, ...noAll]);
+
+  // ✅ Rappel UNIQUEMENT pour joueurs sans réaction
+  const missingPlayers = Array.from(playerIds).filter((id) => !reacted.has(id));
+
+  if (!missingPlayers.length) {
+    return { ok: true, dayIndex: idx, dayLabel, mid, missing: [], nothingToDo: true };
+  }
+
+  const link = buildMessageLink(guild.id, disposChannelId, mid);
+
+  const content =
+    `⏰ **Rappel Dispo — ${dayLabel}**\n` +
+    `Merci de répondre au message (✅ ou ❌) dans <#${disposChannelId}>.` +
+    (link ? `\n➡️ ${link}` : "") +
+    `\n\n${mentionList(missingPlayers, { max: 60, empty: "—" })}`;
+
+  await reportChannel
+    .send({
+      content,
+      allowedMentions: { users: missingPlayers, roles: [], repliedUser: false },
+    })
+    .catch(() => null);
+
+  if (throttleMs) await sleep(throttleMs);
+
+  const emb = new EmbedBuilder()
+    .setTitle(`⏰ Rappel Dispo — ${dayLabel}`)
+    .setColor(0x5865f2)
+    .setDescription(
+      `Salon Dispo : <#${disposChannelId}>\n` +
+        `Message : \`${mid}\`\n` +
+        `Cibles (joueurs sans réaction) : **${missingPlayers.length}**`
+    )
+    .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+
+  await reportChannel.send({ embeds: [emb] }).catch(() => null);
+
+  return { ok: true, dayIndex: idx, dayLabel, mid, missing: missingPlayers, sent: true };
+}
+
+// --------------------
+// Scheduler (HH:MM) — anti double-run
+// --------------------
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function minuteKey(d = new Date()) {
+  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+}
+
+function parseHHMM(s) {
+  const m = String(s || "").trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return null;
+  return { hh: Number(m[1]), mm: Number(m[2]) };
+}
+
+// --------------------
+// Runner
+// --------------------
+function startAutomationRunner(client, opts = {}) {
+  const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
+  const throttleMsPseudo = typeof opts.throttleMsPseudo === "number" ? opts.throttleMsPseudo : 850;
+  const throttleMsCheck = typeof opts.throttleMsCheck === "number" ? opts.throttleMsCheck : 0;
+  const throttleMsRappel = typeof opts.throttleMsRappel === "number" ? opts.throttleMsRappel : 0;
+  const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000;
+
+  const lastRun = new Map();
+
+  async function tick() {
+    try {
+      if (!client?.guilds?.cache) return;
+
+      const now = new Date();
+      const hh = now.getHours();
+      const mm = now.getMinutes();
+      const mKey = minuteKey(now);
+
+      // 🔧 lazy require (anti circular)
+      const { getGuildConfig } = require("../core/guildConfig");
+
+      for (const guild of client.guilds.cache.values()) {
+        const cfg = getGuildConfig(guild.id);
+        if (!cfg) continue;
+
+        // ✅ switch global
+        if (cfg?.automations?.enabled !== true) continue;
+
+        // ---------- PSEUDO ----------
+        if (cfg?.automations?.pseudo?.enabled === true) {
+          const pseudoMinute = Number.isInteger(cfg?.automations?.pseudo?.minute)
+            ? cfg.automations.pseudo.minute
+            : 10;
+
+          if (mm === pseudoMinute) {
+            const key = `${guild.id}:pseudo`;
+            if (lastRun.get(key) !== mKey) {
+              lastRun.set(key, mKey);
+              await runPseudoForGuild(guild, cfg, { scanLimit, throttleMs: throttleMsPseudo });
+            }
+          }
+        }
+
+        // ---------- CHECK_DISPO ----------
+        if (cfg?.automations?.checkDispo?.enabled === true) {
+          const times = Array.isArray(cfg?.automations?.checkDispo?.times) ? cfg.automations.checkDispo.times : [];
+          for (const t of times) {
+            const parsed = parseHHMM(t);
+            if (!parsed) continue;
+
+            if (hh === parsed.hh && mm === parsed.mm) {
+              const key = `${guild.id}:check_dispo:${t}`;
+              if (lastRun.get(key) !== mKey) {
+                lastRun.set(key, mKey);
+                await runCheckDispoForGuild(guild, cfg, { throttleMs: throttleMsCheck });
+              }
+            }
+          }
+        }
+
+        // ---------- RAPPEL_DISPO (aligné setup: automations.rappel) ----------
+        if (cfg?.automations?.rappel?.enabled === true) {
+          const times = Array.isArray(cfg?.automations?.rappel?.times) ? cfg.automations.rappel.times : [];
+          for (const t of times) {
+            const parsed = parseHHMM(t);
+            if (!parsed) continue;
+
+            if (hh === parsed.hh && mm === parsed.mm) {
+              const key = `${guild.id}:rappel_dispo:${t}`;
+              if (lastRun.get(key) !== mKey) {
+                lastRun.set(key, mKey);
+                await runRappelDispoForGuild(guild, cfg, { throttleMs: throttleMsRappel });
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // silencieux volontairement
+    }
+  }
+
+  const timer = setInterval(tick, loopMs);
+  timer.unref?.();
+
+  if (opts.runOnStart === true) tick();
+
+  return () => clearInterval(timer);
 }
 
 module.exports = {
-  // chemins
-  SRC_DIR,
-  DATA_DIR,
-  CONFIG_PATH,
-
-  // defaults
-  DEFAULT_DATA,
-  DEFAULT_GUILD,
-
-  // CRUD
-  getGuildConfig,
-  upsertGuildConfig,
-  exportAllConfig,
-
-  // utilitaires
-  importAllConfig,
-  resetGuildConfig,
+  startAutomationRunner,
 };
