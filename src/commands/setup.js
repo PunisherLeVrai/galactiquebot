@@ -155,7 +155,6 @@ const fmtTimes = (arr) => {
   const a = Array.isArray(arr) ? arr : [];
   return a.length ? a.map((t) => `\`${t}\``).join(" ") : "—";
 };
-
 function buildEmbed(guild, draft) {
   const requiredOk =
     !!draft.disposChannelId &&
@@ -240,6 +239,16 @@ function disableComponents(rows) {
     return r;
   });
 }
+
+// ✅ mini-queue pour éviter les refresh concurrents (source fréquente de "interaction failed")
+function createRefreshQueue(fn) {
+  let chain = Promise.resolve();
+  return () => {
+    chain = chain.then(fn).catch(() => {});
+    return chain;
+  };
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup")
@@ -333,7 +342,6 @@ module.exports = {
         cancel: `setup:cancel:${scope}`,
         modalPseudoMinute: `setup:modal:pseudoMinute:${scope}`,
       };
-
       // ---------- UI (message 1) ----------
       const rowDispos = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
@@ -461,8 +469,14 @@ module.exports = {
       );
 
       const rowTimesButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.checkAdd).setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.checkClear).setLabel(`${ICON.broom} Clear CheckDispo`).setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder()
+          .setCustomId(CID.checkAdd)
+          .setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.checkClear)
+          .setLabel(`${ICON.broom} Clear CheckDispo`)
+          .setStyle(ButtonStyle.Secondary)
       );
 
       const rowRappelTimesSelect = new ActionRowBuilder().addComponents(
@@ -481,8 +495,14 @@ module.exports = {
       );
 
       const rowRappelButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.rappelAdd).setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.rappelClear).setLabel(`${ICON.broom} Clear Rappel`).setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder()
+          .setCustomId(CID.rappelAdd)
+          .setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.rappelClear)
+          .setLabel(`${ICON.broom} Clear Rappel`)
+          .setStyle(ButtonStyle.Secondary)
       );
 
       // defaults UI
@@ -502,6 +522,9 @@ module.exports = {
         components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
         flags: MessageFlags.Ephemeral,
       });
+
+      // ✅ récupère le "message 1" pour accrocher un collector DIRECTEMENT sur le message
+      const msg1 = await interaction.fetchReply().catch(() => null);
 
       const msg2 = await interaction.followUp({
         content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
@@ -526,7 +549,7 @@ module.exports = {
         flags: MessageFlags.Ephemeral,
       });
 
-      const refresh = async () => {
+      const doRefresh = async () => {
         // styles
         rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
         rowAutoButtons.components[1].setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
@@ -552,55 +575,76 @@ module.exports = {
           );
         } catch {}
 
-        await interaction.editReply({
-          embeds: [buildEmbed(guild, draft)],
-          components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
-        }).catch(() => {});
+        await interaction
+          .editReply({
+            embeds: [buildEmbed(guild, draft)],
+            components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
+          })
+          .catch(() => {});
 
-        await msg2.edit({
-          content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
-          components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
-        }).catch(() => {});
+        await msg2
+          .edit({
+            content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
+            components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
+          })
+          .catch(() => {});
 
-        await msg3.edit({
-          content:
-            "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
-            "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
-            "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
-          components: [
-            rowCheckDispoChannel,
-            rowMsgButtons1,
-            rowMsgButtons2,
-            rowTimesSelect,
-            rowTimesButtons,
-            rowRappelTimesSelect,
-            rowRappelButtons,
-          ],
-        }).catch(() => {});
+        await msg3
+          .edit({
+            content:
+              "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+              "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
+              "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
+            components: [
+              rowCheckDispoChannel,
+              rowMsgButtons1,
+              rowMsgButtons2,
+              rowTimesSelect,
+              rowTimesButtons,
+              rowRappelTimesSelect,
+              rowRappelButtons,
+            ],
+          })
+          .catch(() => {});
       };
 
+      const refresh = createRefreshQueue(doRefresh);
       async function askMessageId(i, dayLabel) {
         const idx = DAY_INDEX[dayLabel];
         if (typeof idx !== "number") return;
 
-        await i.reply({
-          content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
-          flags: MessageFlags.Ephemeral,
-        }).catch(() => {});
+        await i
+          .reply({
+            content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
+
+        // ✅ toujours utiliser le channel "réel" (pas i.channel qui peut être null/instable)
+        const textChannel = interaction.channel;
+        if (!textChannel) {
+          return i.followUp({ content: "⚠️ Canal introuvable.", flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
 
         const filter = (m) => m.author.id === interaction.user.id;
-        const collected = await i.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
+        const collected = await textChannel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
         const m = collected?.first?.() || null;
 
         if (!m) {
-          return i.followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          return i
+            .followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", flags: MessageFlags.Ephemeral })
+            .catch(() => {});
         }
 
         const id = String(m.content || "").trim();
-        try { await m.delete().catch(() => {}); } catch {}
+        try {
+          await m.delete().catch(() => {});
+        } catch {}
 
         if (!isSnowflake(id)) {
-          return i.followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          return i
+            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", flags: MessageFlags.Ephemeral })
+            .catch(() => {});
         }
 
         const next = normalizeDispoMessageIds(draft.dispoMessageIds);
@@ -632,7 +676,6 @@ module.exports = {
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setPlaceholder("ex: 21:10");
-
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       };
@@ -645,26 +688,65 @@ module.exports = {
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setPlaceholder("ex: 20:45");
-
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       };
 
-      const awaitModal = (filter) =>
-        interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
+      const awaitModal = (filter) => interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
 
-      const channel = interaction.channel;
-      if (!channel) return;
-            const collector = channel.createMessageComponentCollector({
-        time: 10 * 60 * 1000,
-        filter: (i) => i.user.id === interaction.user.id && inScope(i, scope),
-      });
-
-      const stopAll = () => {
-        try { collector.stop(); } catch {}
+      // ✅ Collectors attachés aux MESSAGES (et pas au channel) => beaucoup moins d'échecs d'interaction
+      const collectors = [];
+      const makeCollector = (msg) => {
+        if (!msg?.createMessageComponentCollector) return null;
+        const c = msg.createMessageComponentCollector({
+          time: 10 * 60 * 1000,
+          filter: (i) => i.user.id === interaction.user.id && inScope(i, scope),
+        });
+        collectors.push(c);
+        return c;
       };
 
-      collector.on("collect", async (i) => {
+      const c1 = makeCollector(msg1);
+      const c2 = makeCollector(msg2);
+      const c3 = makeCollector(msg3);
+
+      const stopAll = () => {
+        for (const c of collectors) {
+          try {
+            c.stop();
+          } catch {}
+        }
+      };
+
+      let ended = false;
+      const endAll = async () => {
+        if (ended) return;
+        ended = true;
+
+        const disabled1 = disableComponents([rowDispos, rowStaffReports, rowPseudoScan, rowActions1]);
+        const disabled2 = disableComponents([rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel]);
+        const disabled3 = disableComponents([
+          rowCheckDispoChannel,
+          rowMsgButtons1,
+          rowMsgButtons2,
+          rowTimesSelect,
+          rowTimesButtons,
+          rowRappelTimesSelect,
+          rowRappelButtons,
+        ]);
+
+        try {
+          await interaction.editReply({ content: ICON.time, embeds: [buildEmbed(guild, draft)], components: disabled1 });
+        } catch {}
+        try {
+          await msg2.edit({ content: ICON.time, components: disabled2 });
+        } catch {}
+        try {
+          await msg3.edit({ content: ICON.time, components: disabled3 });
+        } catch {}
+      };
+
+      const onCollect = async (i) => {
         try {
           // Channel select
           if (i.isChannelSelectMenu()) {
@@ -753,11 +835,12 @@ module.exports = {
             const minute = clampInt(mi.fields.getTextInputValue("minute"), { fallback: 10 });
             draft.automations.pseudo.minute = minute;
 
-            await mi.reply({
-              content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
-              flags: MessageFlags.Ephemeral,
-            }).catch(() => {});
-
+            await mi
+              .reply({
+                content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
+                flags: MessageFlags.Ephemeral,
+              })
+              .catch(() => {});
             return refresh();
           }
 
@@ -768,7 +851,9 @@ module.exports = {
 
             const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
             if (!t) {
-              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 21:10).", flags: MessageFlags.Ephemeral }).catch(() => {});
+              await mi
+                .reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 21:10).", flags: MessageFlags.Ephemeral })
+                .catch(() => {});
               return;
             }
 
@@ -784,7 +869,9 @@ module.exports = {
 
             const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
             if (!t) {
-              await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 20:45).", flags: MessageFlags.Ephemeral }).catch(() => {});
+              await mi
+                .reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 20:45).", flags: MessageFlags.Ephemeral })
+                .catch(() => {});
               return;
             }
 
@@ -884,9 +971,15 @@ module.exports = {
           if (i.customId === CID.cancel) {
             stopAll();
             await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
-            try { await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] }); } catch {}
-            try { await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
-            try { await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
+            try {
+              await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] });
+            } catch {}
+            try {
+              await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] });
+            } catch {}
+            try {
+              await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] });
+            } catch {}
             return;
           }
         } catch {
@@ -896,26 +989,13 @@ module.exports = {
             }
           } catch {}
         }
-      });
+      };
 
-      collector.on("end", async () => {
-        // ✅ disable components (évite clics -> interaction failed)
-        const disabled1 = disableComponents([rowDispos, rowStaffReports, rowPseudoScan, rowActions1]);
-        const disabled2 = disableComponents([rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel]);
-        const disabled3 = disableComponents([
-          rowCheckDispoChannel,
-          rowMsgButtons1,
-          rowMsgButtons2,
-          rowTimesSelect,
-          rowTimesButtons,
-          rowRappelTimesSelect,
-          rowRappelButtons,
-        ]);
-
-        try { await interaction.editReply({ content: ICON.time, embeds: [buildEmbed(guild, draft)], components: disabled1 }); } catch {}
-        try { await msg2.edit({ content: ICON.time, components: disabled2 }); } catch {}
-        try { await msg3.edit({ content: ICON.time, components: disabled3 }); } catch {}
-      });
+      // branche les collectors
+      for (const c of [c1, c2, c3].filter(Boolean)) {
+        c.on("collect", onCollect);
+        c.on("end", () => endAll().catch(() => {}));
+      }
     } catch {
       try {
         if (!interaction.replied && !interaction.deferred) {
