@@ -6,12 +6,13 @@
 // ✅ postRoleIds (multi 0..25) : utilisés par /pseudo (SANS label)
 // ✅ dispoMessageIds (7) : IDs des messages ✅/❌ (Lun..Dim) pour /check_dispo
 // ✅ checkDispoChannelId (opt) : salon où sont les 7 messages (sinon disposChannelId)
-// ✅ automations:
+// ✅ automations (SIMPLE aligné /setup):
 //    - enabled (global)
 //    - pseudo: { enabled, minute }
 //    - checkDispo: { enabled, times: ["HH:MM", ...] }
-//    - reminderDispo: { enabled, mode, channelId, times: ["HH:MM", ...] }
+//    - rappel: { enabled, times: ["HH:MM", ...] }
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
+// ✅ compat legacy reminderDispo -> rappel (enabled + times uniquement)
 // ✅ utilitaires export/import/reset
 
 const fs = require("fs");
@@ -51,7 +52,7 @@ const DEFAULT_GUILD = {
   postRoleIds: [],
   posts: [], // compat legacy : [{ roleId, label }]
 
-  // ✅ automations (format étendu)
+  // ✅ automations (format SIMPLE)
   automations: {
     enabled: false, // switch global
 
@@ -65,11 +66,9 @@ const DEFAULT_GUILD = {
       times: [], // ["21:10", ...]
     },
 
-    // ✅ nouveau: rappel dispo (sans réaction ✅/❌)
-    reminderDispo: {
+    // ✅ rappel simple (aligné /setup)
+    rappel: {
       enabled: false,
-      mode: "channel", // "channel" | "dm" | "both"
-      channelId: null, // salon rappel (fallback: staffReportsChannelId)
       times: [], // ["HH:MM", ...]
     },
   },
@@ -145,7 +144,7 @@ function normalizeDispoMessageIds(input) {
 }
 
 // --------------------
-// ✅ Automations normalisation
+// ✅ Automations normalisation (SIMPLE)
 // --------------------
 function toBool(v, fallback = false) {
   if (v === true) return true;
@@ -195,13 +194,11 @@ function normalizeTimes(arr, { max = 12 } = {}) {
   return out;
 }
 
-function normalizeReminderMode(v) {
-  const s = String(v || "").toLowerCase().trim();
-  if (s === "dm" || s === "mp") return "dm";
-  if (s === "both" || s === "2") return "both";
-  return "channel";
-}
-
+/**
+ * ✅ compat:
+ * - supporte `rappel` (nouveau)
+ * - supporte `reminderDispo` (ancien) => converti en `rappel` (enabled + times uniquement)
+ */
 function normalizeAutomations(a) {
   const src = a && typeof a === "object" ? a : {};
 
@@ -209,13 +206,30 @@ function normalizeAutomations(a) {
 
   const pseudoSrc = src.pseudo && typeof src.pseudo === "object" ? src.pseudo : {};
   const checkSrc = src.checkDispo && typeof src.checkDispo === "object" ? src.checkDispo : {};
-  const remindSrc = src.reminderDispo && typeof src.reminderDispo === "object" ? src.reminderDispo : {};
+
+  // ✅ nouveau
+  const rappelSrc = src.rappel && typeof src.rappel === "object" ? src.rappel : {};
+
+  // ✅ legacy (on ignore mode/channelId)
+  const legacyRemindSrc =
+    src.reminderDispo && typeof src.reminderDispo === "object" ? src.reminderDispo : {};
 
   const pseudoMinute = clampInt(pseudoSrc.minute, {
     min: 0,
     max: 59,
     fallback: DEFAULT_GUILD.automations.pseudo.minute,
   });
+
+  // priorité: rappel > reminderDispo
+  const rappelEnabled =
+    Object.prototype.hasOwnProperty.call(rappelSrc, "enabled")
+      ? toBool(rappelSrc.enabled, DEFAULT_GUILD.automations.rappel.enabled)
+      : toBool(legacyRemindSrc.enabled, DEFAULT_GUILD.automations.rappel.enabled);
+
+  const rappelTimes =
+    Array.isArray(rappelSrc.times)
+      ? normalizeTimes(rappelSrc.times, { max: 12 })
+      : normalizeTimes(legacyRemindSrc.times, { max: 12 });
 
   return {
     enabled: globalEnabled,
@@ -230,11 +244,9 @@ function normalizeAutomations(a) {
       times: normalizeTimes(checkSrc.times, { max: 12 }),
     },
 
-    reminderDispo: {
-      enabled: toBool(remindSrc.enabled, DEFAULT_GUILD.automations.reminderDispo.enabled),
-      mode: normalizeReminderMode(remindSrc.mode ?? DEFAULT_GUILD.automations.reminderDispo.mode),
-      channelId: remindSrc.channelId ? String(remindSrc.channelId) : null,
-      times: normalizeTimes(remindSrc.times, { max: 12 }),
+    rappel: {
+      enabled: rappelEnabled,
+      times: rappelTimes,
     },
   };
 }
@@ -265,7 +277,7 @@ function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
   const out = { ...DEFAULT_GUILD, ...c };
 
-  // ✅ automations
+  // ✅ automations (simple)
   out.automations = normalizeAutomations(c.automations);
 
   // ✅ roles multi
@@ -326,12 +338,17 @@ function upsertGuildConfig(guildId, patch) {
     ? p.checkDispoChannelId
     : current.checkDispoChannelId;
 
+  // ✅ merge automations (simple) + compat reminderDispo
   const mergedAutomations = normalizeAutomations({
     ...current.automations,
     ...(p.automations || {}),
     pseudo: { ...(current.automations?.pseudo || {}), ...(p.automations?.pseudo || {}) },
     checkDispo: { ...(current.automations?.checkDispo || {}), ...(p.automations?.checkDispo || {}) },
-    reminderDispo: { ...(current.automations?.reminderDispo || {}), ...(p.automations?.reminderDispo || {}) },
+    rappel: { ...(current.automations?.rappel || {}), ...(p.automations?.rappel || {}) },
+    reminderDispo: {
+      // compat si un ancien patch envoie reminderDispo
+      ...(p.automations?.reminderDispo || {}),
+    },
   });
 
   const merged = normalizeGuild({
