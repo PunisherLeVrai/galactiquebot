@@ -1,12 +1,14 @@
 // src/commands/check_dispo.js
 // /check_dispo — STAFF ONLY — NON EPHEMERE — Embed
 // Vérifie réactions sur 1 jour choisi (obligatoire)
-// Filtre : doit avoir ≥1 rôle dans cfg.playerRoleIds
+//
+// ✅ Présents/Absents = TOUS ceux qui ont réagi ✅ / ❌ (sans filtre rôle)
+// ✅ Sans réaction = UNIQUEMENT les membres avec ≥1 rôle dans cfg.playerRoleIds
 //
 // 🔒 Renforcement MAX des réactions / fetch (même logique que runner.js):
 // - Fetch message via channel.messages.fetch(id)
 // - Re-fetch du message via msg.fetch() avant lecture
-// - Tentative message.reactions.fetch() si dispo (et si cache vide / incomplet)
+// - Tentative message.reactions.fetch() si dispo (cache vide / incomplet)
 // - Recherche réaction par emoji.name OU emoji.toString()
 // - Fetch users via reaction.users.fetch() (source de vérité)
 // - Si réactions indisponibles: embed explicite + hints permissions/intents
@@ -14,7 +16,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require("discord.js");
 const { getGuildConfig } = require("../core/guildConfig");
 
-// Index -> Jour
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
 
 function isStaff(member, cfg) {
@@ -85,23 +86,15 @@ async function tryFetchReactions(message) {
 async function collectReactionUserIdsStrong(message, emojiName) {
   const out = new Set();
 
-  if (!message) {
-    return { ok: false, reason: "no_message", users: out };
-  }
+  if (!message) return { ok: false, reason: "no_message", users: out };
 
-  // 1) Refetch message (partials/cache stale)
   const fresh = await ensureFreshMessage(message);
 
-  // 2) si cache reactions vide -> tentative fetch
   const cacheSize = fresh?.reactions?.cache?.size ?? 0;
-  if (cacheSize === 0) {
-    await tryFetchReactions(fresh);
-  }
+  if (cacheSize === 0) await tryFetchReactions(fresh);
 
-  // 3) trouver réaction
   let reaction = findReactionInCache(fresh, emojiName);
 
-  // 4) retenter si pas trouvé (parfois 1er fetch ne remplit pas)
   if (!reaction) {
     await tryFetchReactions(fresh);
     reaction = findReactionInCache(fresh, emojiName);
@@ -109,17 +102,10 @@ async function collectReactionUserIdsStrong(message, emojiName) {
 
   if (!reaction) {
     const finalCacheSize = fresh?.reactions?.cache?.size ?? 0;
-
-    // cache toujours vide => probablement permissions/intents
-    if (finalCacheSize === 0) {
-      return { ok: false, reason: "reactions_unavailable", users: out };
-    }
-
-    // cache non vide mais pas cet emoji => normal
+    if (finalCacheSize === 0) return { ok: false, reason: "reactions_unavailable", users: out };
     return { ok: true, reason: "emoji_not_found", users: out };
   }
 
-  // 5) fetch users = vérité
   try {
     const users = await reaction.users.fetch().catch(() => null);
     if (!users) return { ok: false, reason: "users_fetch_failed", users: out };
@@ -146,11 +132,8 @@ function getDispoMessageIds(cfg) {
     return a;
   }
 
-  // fallback (ancien format)
   const legacy = [];
-  for (let i = 0; i < 7; i++) {
-    legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
-  }
+  for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
   while (legacy.length < 7) legacy.push(null);
   return legacy.slice(0, 7);
 }
@@ -190,39 +173,33 @@ module.exports = {
 
       const cfg = getGuildConfig(interaction.guildId) || {};
 
-      // STAFF ONLY
       if (!isStaff(interaction.member, cfg)) {
         return interaction.reply("⛔ Accès réservé au STAFF.");
       }
 
       const disposChannelId = resolveDispoChannelId(cfg);
-      if (!disposChannelId) {
-        return interaction.reply("⚠️ Aucun salon configuré dans /setup.");
-      }
+      if (!disposChannelId) return interaction.reply("⚠️ Aucun salon configuré dans /setup.");
 
       const messageIds = getDispoMessageIds(cfg);
-      const anyId = messageIds.some((x) => x);
-      if (!anyId) {
-        return interaction.reply("⚠️ Aucun ID de message Dispo configuré (Lun→Dim).");
-      }
+      if (!messageIds.some((x) => x)) return interaction.reply("⚠️ Aucun ID de message Dispo configuré (Lun→Dim).");
 
       const channel = await interaction.guild.channels.fetch(disposChannelId).catch(() => null);
       if (!channel || !channel.isTextBased?.()) {
         return interaction.reply("⚠️ Le salon Dispo/Check Dispo doit être un salon texte.");
       }
 
-      // fetch membres (filtre players)
+      // ✅ fetch membres (nécessaire pour calculer "sans réaction" côté rôles joueurs)
       await interaction.guild.members.fetch().catch(() => null);
 
       const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
       if (!playerRoleIds.length) {
-        return interaction.reply("⚠️ Aucun rôle Joueur configuré dans /setup.");
+        return interaction.reply("⚠️ Aucun rôle Joueur configuré dans /setup (requis pour 'Sans réaction').");
       }
 
+      // ✅ uniquement pour "Sans réaction"
       const players = interaction.guild.members.cache
         .filter((m) => m && !m.user.bot)
         .filter((m) => hasAnyRoleId(m, playerRoleIds));
-
       const playerIds = new Set(players.map((m) => m.user.id));
 
       const dayIndex = interaction.options.getInteger("jour");
@@ -231,14 +208,13 @@ module.exports = {
 
       await interaction.reply("⏳ Analyse en cours...");
 
-      // message manquant
       if (!mid) {
         const embed = new EmbedBuilder()
           .setTitle(`📊 Check Dispo — ${dayLabel}`)
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${disposChannelId}>\n` +
-            `Joueurs détectés : **${playerIds.size}**\n\n` +
+            `Joueurs (pour 'Sans réaction') : **${playerIds.size}**\n\n` +
             `⚠️ ID du message non configuré pour ce jour.`
           )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
@@ -253,27 +229,28 @@ module.exports = {
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${disposChannelId}>\n` +
-            `Joueurs détectés : **${playerIds.size}**\n\n` +
-            `⚠️ Message introuvable (ID: \`${mid}\`).`
+            `Message : \`${mid}\`\n` +
+            `Joueurs (pour 'Sans réaction') : **${playerIds.size}**\n\n` +
+            `⚠️ Message introuvable.`
           )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
 
-      // 🔒 réactions (fortifiées)
       const okRes = await collectReactionUserIdsStrong(msg, "✅");
       const noRes = await collectReactionUserIdsStrong(msg, "❌");
 
-      // réactions indisponibles (permissions/intents/cache)
-      if (!okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable") {
+      if (
+        !okRes.ok && okRes.reason === "reactions_unavailable" &&
+        !noRes.ok && noRes.reason === "reactions_unavailable"
+      ) {
         const embed = new EmbedBuilder()
           .setTitle(`📊 Check Dispo — ${dayLabel}`)
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${disposChannelId}>\n` +
-            `Message : \`${mid}\`\n` +
-            `Joueurs détectés : **${playerIds.size}**\n\n` +
+            `Message : \`${mid}\`\n\n` +
             `🚫 **Impossible de lire les réactions.**\n` +
             `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
           )
@@ -282,40 +259,37 @@ module.exports = {
         return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
       }
 
-      const ok = okRes.users;
-      const no = noRes.users;
+      // ✅ Présents/Absents = tous les users qui ont réagi
+      const okAll = Array.from(okRes.users);
+      const noAll = Array.from(noRes.users);
 
-      const okPlayers = Array.from(ok).filter((id) => playerIds.has(id));
-      const noPlayers = Array.from(no).filter((id) => playerIds.has(id));
+      const reactedAll = new Set([...okAll, ...noAll]);
 
-      const reacted = new Set([...okPlayers, ...noPlayers]);
-      const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
+      // ✅ Sans réaction = seulement les joueurs
+      const missingPlayers = Array.from(playerIds).filter((id) => !reactedAll.has(id));
 
-      // hint si lecture partielle
       const warn =
         (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
           ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
           : "";
 
-      // embed final
       const embed = new EmbedBuilder()
         .setTitle(`📊 Check Dispo — ${dayLabel}`)
         .setColor(0x5865f2)
         .setDescription(
           `Salon : <#${disposChannelId}>\n` +
           `Message : \`${mid}\`\n` +
-          `Joueurs détectés : **${playerIds.size}**` +
+          `Sans réaction (filtré Joueurs 👟) : **${playerIds.size}**` +
           warn
         )
         .addFields(
-          { name: `🟩 Présents (${okPlayers.length})`, value: mentionList(okPlayers) },
-          { name: `🟥 Absents (${noPlayers.length})`, value: mentionList(noPlayers) },
-          { name: `🟦 Sans réaction (${missing.length})`, value: mentionList(missing) }
+          { name: `🟩 ✅ Présents (tous) (${okAll.length})`, value: mentionList(okAll, { max: 60 }) },
+          { name: `🟥 ❌ Absents (tous) (${noAll.length})`, value: mentionList(noAll, { max: 60 }) },
+          { name: `🟦 ⏳ Sans réaction (Joueurs) (${missingPlayers.length})`, value: mentionList(missingPlayers, { max: 60 }) }
         )
         .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
       return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
-
     } catch {
       try {
         if (interaction.replied) await interaction.followUp("⚠️ Erreur inconnue.");
