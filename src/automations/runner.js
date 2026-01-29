@@ -5,6 +5,10 @@
 // ✅ CHECK_DISPO (AUTO REPORT)
 // ✅ RAPPEL_DISPO (AUTO REMIND)  <-- aligné sur /setup (cfg.automations.rappel)
 //
+// ✅ LOGIQUE DEMANDÉE :
+// - Présents / Absents : TOUS ceux qui ont répondu (✅/❌) (hors bots)
+// - Sans réaction : UNIQUEMENT le rôle joueur (cfg.playerRoleIds)
+//
 // 🔒 Renforcement MAX des réactions / fetch (inchangé)
 // 🧠 Fix circular dependency: lazy-require dans tick() / fonctions
 
@@ -210,6 +214,7 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
       const userId = msg.author.id;
       const cur = out.get(userId) || {};
 
+      // du + récent au + ancien -> ne remplace pas si déjà trouvé
       if (!cur[parsed.platform]) {
         cur[parsed.platform] = parsed.value;
         out.set(userId, cur);
@@ -227,6 +232,7 @@ async function scanPseudoChannel(channel, { limit = 300 } = {}) {
 async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850 } = {}) {
   if (!guild) return { storedCount: 0, ok: 0, fail: 0, skipped: 0, notManageable: 0, scanned: false };
 
+  // 🔧 lazy require (anti circular)
   const { importAllPseudos } = require("../core/pseudoStore");
   const { buildMemberLine } = require("../core/memberDisplay");
 
@@ -256,7 +262,10 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
       }
 
       if (storedCount > 0) {
-        importAllPseudos({ version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } }, { replace: false });
+        importAllPseudos(
+          { version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } },
+          { replace: false }
+        );
       }
 
       scanned = true;
@@ -301,7 +310,6 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
 
   return { storedCount, ok, fail, skipped, notManageable, scanned };
 }
-
 // --------------------
 // CHECK_DISPO — job auto
 // --------------------
@@ -317,6 +325,7 @@ function getDispoMessageIds(cfg) {
     return a;
   }
 
+  // compat legacy
   const legacy = [];
   for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
   while (legacy.length < 7) legacy.push(null);
@@ -353,6 +362,7 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
   await guild.members.fetch().catch(() => null);
 
+  // ✅ Rôle joueur uniquement pour "Sans réaction"
   const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
   if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
 
@@ -367,7 +377,8 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     .setColor(0x5865f2)
     .setDescription(
       `Salon : <#${disposChannelId}>\n` +
-      `Filtre : rôles Joueurs (👟)\n` +
+      `Présents/Absents : **tous** les répondants (✅/❌)\n` +
+      `Sans réaction : rôles Joueurs (👟)\n` +
       `Joueurs détectés : **${playerIds.size}**`
     )
     .setFooter({ text: "XIG BLAUGRANA FC Staff" });
@@ -407,11 +418,13 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true };
   }
 
-  const okPlayers = Array.from(okRes.users).filter((id) => playerIds.has(id));
-  const noPlayers = Array.from(noRes.users).filter((id) => playerIds.has(id));
+  // ✅ Présents/Absents = TOUT LE MONDE (hors bots) qui a réagi
+  const okAll = Array.from(okRes.users);
+  const noAll = Array.from(noRes.users);
 
-  const reacted = new Set([...okPlayers, ...noPlayers]);
-  const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
+  // ✅ Sans réaction = UNIQUEMENT joueurs
+  const reacted = new Set([...okAll, ...noAll]);
+  const missingPlayers = Array.from(playerIds).filter((id) => !reacted.has(id));
 
   const warn =
     (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
@@ -420,15 +433,16 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
   embed.setDescription(
     `Salon : <#${disposChannelId}>\n` +
-    `Filtre : rôles Joueurs (👟)\n` +
+    `Présents/Absents : **tous** les répondants (✅/❌)\n` +
+    `Sans réaction : rôles Joueurs (👟)\n` +
     `Joueurs détectés : **${playerIds.size}**` +
     warn
   );
 
   embed.addFields(
-    { name: `🟩 ✅ Présents (${okPlayers.length})`, value: mentionList(okPlayers), inline: false },
-    { name: `🟥 ❌ Absents (${noPlayers.length})`, value: mentionList(noPlayers), inline: false },
-    { name: `🟦 ⏳ Sans réaction (${missing.length})`, value: mentionList(missing), inline: false }
+    { name: `🟩 ✅ Présents (${okAll.length})`, value: mentionList(okAll), inline: false },
+    { name: `🟥 ❌ Absents (${noAll.length})`, value: mentionList(noAll), inline: false },
+    { name: `🟦 ⏳ Sans réaction — Joueurs (${missingPlayers.length})`, value: mentionList(missingPlayers), inline: false }
   );
 
   await reportChannel.send({ embeds: [embed] }).catch(() => null);
@@ -441,6 +455,7 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 // RAPPEL_DISPO — job auto (aligné /setup)
 // -> envoi dans staffReportsChannelId (pas de mode/DM/channelId)
 // -> compat legacy: automations.reminderDispo
+// -> rappel UNIQUEMENT pour joueurs sans réaction
 // --------------------
 function buildMessageLink(guildId, channelId, messageId) {
   if (!guildId || !channelId || !messageId) return null;
@@ -453,9 +468,10 @@ function getRappelConfig(cfg) {
   if (r) return { enabled: r.enabled === true, times: Array.isArray(r.times) ? r.times : [] };
 
   // compat legacy (reminderDispo)
-  const legacy = cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object"
-    ? cfg.automations.reminderDispo
-    : null;
+  const legacy =
+    cfg?.automations?.reminderDispo && typeof cfg.automations.reminderDispo === "object"
+      ? cfg.automations.reminderDispo
+      : null;
 
   return {
     enabled: legacy?.enabled === true,
@@ -485,6 +501,7 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
   await guild.members.fetch().catch(() => null);
 
+  // ✅ Rôle joueur uniquement pour "Sans réaction" / rappel
   const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
   if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
 
@@ -525,7 +542,7 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
       .setColor(0x5865f2)
       .setDescription(
         "Impossible de lire les réactions (permissions/intents/cache).\n" +
-        "Vérifie: **ViewChannel + ReadMessageHistory** et l’intent **GuildMessageReactions**."
+          "Vérifie: **ViewChannel + ReadMessageHistory** et l’intent **GuildMessageReactions**."
       )
       .addFields(
         { name: "Message", value: `\`${mid}\``, inline: true },
@@ -538,13 +555,16 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true, missing: [] };
   }
 
-  const okPlayers = Array.from(okRes.users).filter((id) => playerIds.has(id));
-  const noPlayers = Array.from(noRes.users).filter((id) => playerIds.has(id));
-  const reacted = new Set([...okPlayers, ...noPlayers]);
-  const missing = Array.from(playerIds).filter((id) => !reacted.has(id));
+  // ✅ Répondants (tout le monde) => sert à calculer le "sans réaction" joueur
+  const okAll = Array.from(okRes.users);
+  const noAll = Array.from(noRes.users);
+  const reacted = new Set([...okAll, ...noAll]);
 
-  if (!missing.length) {
-    return { ok: true, dayIndex: idx, dayLabel, mid, missing, nothingToDo: true };
+  // ✅ Rappel UNIQUEMENT pour joueurs sans réaction
+  const missingPlayers = Array.from(playerIds).filter((id) => !reacted.has(id));
+
+  if (!missingPlayers.length) {
+    return { ok: true, dayIndex: idx, dayLabel, mid, missing: [], nothingToDo: true };
   }
 
   const link = buildMessageLink(guild.id, disposChannelId, mid);
@@ -553,33 +573,31 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     `⏰ **Rappel Dispo — ${dayLabel}**\n` +
     `Merci de répondre au message (✅ ou ❌) dans <#${disposChannelId}>.` +
     (link ? `\n➡️ ${link}` : "") +
-    `\n\n${mentionList(missing, { max: 60, empty: "—" })}`;
+    `\n\n${mentionList(missingPlayers, { max: 60, empty: "—" })}`;
 
   await reportChannel
     .send({
       content,
-      allowedMentions: { users: missing, roles: [], repliedUser: false },
+      allowedMentions: { users: missingPlayers, roles: [], repliedUser: false },
     })
     .catch(() => null);
 
   if (throttleMs) await sleep(throttleMs);
 
-  // petit résumé embed (facultatif mais utile)
   const emb = new EmbedBuilder()
     .setTitle(`⏰ Rappel Dispo — ${dayLabel}`)
     .setColor(0x5865f2)
     .setDescription(
       `Salon Dispo : <#${disposChannelId}>\n` +
-      `Message : \`${mid}\`\n` +
-      `Cibles (sans réaction) : **${missing.length}**`
+        `Message : \`${mid}\`\n` +
+        `Cibles (joueurs sans réaction) : **${missingPlayers.length}**`
     )
     .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
   await reportChannel.send({ embeds: [emb] }).catch(() => null);
 
-  return { ok: true, dayIndex: idx, dayLabel, mid, missing, sent: true };
+  return { ok: true, dayIndex: idx, dayLabel, mid, missing: missingPlayers, sent: true };
 }
-
 // --------------------
 // Scheduler (HH:MM) — anti double-run
 // --------------------
@@ -618,6 +636,7 @@ function startAutomationRunner(client, opts = {}) {
       const mm = now.getMinutes();
       const mKey = minuteKey(now);
 
+      // 🔧 lazy require (anti circular)
       const { getGuildConfig } = require("../core/guildConfig");
 
       for (const guild of client.guilds.cache.values()) {
