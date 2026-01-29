@@ -53,9 +53,19 @@ const DAY_INDEX = { Lun: 0, Mar: 1, Mer: 2, Jeu: 3, Ven: 4, Sam: 5, Dim: 6 };
 
 // ⚠️ presets (max 12) — garde une liste stable + utile
 const PRESET_TIMES = [
-  "17:10", "18:10", "19:10", "20:10", "20:45",
-  "21:00", "21:10", "21:20", "21:40",
-  "22:00", "22:10", "22:20", "22:40",
+  "17:10",
+  "18:10",
+  "19:10",
+  "20:10",
+  "20:45",
+  "21:00",
+  "21:10",
+  "21:20",
+  "21:40",
+  "22:00",
+  "22:10",
+  "22:20",
+  "22:40",
 ];
 
 function isStaff(member, cfg) {
@@ -236,7 +246,9 @@ module.exports = {
         return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, ephemeral: true });
       }
 
-      const legacyPostRoleIds = Array.isArray(saved.posts) ? saved.posts.map((p) => p?.roleId).filter(Boolean) : [];
+      const legacyPostRoleIds = Array.isArray(saved.posts)
+        ? saved.posts.map((p) => p?.roleId).filter(Boolean)
+        : [];
 
       const draft = {
         disposChannelId: saved.disposChannelId || null,
@@ -263,7 +275,6 @@ module.exports = {
             enabled: !!saved?.automations?.checkDispo?.enabled,
             times: normalizeTimes(saved?.automations?.checkDispo?.times),
           },
-          // ✅ NOUVEAU : rappel (horaires)
           rappel: {
             enabled: !!saved?.automations?.rappel?.enabled,
             times: normalizeTimes(saved?.automations?.rappel?.times),
@@ -296,7 +307,6 @@ module.exports = {
         checkClear: `setup:auto:checkClear:${scope}`,
         modalAddTime: `setup:modal:addTime:${scope}`,
 
-        // ✅ NOUVEAU : rappel horaires + modal
         rappelTimes: `setup:auto:rappelTimes:${scope}`,
         rappelAdd: `setup:auto:rappelAdd:${scope}`,
         rappelClear: `setup:auto:rappelClear:${scope}`,
@@ -317,6 +327,7 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
+
       const rowStaffReports = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.staffReports)
@@ -325,6 +336,7 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
+
       const rowPseudoScan = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId(CID.pseudoScan)
@@ -333,6 +345,7 @@ module.exports = {
           .setMaxValues(1)
           .addChannelTypes(ChannelType.GuildText)
       );
+
       const rowActions1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.save).setLabel(`${ICON.save} Save`).setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(CID.reset).setLabel(`${ICON.reset} Reset`).setStyle(ButtonStyle.Secondary)
@@ -346,6 +359,7 @@ module.exports = {
           .setMinValues(0)
           .setMaxValues(25)
       );
+
       const rowRolePlayers = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.players)
@@ -353,6 +367,7 @@ module.exports = {
           .setMinValues(0)
           .setMaxValues(25)
       );
+
       const rowRolePosts = new ActionRowBuilder().addComponents(
         new RoleSelectMenuBuilder()
           .setCustomId(CID.posts)
@@ -361,7 +376,6 @@ module.exports = {
           .setMaxValues(25)
       );
 
-      // ✅ Ajout bouton Rappel
       const rowAutoButtons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(CID.autoGlobal)
@@ -411,7 +425,6 @@ module.exports = {
         components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
         ephemeral: true,
       });
-
       // ---------- UI (message 3) ----------
       const rowCheckDispoChannel = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
@@ -429,6 +442,7 @@ module.exports = {
         new ButtonBuilder().setCustomId(CID.msg("Jeu")).setLabel("ID Jeu").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(CID.msg("Ven")).setLabel("ID Ven").setStyle(ButtonStyle.Primary)
       );
+
       const rowMsgButtons2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(CID.msg("Sam")).setLabel("ID Sam").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(CID.msg("Dim")).setLabel("ID Dim").setStyle(ButtonStyle.Primary),
@@ -454,11 +468,17 @@ module.exports = {
       );
 
       const rowTimesButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.checkAdd).setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.checkClear).setLabel(`${ICON.broom} Clear CheckDispo`).setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder()
+          .setCustomId(CID.checkAdd)
+          .setLabel(`${ICON.plus} Ajouter HH:MM (CheckDispo)`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.checkClear)
+          .setLabel(`${ICON.broom} Clear CheckDispo`)
+          .setStyle(ButtonStyle.Secondary)
       );
 
-      // ✅ NOUVEAU : Rappel horaires
+      // ✅ Rappel horaires
       const rowRappelTimesSelect = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(CID.rappelTimes)
@@ -475,8 +495,14 @@ module.exports = {
       );
 
       const rowRappelButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.rappelAdd).setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.rappelClear).setLabel(`${ICON.broom} Clear Rappel`).setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder()
+          .setCustomId(CID.rappelAdd)
+          .setLabel(`${ICON.plus} Ajouter HH:MM (Rappel)`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(CID.rappelClear)
+          .setLabel(`${ICON.broom} Clear Rappel`)
+          .setStyle(ButtonStyle.Secondary)
       );
 
       try {
@@ -501,7 +527,8 @@ module.exports = {
       });
 
       const mainMsg = await interaction.fetchReply();
-            // ---------- refresh ----------
+
+      // ---------- refresh ----------
       const refresh = async () => {
         // styles
         rowAutoButtons.components[0].setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary); // Global
@@ -542,26 +569,30 @@ module.exports = {
           components: [rowDispos, rowStaffReports, rowPseudoScan, rowActions1],
         });
 
-        await msg2.edit({
-          content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
-          components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
-        }).catch(() => {});
+        await msg2
+          .edit({
+            content: "🧩 Rôles / 📌 Postes / 🤖 Automations",
+            components: [rowRoleStaff, rowRolePlayers, rowRolePosts, rowAutoButtons, rowCancel],
+          })
+          .catch(() => {});
 
-        await msg3.edit({
-          content:
-            "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
-            "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
-            "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
-          components: [
-            rowCheckDispoChannel,
-            rowMsgButtons1,
-            rowMsgButtons2,
-            rowTimesSelect,
-            rowTimesButtons,
-            rowRappelTimesSelect,
-            rowRappelButtons,
-          ],
-        }).catch(() => {});
+        await msg3
+          .edit({
+            content:
+              "🗓️ **Check Dispo** — Salon (opt) + IDs messages + horaires auto.\n" +
+              "🔔 **Rappel** — Horaires auto (pour relancer ceux sans réponse).\n" +
+              "➡️ IDs : clique un bouton puis **envoie l’ID** (il sera supprimé). Timeout: 60s.",
+            components: [
+              rowCheckDispoChannel,
+              rowMsgButtons1,
+              rowMsgButtons2,
+              rowTimesSelect,
+              rowTimesButtons,
+              rowRappelTimesSelect,
+              rowRappelButtons,
+            ],
+          })
+          .catch(() => {});
       };
 
       // ---------- collectors ----------
@@ -570,32 +601,51 @@ module.exports = {
       const col3 = msg3.createMessageComponentCollector({ time: 10 * 60 * 1000 });
 
       const stopAll = () => {
-        try { col1.stop(); } catch {}
-        try { col2.stop(); } catch {}
-        try { col3.stop(); } catch {}
+        try {
+          col1.stop();
+        } catch {}
+        try {
+          col2.stop();
+        } catch {}
+        try {
+          col3.stop();
+        } catch {}
       };
 
       async function askMessageId(i, dayLabel) {
         const idx = DAY_INDEX[dayLabel];
         if (typeof idx !== "number") return;
 
-        await i.reply({ content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`, ephemeral: true });
+        await i.reply({
+          content: `Envoie l’ID du message pour **${dayLabel}** (15-25 chiffres). Timeout: 60s.`,
+          ephemeral: true,
+        });
 
         const filter = (m) => m.author.id === interaction.user.id;
         const collected = await i.channel.awaitMessages({ filter, max: 1, time: 60_000 }).catch(() => null);
         const m = collected?.first?.() || null;
 
-        if (!m) return i.followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", ephemeral: true }).catch(() => {});
+        if (!m) {
+          return i
+            .followUp({ content: "⚠️ Timeout. Re-clique sur le bouton du jour.", ephemeral: true })
+            .catch(() => {});
+        }
+
         const id = String(m.content || "").trim();
-        try { await m.delete().catch(() => {}); } catch {}
+        try {
+          await m.delete().catch(() => {});
+        } catch {}
 
         if (!isSnowflake(id)) {
-          return i.followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", ephemeral: true }).catch(() => {});
+          return i
+            .followUp({ content: "⚠️ ID invalide. Re-clique et envoie un ID valide.", ephemeral: true })
+            .catch(() => {});
         }
 
         const next = normalizeDispoMessageIds(draft.dispoMessageIds);
         next[idx] = id;
         draft.dispoMessageIds = next;
+
         return refresh();
       }
 
@@ -608,6 +658,7 @@ module.exports = {
           .setRequired(true)
           .setPlaceholder("ex: 10")
           .setValue(String(clampInt(draft.automations?.pseudo?.minute, { fallback: 10 })));
+
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       };
@@ -620,6 +671,7 @@ module.exports = {
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setPlaceholder("ex: 21:10");
+
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       };
@@ -632,25 +684,26 @@ module.exports = {
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setPlaceholder("ex: 20:45");
+
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       };
 
       // ✅ IMPORTANT: pas de interaction.client.on(...) (sinon listeners multiples)
-      const awaitModal = (filter) =>
-        interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
-
+      const awaitModal = (filter) => interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
       // ---------- collect 1 ----------
       col1.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+          }
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
             if (i.customId === CID.dispos) draft.disposChannelId = v;
             if (i.customId === CID.staffReports) draft.staffReportsChannelId = v;
             if (i.customId === CID.pseudoScan) draft.pseudoScanChannelId = v;
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
@@ -672,10 +725,10 @@ module.exports = {
               enabled: false,
               pseudo: { enabled: true, minute: 10 },
               checkDispo: { enabled: false, times: [] },
-              rappel: { enabled: false, times: [] }, // ✅ reset rappel
+              rappel: { enabled: false, times: [] },
             };
 
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
@@ -688,7 +741,9 @@ module.exports = {
               Array.isArray(draft.playerRoleIds) &&
               draft.playerRoleIds.length > 0;
 
-            if (!requiredOk) return i.reply({ content: ICON.warn, ephemeral: true });
+            if (!requiredOk) {
+              return i.reply({ content: ICON.warn, ephemeral: true }).catch(() => {});
+            }
 
             const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 
@@ -719,7 +774,6 @@ module.exports = {
                   enabled: !!draft.automations.checkDispo.enabled,
                   times: normalizeTimes(draft.automations.checkDispo.times),
                 },
-                // ✅ NOUVEAU : rappel
                 rappel: {
                   enabled: !!draft.automations.rappel.enabled,
                   times: normalizeTimes(draft.automations.rappel.times),
@@ -731,25 +785,30 @@ module.exports = {
             });
 
             stopAll();
+
             await i.update({ content: `${ICON.save} Saved`, embeds: [buildEmbed(guild, draft)], components: [] }).catch(() => {});
             await msg2.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
             await msg3.edit({ content: `${ICON.save} Saved`, components: [] }).catch(() => {});
           }
         } catch {
-          try { if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true }); } catch {}
+          try {
+            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
+          } catch {}
         }
       });
 
       // ---------- collect 2 ----------
       col2.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+          }
 
           if (i.isRoleSelectMenu()) {
             if (i.customId === CID.staff) draft.staffRoleIds = uniqIds(i.values, 25);
             if (i.customId === CID.players) draft.playerRoleIds = uniqIds(i.values, 25);
             if (i.customId === CID.posts) draft.postRoleIds = uniqIds(i.values, 25);
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
@@ -757,73 +816,89 @@ module.exports = {
 
           if (i.customId === CID.autoGlobal) {
             draft.automations.enabled = !draft.automations.enabled;
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
           if (i.customId === CID.autoPseudo) {
             draft.automations.pseudo.enabled = !draft.automations.pseudo.enabled;
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
           if (i.customId === CID.pseudoMinute) {
-            await openPseudoMinuteModal(i);
-            const mi = await awaitModal((x) => x.customId === CID.modalPseudoMinute && x.user.id === interaction.user.id).catch(() => null);
+            await openPseudoMinuteModal(i).catch(() => {});
+            const mi = await awaitModal((x) => x.customId === CID.modalPseudoMinute && x.user.id === interaction.user.id);
             if (!mi) return;
+
             const minute = clampInt(mi.fields.getTextInputValue("minute"), { fallback: 10 });
             draft.automations.pseudo.minute = minute;
-            await mi.reply({ content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`, ephemeral: true }).catch(() => {});
+
+            await mi
+              .reply({
+                content: `✅ Minute pseudo: \`${minute}\` (HH:${String(minute).padStart(2, "0")}).`,
+                ephemeral: true,
+              })
+              .catch(() => {});
+
             return refresh();
           }
 
           if (i.customId === CID.autoCheck) {
             draft.automations.checkDispo.enabled = !draft.automations.checkDispo.enabled;
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
-          // ✅ NOUVEAU : toggle rappel
           if (i.customId === CID.autoRappel) {
             draft.automations.rappel.enabled = !draft.automations.rappel.enabled;
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
           if (i.customId === CID.cancel) {
             stopAll();
             await i.update({ content: `${ICON.cancel} Cancel`, components: [] }).catch(() => {});
-            try { await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] }); } catch {}
-            try { await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
-            try { await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] }); } catch {}
+            try {
+              await interaction.editReply({ content: `${ICON.cancel} Cancel`, embeds: [], components: [] });
+            } catch {}
+            try {
+              await msg2.edit({ content: `${ICON.cancel} Cancel`, components: [] });
+            } catch {}
+            try {
+              await msg3.edit({ content: `${ICON.cancel} Cancel`, components: [] });
+            } catch {}
           }
         } catch {
-          try { if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true }); } catch {}
+          try {
+            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
+          } catch {}
         }
       });
 
       // ---------- collect 3 ----------
       col3.on("collect", async (i) => {
         try {
-          if (i.user.id !== interaction.user.id || !inScope(i, scope)) return i.reply({ content: ICON.no, ephemeral: true });
+          if (i.user.id !== interaction.user.id || !inScope(i, scope)) {
+            return i.reply({ content: ICON.no, ephemeral: true }).catch(() => {});
+          }
 
           if (i.isChannelSelectMenu()) {
             const v = i.values?.[0] || null;
             if (i.customId === CID.checkDispo) draft.checkDispoChannelId = v;
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
           if (i.isStringSelectMenu() && i.customId === CID.checkTimes) {
             draft.automations.checkDispo.times = normalizeTimes(i.values, { max: 12 });
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
-          // ✅ NOUVEAU : select rappel times
           if (i.isStringSelectMenu() && i.customId === CID.rappelTimes) {
             draft.automations.rappel.times = normalizeTimes(i.values, { max: 12 });
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
@@ -831,26 +906,25 @@ module.exports = {
 
           if (i.customId === CID.msgClear) {
             draft.dispoMessageIds = new Array(7).fill(null);
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
           if (i.customId === CID.checkClear) {
             draft.automations.checkDispo.times = [];
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
-          // ✅ NOUVEAU : clear rappel
           if (i.customId === CID.rappelClear) {
             draft.automations.rappel.times = [];
-            await i.deferUpdate();
+            await i.deferUpdate().catch(() => {});
             return refresh();
           }
 
           if (i.customId === CID.checkAdd) {
-            await openAddTimeModal(i);
-            const mi = await awaitModal((x) => x.customId === CID.modalAddTime && x.user.id === interaction.user.id).catch(() => null);
+            await openAddTimeModal(i).catch(() => {});
+            const mi = await awaitModal((x) => x.customId === CID.modalAddTime && x.user.id === interaction.user.id);
             if (!mi) return;
 
             const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
@@ -858,15 +932,15 @@ module.exports = {
               await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 21:10).", ephemeral: true }).catch(() => {});
               return;
             }
+
             draft.automations.checkDispo.times = normalizeTimes([...(draft.automations.checkDispo.times || []), t], { max: 12 });
             await mi.reply({ content: `✅ Horaire ajouté (CheckDispo): \`${t}\``, ephemeral: true }).catch(() => {});
             return refresh();
           }
 
-          // ✅ NOUVEAU : add rappel HH:MM
           if (i.customId === CID.rappelAdd) {
-            await openAddRappelTimeModal(i);
-            const mi = await awaitModal((x) => x.customId === CID.modalAddRappelTime && x.user.id === interaction.user.id).catch(() => null);
+            await openAddRappelTimeModal(i).catch(() => {});
+            const mi = await awaitModal((x) => x.customId === CID.modalAddRappelTime && x.user.id === interaction.user.id);
             if (!mi) return;
 
             const t = normalizeTimeStr(mi.fields.getTextInputValue("time"));
@@ -874,6 +948,7 @@ module.exports = {
               await mi.reply({ content: "⚠️ Format invalide. Attendu: `HH:MM` (ex: 20:45).", ephemeral: true }).catch(() => {});
               return;
             }
+
             draft.automations.rappel.times = normalizeTimes([...(draft.automations.rappel.times || []), t], { max: 12 });
             await mi.reply({ content: `✅ Horaire ajouté (Rappel): \`${t}\``, ephemeral: true }).catch(() => {});
             return refresh();
@@ -883,16 +958,23 @@ module.exports = {
           const day = DAYS.find((d) => i.customId === CID.msg(d));
           if (day) return askMessageId(i, day);
         } catch {
-          try { if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true }); } catch {}
+          try {
+            if (!i.replied) await i.reply({ content: ICON.warn, ephemeral: true });
+          } catch {}
         }
       });
 
       col1.on("end", async () => {
-        try { await interaction.editReply({ content: ICON.time, embeds: [], components: [] }); } catch {}
-        try { await msg2.edit({ content: ICON.time, components: [] }); } catch {}
-        try { await msg3.edit({ content: ICON.time, components: [] }); } catch {}
+        try {
+          await interaction.editReply({ content: ICON.time, embeds: [], components: [] });
+        } catch {}
+        try {
+          await msg2.edit({ content: ICON.time, components: [] });
+        } catch {}
+        try {
+          await msg3.edit({ content: ICON.time, components: [] });
+        } catch {}
       });
-
     } catch {
       try {
         if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "⚠️", ephemeral: true });
