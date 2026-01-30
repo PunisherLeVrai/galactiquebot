@@ -523,7 +523,7 @@ module.exports = {
         flags: MessageFlags.Ephemeral,
       });
 
-      // ✅ récupère le "message 1" pour accrocher un collector DIRECTEMENT sur le message
+      // ✅ récupère le "message 1"
       const msg1 = await interaction.fetchReply().catch(() => null);
 
       const msg2 = await interaction.followUp({
@@ -620,7 +620,7 @@ module.exports = {
           })
           .catch(() => {});
 
-        // ✅ toujours utiliser le channel "réel" (pas i.channel qui peut être null/instable)
+        // ✅ utiliser le channel réel
         const textChannel = interaction.channel;
         if (!textChannel) {
           return i.followUp({ content: "⚠️ Canal introuvable.", flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -694,7 +694,7 @@ module.exports = {
 
       const awaitModal = (filter) => interaction.awaitModalSubmit({ filter, time: 10 * 60 * 1000 }).catch(() => null);
 
-      // ✅ Collectors attachés aux MESSAGES (et pas au channel) => beaucoup moins d'échecs d'interaction
+      // ✅ Collectors attachés aux MESSAGES
       const collectors = [];
       const makeCollector = (msg) => {
         if (!msg?.createMessageComponentCollector) return null;
@@ -985,7 +985,7 @@ module.exports = {
         } catch {
           try {
             if (!i.replied && !i.deferred) {
-              await i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral });
+              await i.reply({ content: ICON.warn, flags: MessageFlags.Ephemeral }).catch(() => {});
             }
           } catch {}
         }
@@ -999,9 +999,9 @@ module.exports = {
     } catch {
       try {
         if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: "⚠️", flags: MessageFlags.Ephemeral });
+          await interaction.reply({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
         } else {
-          await interaction.followUp({ content: "⚠️", flags: MessageFlags.Ephemeral });
+          await interaction.followUp({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
         }
       } catch {}
     }
