@@ -2,7 +2,7 @@
 // XIG BLAUGRANA FC Staff — minimal multi-serveur (discord.js v14)
 // - charge les commandes depuis src/commands/*.js
 // - route interactionCreate (slash commands)
-// - démarre le runner d'automatisation (pseudo + check_dispo + reminder_dispo)
+// - démarre le runner d'automatisation (pseudo + check_dispo + rappel_dispo)
 
 require("dotenv").config();
 
@@ -68,32 +68,29 @@ if (!fs.existsSync(cmdDir)) {
   }
 }
 
-// ---------- Ready (discord.js v14) ----------
+// ---------- Ready ----------
 client.once(Events.ClientReady, () => {
   console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
 
   // ---------- Automation runner ----------
-  // Déclenche:
-  // - pseudo à HH:minute (cfg.automations.pseudo.minute)
-  // - check_dispo aux times ["HH:MM", ...] (cfg.automations.checkDispo.times)
-  // - reminder_dispo aux times ["HH:MM", ...] (cfg.automations.reminderDispo.times)
   try {
     startAutomationRunner(client, {
-      loopMs: 20_000,        // tick toutes les 20s
-      scanLimit: 300,        // scan pseudo channel
-      throttleMsPseudo: 850, // anti rate-limit nicknames
-      throttleMsCheck: 0,    // pas de throttle pour le report
-      throttleMsReminder: 650, // throttle DM rappel (si besoin)
+      loopMs: 20_000,
+      scanLimit: 300,
+      throttleMsPseudo: 850,
+      throttleMsCheck: 0,
+      throttleMsRappel: 650, // ✅ aligné runner.js (rappel)
       runOnStart: true,
     });
 
-    console.log("[AUTO] Runner démarré (pseudo + check_dispo + reminder_dispo).");
+    console.log("[AUTO] Runner démarré (pseudo + check_dispo + rappel_dispo).");
   } catch (e) {
     console.error("[AUTO] Impossible de démarrer le runner.", e);
   }
 });
 
-// ---------- Interactions (slash commands) ----------
+// ---------- Interactions (slash commands ONLY) ----------
+// ⚠️ On laisse les buttons/select/modals aux listeners globaux (ex: setup.js)
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!interaction.isChatInputCommand()) return;
