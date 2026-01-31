@@ -1,8 +1,5 @@
 // src/index.js
 // XIG BLAUGRANA FC Staff — minimal multi-serveur (discord.js v14)
-// - charge les commandes depuis src/commands/*.js
-// - route interactionCreate (slash commands)
-// - démarre le runner d'automatisation (pseudo + check_dispo + rappel_dispo)
 
 require("dotenv").config();
 
@@ -19,6 +16,9 @@ const fs = require("fs");
 const path = require("path");
 
 const { startAutomationRunner } = require("./automations/runner");
+
+// ✅ IMPORTANT : listener global setup
+const { ensureGlobalSetupListener } = require("./commands/setup");
 
 const TOKEN = process.env.TOKEN;
 if (!TOKEN) {
@@ -72,14 +72,22 @@ if (!fs.existsSync(cmdDir)) {
 client.once(Events.ClientReady, () => {
   console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
 
-  // ---------- Automation runner ----------
+  // ✅ 1) Installer le listener global de setup AU DÉMARRAGE
+  try {
+    ensureGlobalSetupListener(client);
+    console.log("[SETUP] Global listener prêt.");
+  } catch (e) {
+    console.error("[SETUP] Impossible d'installer le listener global.", e);
+  }
+
+  // ✅ 2) Automation runner
   try {
     startAutomationRunner(client, {
       loopMs: 20_000,
       scanLimit: 300,
       throttleMsPseudo: 850,
       throttleMsCheck: 0,
-      throttleMsRappel: 650, // ✅ aligné runner.js (rappel)
+      throttleMsRappel: 650,
       runOnStart: true,
     });
 
@@ -90,7 +98,7 @@ client.once(Events.ClientReady, () => {
 });
 
 // ---------- Interactions (slash commands ONLY) ----------
-// ⚠️ On laisse les buttons/select/modals aux listeners globaux (ex: setup.js)
+// ⚠️ Buttons/select/modals gérés par listeners globaux (ex: setup.js)
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!interaction.isChatInputCommand()) return;
@@ -99,13 +107,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!cmd) {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction
-          .reply({ content: "⚠️ Commande inconnue.", flags: MessageFlags.Ephemeral })
-          .catch(() => {});
+        await interaction.reply({ content: "⚠️ Commande inconnue.", flags: MessageFlags.Ephemeral }).catch(() => {});
       }
       return;
     }
 
+    // Note: pas besoin de passer client, mais si tes commandes l'attendent, OK.
     await cmd.execute(interaction, client);
   } catch (e) {
     console.error("[INTERACTION_ERROR]", e);
@@ -114,13 +121,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.deferred) {
         await interaction.editReply({ content: "⚠️ Erreur interaction." }).catch(() => {});
       } else if (!interaction.replied) {
-        await interaction
-          .reply({ content: "⚠️ Erreur interaction.", flags: MessageFlags.Ephemeral })
-          .catch(() => {});
+        await interaction.reply({ content: "⚠️ Erreur interaction.", flags: MessageFlags.Ephemeral }).catch(() => {});
       } else {
-        await interaction
-          .followUp({ content: "⚠️ Erreur interaction.", flags: MessageFlags.Ephemeral })
-          .catch(() => {});
+        await interaction.followUp({ content: "⚠️ Erreur interaction.", flags: MessageFlags.Ephemeral }).catch(() => {});
       }
     } catch {}
   }
