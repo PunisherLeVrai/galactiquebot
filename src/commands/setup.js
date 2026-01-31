@@ -55,22 +55,8 @@ const ICON = {
 const DAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const DAY_INDEX = { Lun: 0, Mar: 1, Mer: 2, Jeu: 3, Ven: 4, Sam: 5, Dim: 6 };
 
-// presets (max 12)
-const PRESET_TIMES = [
-  "17:10",
-  "18:10",
-  "19:10",
-  "20:10",
-  "20:45",
-  "21:00",
-  "21:10",
-  "21:20",
-  "21:40",
-  "22:00",
-  "22:10",
-  "22:20",
-  "22:40",
-];
+// ✅ presets (24 options) — 00:00 -> 23:00 (le select reste limité à max 12 valeurs)
+const PRESET_TIMES = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
 
 function isStaff(member, cfg) {
   if (!member) return false;
