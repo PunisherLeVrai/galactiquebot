@@ -111,11 +111,17 @@
             "12:00",
             "17:00"
           ]
+        },
+        "rappel": {
+          "enabled": true,
+          "times": [
+            "12:00"
+          ]
         }
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-01-28T20:58:01.274Z",
-      "updatedAt": "2026-01-28T20:58:01.274Z",
+      "setupAt": "2026-01-31T01:03:17.748Z",
+      "updatedAt": "2026-01-31T01:03:17.749Z",
       "staffRoleId": "1393784275853246666"
     },
     "1410246320324870217": {
@@ -151,6 +157,10 @@
           "minute": 10
         },
         "checkDispo": {
+          "enabled": false,
+          "times": []
+        },
+        "rappel": {
           "enabled": false,
           "times": []
         }
