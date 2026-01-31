@@ -126,18 +126,18 @@
     },
     "1410246320324870217": {
       "botLabel": "XIG BLAUGRANA FC Staff",
-      "disposChannelId": "1441625985559691304",
+      "disposChannelId": "1466965199897624829",
       "staffReportsChannelId": "1448731756478857337",
       "pseudoScanChannelId": null,
-      "checkDispoChannelId": null,
+      "checkDispoChannelId": "1466965199897624829",
       "dispoMessageIds": [
+        "1466974241504100362",
+        "1466974247158153430",
+        "1466974253130846340",
+        "1466974257996234806",
         null,
         null,
-        null,
-        null,
-        null,
-        null,
-        null
+        "1466974230993178764"
       ],
       "staffRoleIds": [
         "1414648635437617263",
@@ -157,17 +157,22 @@
           "minute": 10
         },
         "checkDispo": {
-          "enabled": false,
-          "times": []
+          "enabled": true,
+          "times": [
+            "12:00",
+            "19:00"
+          ]
         },
         "rappel": {
-          "enabled": false,
-          "times": []
+          "enabled": true,
+          "times": [
+            "12:00"
+          ]
         }
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-01-26T17:23:57.099Z",
-      "updatedAt": "2026-01-26T17:23:57.100Z",
+      "setupAt": "2026-01-31T01:58:46.471Z",
+      "updatedAt": "2026-01-31T01:58:46.472Z",
       "staffRoleId": "1414648635437617263"
     }
   }
