@@ -262,10 +262,7 @@ async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850
       }
 
       if (storedCount > 0) {
-        importAllPseudos(
-          { version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } },
-          { replace: false }
-        );
+        importAllPseudos({ version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } }, { replace: false });
       }
 
       scanned = true;
@@ -378,9 +375,9 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     .setColor(0x5865f2)
     .setDescription(
       `Salon : <#${disposChannelId}>\n` +
-      `Présents/Absents : **tous** les répondants (✅/❌)\n` +
-      `Sans réaction : rôles Joueurs (👟)\n` +
-      `Joueurs détectés : **${playerIds.size}**`
+        `Présents/Absents : **tous** les répondants (✅/❌)\n` +
+        `Sans réaction : rôles Joueurs (👟)\n` +
+        `Joueurs détectés : **${playerIds.size}**`
     )
     .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -403,8 +400,7 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
   const noRes = await collectReactionUserIdsStrong(msg, "❌");
 
   const bothUnavailable =
-    !okRes.ok && okRes.reason === "reactions_unavailable" &&
-    !noRes.ok && noRes.reason === "reactions_unavailable";
+    !okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable";
 
   if (bothUnavailable) {
     embed.addFields({
@@ -434,10 +430,10 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
   embed.setDescription(
     `Salon : <#${disposChannelId}>\n` +
-    `Présents/Absents : **tous** les répondants (✅/❌)\n` +
-    `Sans réaction : rôles Joueurs (👟)\n` +
-    `Joueurs détectés : **${playerIds.size}**` +
-    warn
+      `Présents/Absents : **tous** les répondants (✅/❌)\n` +
+      `Sans réaction : rôles Joueurs (👟)\n` +
+      `Joueurs détectés : **${playerIds.size}**` +
+      warn
   );
 
   embed.addFields(
@@ -454,7 +450,7 @@ async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
 // --------------------
 // RAPPEL_DISPO — job auto (aligné /setup)
-// -> envoi dans staffReportsChannelId
+// ✅ CHANGÉ: envoi dans le salon DISPO (et non staffReportsChannelId)
 // -> rappel UNIQUEMENT pour joueurs sans réaction
 // --------------------
 function buildMessageLink(guildId, channelId, messageId) {
@@ -465,9 +461,7 @@ function buildMessageLink(guildId, channelId, messageId) {
 async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
   if (!guild) return { ok: false, reason: "no_guild" };
 
-  const reportChannelId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
-  if (!reportChannelId) return { ok: false, reason: "no_staff_reports_channel" };
-
+  // ✅ salon dispo = salon d'envoi du rappel
   const disposChannelId = resolveDispoChannelId(cfg);
   if (!disposChannelId) return { ok: false, reason: "no_dispo_channel" };
 
@@ -475,9 +469,6 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
   const idx = dayIndexFromDate(new Date());
   const dayLabel = DAYS[idx];
   const mid = messageIds[idx];
-
-  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
-  if (!reportChannel || !reportChannel.isTextBased?.()) return { ok: false, reason: "invalid_report_channel" };
 
   const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
   if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
@@ -500,13 +491,14 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
 
   const msg = await safeFetchMessage(dispoChannel, mid);
   if (!msg) {
-    const emb = new EmbedBuilder()
-      .setTitle(`⏰ Rappel Dispo — ${dayLabel}`)
-      .setColor(0x5865f2)
-      .setDescription(`Message introuvable (ID: \`${mid}\`) dans <#${disposChannelId}>.`)
-      .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+    await dispoChannel
+      .send({
+        content:
+          `⚠️ **Rappel Dispo — ${dayLabel}**\n` +
+          `Message introuvable (ID: \`${mid}\`). Vérifie /setup → IDs (Lun..Dim).`,
+      })
+      .catch(() => null);
 
-    await reportChannel.send({ embeds: [emb] }).catch(() => null);
     if (throttleMs) await sleep(throttleMs);
     return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [] };
   }
@@ -515,24 +507,18 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
   const noRes = await collectReactionUserIdsStrong(msg, "❌");
 
   const bothUnavailable =
-    !okRes.ok && okRes.reason === "reactions_unavailable" &&
-    !noRes.ok && noRes.reason === "reactions_unavailable";
+    !okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable";
 
   if (bothUnavailable) {
-    const emb = new EmbedBuilder()
-      .setTitle(`🚫 Rappel Dispo — ${dayLabel}`)
-      .setColor(0x5865f2)
-      .setDescription(
-        "Impossible de lire les réactions (permissions/intents/cache).\n" +
-          "Vérifie: **ViewChannel + ReadMessageHistory** et l’intent **GuildMessageReactions**."
-      )
-      .addFields(
-        { name: "Message", value: `\`${mid}\``, inline: true },
-        { name: "Salon", value: `<#${disposChannelId}>`, inline: true }
-      )
-      .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+    await dispoChannel
+      .send({
+        content:
+          `🚫 **Rappel Dispo — ${dayLabel}**\n` +
+          `Impossible de lire les réactions (permissions/intents/cache).\n` +
+          `Vérifie: **ViewChannel + ReadMessageHistory** sur <#${disposChannelId}> + intent **GuildMessageReactions**.`,
+      })
+      .catch(() => null);
 
-    await reportChannel.send({ embeds: [emb] }).catch(() => null);
     if (throttleMs) await sleep(throttleMs);
     return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true, missing: [] };
   }
@@ -556,7 +542,7 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     (link ? `\n➡️ ${link}` : "") +
     `\n\n${mentionList(missingPlayers, { max: 60, empty: "—" })}`;
 
-  await reportChannel
+  await dispoChannel
     .send({
       content,
       allowedMentions: { users: missingPlayers, roles: [], repliedUser: false },
@@ -564,18 +550,6 @@ async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
     .catch(() => null);
 
   if (throttleMs) await sleep(throttleMs);
-
-  const emb = new EmbedBuilder()
-    .setTitle(`⏰ Rappel Dispo — ${dayLabel}`)
-    .setColor(0x5865f2)
-    .setDescription(
-      `Salon Dispo : <#${disposChannelId}>\n` +
-        `Message : \`${mid}\`\n` +
-        `Cibles (joueurs sans réaction) : **${missingPlayers.length}**`
-    )
-    .setFooter({ text: "XIG BLAUGRANA FC Staff" });
-
-  await reportChannel.send({ embeds: [emb] }).catch(() => null);
 
   return { ok: true, dayIndex: idx, dayLabel, mid, missing: missingPlayers, sent: true };
 }
@@ -630,9 +604,7 @@ function startAutomationRunner(client, opts = {}) {
 
         // ---------- PSEUDO ----------
         if (cfg?.automations?.pseudo?.enabled === true) {
-          const pseudoMinute = Number.isInteger(cfg?.automations?.pseudo?.minute)
-            ? cfg.automations.pseudo.minute
-            : 10;
+          const pseudoMinute = Number.isInteger(cfg?.automations?.pseudo?.minute) ? cfg.automations.pseudo.minute : 10;
 
           if (mm === pseudoMinute) {
             const key = `${guild.id}:pseudo`;
