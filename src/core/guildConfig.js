@@ -14,6 +14,10 @@
 // ✅ compat anciennes clés (staffRoleId, playerRoleId) + ancien format posts [{roleId,label}]
 // ✅ compat legacy reminderDispo -> rappel (enabled + times uniquement)
 // ✅ utilitaires export/import/reset
+//
+// ✅ NEW:
+// - botLabel (nom du bot, default: "XIG Bot")
+// - botIconUrl (url image, optionnel)
 
 const fs = require("fs");
 const path = require("path");
@@ -31,7 +35,9 @@ const DEFAULT_DATA = { version: 1, guilds: {} };
 // Defaults
 // -----------
 const DEFAULT_GUILD = {
-  botLabel: "XIG BLAUGRANA FC Staff",
+  // ✅ branding
+  botLabel: "XIG Bot",
+  botIconUrl: null,
 
   // salons
   disposChannelId: null,
@@ -122,6 +128,28 @@ function uniqIds(arr, { max = null } = {}) {
     if (typeof max === "number" && out.length >= max) break;
   }
   return out;
+}
+
+// --------------------
+// ✅ Branding helpers
+// --------------------
+function clampText(v, max = 64) {
+  const s = String(v ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.slice(0, max);
+}
+
+function normalizeBotLabel(v) {
+  const s = clampText(v, 64);
+  return s || DEFAULT_GUILD.botLabel;
+}
+
+function normalizeBotIconUrl(v) {
+  const s = clampText(v, 512);
+  if (!s) return null;
+  // on accepte URL(s) et aussi les liens discord cdn
+  if (/^https?:\/\/\S+/i.test(s)) return s;
+  return null;
 }
 
 // --------------------
@@ -277,6 +305,10 @@ function normalizeGuild(cfg) {
   const c = cfg && typeof cfg === "object" ? cfg : {};
   const out = { ...DEFAULT_GUILD, ...c };
 
+  // ✅ branding
+  out.botLabel = normalizeBotLabel(c.botLabel);
+  out.botIconUrl = normalizeBotIconUrl(c.botIconUrl);
+
   // ✅ automations (simple)
   out.automations = normalizeAutomations(c.automations);
 
@@ -325,6 +357,10 @@ function upsertGuildConfig(guildId, patch) {
   const current = normalizeGuild(data.guilds[gid] || {});
   const p = patch && typeof patch === "object" ? patch : {};
 
+  // ✅ branding (merge + normalisation)
+  const botLabel = Object.prototype.hasOwnProperty.call(p, "botLabel") ? normalizeBotLabel(p.botLabel) : current.botLabel;
+  const botIconUrl = Object.prototype.hasOwnProperty.call(p, "botIconUrl") ? normalizeBotIconUrl(p.botIconUrl) : current.botIconUrl;
+
   const staffRoleIds = Array.isArray(p.staffRoleIds) ? p.staffRoleIds : current.staffRoleIds;
   const playerRoleIds = Array.isArray(p.playerRoleIds) ? p.playerRoleIds : current.playerRoleIds;
 
@@ -351,6 +387,8 @@ function upsertGuildConfig(guildId, patch) {
   const merged = normalizeGuild({
     ...current,
     ...p,
+    botLabel,
+    botIconUrl,
     staffRoleIds,
     playerRoleIds,
     postRoleIds,
