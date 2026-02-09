@@ -19,6 +19,13 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const stamp = (d = new Date()) =>
   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}_${pad2(d.getHours())}-${pad2(d.getMinutes())}`;
 
+function cleanOneLine(s, max = 80) {
+  return String(s || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
@@ -50,12 +57,19 @@ module.exports = {
       const cd = auto?.checkDispo || {};
       const rp = auto?.rappel || {};
 
+      const botLabel = cleanOneLine(g?.botLabel || "XIG Bot", 80);
+      const botIconUrl = cleanOneLine(g?.botIconUrl || "", 140);
+
       return interaction.reply({
         content:
           `✅ Export effectué.\n` +
           `Fichier : \`${filename}\`\n` +
           `Chemin interne : \`${CONFIG_PATH}\`\n` +
           `Guilds exportées: **${guildCount}**\n` +
+          `\n` +
+          `🤖 botLabel: **${botLabel}**\n` +
+          `🖼️ botIconUrl: ${botIconUrl ? botIconUrl : "—"}\n` +
+          `\n` +
           `checkDispoChannelId (ce serveur): **${hasCheckDispoCh ? "oui" : "non"}**\n` +
           `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**\n` +
           `automations.global: **${auto?.enabled ? "ON" : "OFF"}**\n` +
