@@ -48,7 +48,7 @@ module.exports = {
       const hasCheckDispoCh = !!g.checkDispoChannelId;
 
       const cd = auto?.checkDispo || {};
-      const rd = auto?.reminderDispo || {};
+      const rp = auto?.rappel || {};
 
       return interaction.reply({
         content:
@@ -60,7 +60,7 @@ module.exports = {
           `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**\n` +
           `automations.global: **${auto?.enabled ? "ON" : "OFF"}**\n` +
           `auto.checkDispo: **${cd?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(cd?.times) ? cd.times.length : 0}**\n` +
-          `auto.reminderDispo: **${rd?.enabled ? "ON" : "OFF"}** — mode: \`${rd?.mode || "channel"}\` — times: **${Array.isArray(rd?.times) ? rd.times.length : 0}**`,
+          `auto.rappel: **${rp?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(rp?.times) ? rp.times.length : 0}**`,
         files: [attachment],
         ephemeral: true,
       });
