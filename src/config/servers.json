@@ -2,7 +2,7 @@
   "version": 1,
   "guilds": {
     "1392639720491581551": {
-      "botLabel": "XIG BLAUGRANA FC Staff",
+      "botLabel": "XIG Bot",
       "disposChannelId": "1429059902852173936",
       "staffReportsChannelId": "1446471718943326259",
       "pseudoScanChannelId": "1464277188001136765",
@@ -125,7 +125,7 @@
       "staffRoleId": "1393784275853246666"
     },
     "1410246320324870217": {
-      "botLabel": "XIG BLAUGRANA FC Staff",
+      "botLabel": "XIG Bot",
       "disposChannelId": "1466965199897624829",
       "staffReportsChannelId": "1448731756478857337",
       "pseudoScanChannelId": null,
