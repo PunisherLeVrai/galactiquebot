@@ -2,8 +2,7 @@
   "version": 1,
   "guilds": {
     "1392639720491581551": {
-      "botLabel": "XIG INTER GALACTIQUE",
-      "botIconUrl": "https://discord.com/channels/1392639720491581551/1396457133305761864/1470411221894168600",
+      "botLabel": "XIG BLAUGRANA FC Staff",
       "disposChannelId": "1429059902852173936",
       "staffReportsChannelId": "1446471718943326259",
       "pseudoScanChannelId": "1464277188001136765",
@@ -121,13 +120,12 @@
         }
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-02-09T13:30:08.286Z",
-      "updatedAt": "2026-02-09T13:30:08.286Z",
+      "setupAt": "2026-01-31T01:03:17.748Z",
+      "updatedAt": "2026-01-31T01:03:17.749Z",
       "staffRoleId": "1393784275853246666"
     },
     "1410246320324870217": {
-      "botLabel": "XIG Bot",
-      "botIconUrl": null,
+      "botLabel": "XIG BLAUGRANA FC Staff",
       "disposChannelId": "1466965199897624829",
       "staffReportsChannelId": "1448731756478857337",
       "pseudoScanChannelId": null,
