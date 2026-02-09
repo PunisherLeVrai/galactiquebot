@@ -8,6 +8,8 @@
 // - Save = confirmation obligatoire (taper "CONFIRMER") ✅
 // + BotLabel + BotIconUrl configurables (page Bot) ✅
 // ✅ FIX: pas de troncature d’URL (512) + clamp dédié label (64)
+// ✅ FIX: defaults select menus robustes (pas de instanceof Builder)
+// ✅ FIX: validation URL image + rejet discord.com/channels/... (pas une image)
 // CommonJS — discord.js v14
 
 const {
@@ -60,7 +62,7 @@ const ICON = {
 const DAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const DAY_INDEX = { Lun: 0, Mar: 1, Mer: 2, Jeu: 3, Ven: 4, Sam: 5, Dim: 6 };
 
-// ✅ presets (24 options) — 00:00 -> 23:00 (le select reste limité à max 12 valeurs)
+// presets (24 options) — 00:00 -> 23:00 (select max 12 valeurs)
 const PRESET_TIMES = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
 
 const DEFAULT_BOT_LABEL = "XIG Bot";
@@ -160,7 +162,6 @@ function createRefreshQueue(fn) {
 }
 
 function parseScopeFromCustomId(customId) {
-  // format: "setup:xxx:<guildId>:<userId>"
   const s = String(customId || "");
   const parts = s.split(":");
   if (parts.length < 4) return null;
@@ -171,7 +172,7 @@ function parseScopeFromCustomId(customId) {
 }
 
 // --------------------
-// ✅ FIX: clamp séparé label (64) / url (512)
+// clamp séparé label (64) / url (512)
 // --------------------
 function clampLabel(s, { fallback = DEFAULT_BOT_LABEL } = {}) {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
@@ -184,14 +185,21 @@ function clampUrlText(s) {
   return t ? t.slice(0, 512) : "";
 }
 
+/**
+ * Normalise URL image:
+ * - doit être http(s)
+ * - rejette les liens "discord.com/channels/..." (pas une image)
+ * - accepte cdn.discordapp.com / media.discordapp.net / n’importe quel host http(s)
+ */
 function normalizeUrlOrNull(s) {
   const t = clampUrlText(s);
   if (!t) return null;
   if (!/^https?:\/\/\S+/i.test(t)) return null;
-  return t; // déjà 512 max
+  if (/^https?:\/\/(www\.)?discord\.com\/channels\//i.test(t)) return null; // pas une image
+  return t;
 }
 
-// ✅ IMPORTANT: tous les boutons qui ouvrent un modal doivent être exemptés de deferUpdate()
+// boutons qui ouvrent un modal => pas de deferUpdate
 function isModalOpenButtonCustomId(customId) {
   const s = String(customId || "");
   return (
@@ -253,7 +261,7 @@ function buildEmbed(guild, draft, { page = "channels", dirty = false } = {}) {
         name: `${ICON.bot} Bot`,
         value: [
           `${ICON.bot} Nom: **${botLabel}**`,
-          `${ICON.image} Image: ${botIconUrl ? botIconUrl : "—"}`,
+          `${ICON.image} Image: ${botIconUrl ? `\`${botIconUrl}\`` : "—"}`,
         ].join("\n"),
         inline: false,
       },
@@ -288,9 +296,7 @@ function buildEmbed(guild, draft, { page = "channels", dirty = false } = {}) {
     .setFooter({ text: botLabel });
 
   if (botIconUrl) {
-    try {
-      emb.setThumbnail(botIconUrl);
-    } catch {}
+    try { emb.setThumbnail(botIconUrl); } catch {}
   }
 
   return emb;
@@ -299,7 +305,7 @@ function buildEmbed(guild, draft, { page = "channels", dirty = false } = {}) {
 // --------------------
 // Sessions + global listener
 // --------------------
-const SETUP_SESSIONS = new Map(); // key: "<guildId>:<userId>" => session
+const SETUP_SESSIONS = new Map(); // key: "<guildId>:<userId>"
 let GLOBAL_SETUP_LISTENER_READY = false;
 
 function ensureGlobalSetupListener(client) {
@@ -329,15 +335,15 @@ function ensureGlobalSetupListener(client) {
 
       const session = SETUP_SESSIONS.get(scope);
       if (!session) {
-        // session expirée => éviter interaction failed
+        // session expirée => éviter "interaction failed"
         try {
           if (isComponent && !i.deferred && !i.replied) await i.deferUpdate().catch(() => {});
         } catch {}
         try {
-          if (!i.replied) {
-            await i
-              .followUp({ content: "⚠️ Session /setup expirée. Relance /setup.", flags: MessageFlags.Ephemeral })
-              .catch(() => {});
+          if (!i.replied && !i.deferred) {
+            await i.reply({ content: "⚠️ Session /setup expirée. Relance /setup.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          } else {
+            await i.followUp({ content: "⚠️ Session /setup expirée. Relance /setup.", flags: MessageFlags.Ephemeral }).catch(() => {});
           }
         } catch {}
         return;
@@ -346,7 +352,7 @@ function ensureGlobalSetupListener(client) {
       if (String(i.user?.id) !== String(session.userId)) return;
       if (String(i.guildId) !== String(session.guildId)) return;
 
-      // ACK ASAP (sauf boutons qui vont ouvrir un modal)
+      // ACK ASAP (sauf boutons qui ouvrent un modal)
       if (isComponent && !isModalOpenButtonCustomId(customId)) {
         if (!i.deferred && !i.replied) await i.deferUpdate().catch(() => {});
       }
@@ -432,14 +438,10 @@ function buildBotInfoModal(customId, { botLabel, botIconUrl }) {
     .setLabel("URL image (https://...) — optionnel")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
-    .setPlaceholder("https://exemple.com/logo.png")
+    .setPlaceholder("https://cdn.discordapp.com/...png")
     .setValue(clampUrlText(botIconUrl || ""));
 
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(name),
-    new ActionRowBuilder().addComponents(icon)
-  );
-
+  modal.addComponents(new ActionRowBuilder().addComponents(name), new ActionRowBuilder().addComponents(icon));
   return modal;
 }
 
@@ -466,26 +468,21 @@ module.exports.execute = async function execute(interaction) {
 
     const saved = getGuildConfig(guildId) || {};
     if (!isStaff(interaction.member, saved)) {
-      return interaction
-        .reply({ content: `${ICON.no} Accès réservé au STAFF.`, flags: MessageFlags.Ephemeral })
-        .catch(() => {});
+      return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
 
     const legacyPostRoleIds = Array.isArray(saved.posts) ? saved.posts.map((p) => p?.roleId).filter(Boolean) : [];
 
     const draft = {
-      // ✅ BOT
       botLabel: clampLabel(saved.botLabel, { fallback: DEFAULT_BOT_LABEL }),
       botIconUrl: saved.botIconUrl ? String(saved.botIconUrl) : null,
 
-      // salons
       disposChannelId: saved.disposChannelId || null,
       staffReportsChannelId: saved.staffReportsChannelId || null,
       pseudoScanChannelId: saved.pseudoScanChannelId || null,
       checkDispoChannelId: saved.checkDispoChannelId || null,
       dispoMessageIds: normalizeDispoMessageIds(saved.dispoMessageIds),
 
-      // roles
       staffRoleIds: uniqIds(
         Array.isArray(saved.staffRoleIds) ? saved.staffRoleIds : saved.staffRoleId ? [saved.staffRoleId] : [],
         25
@@ -493,7 +490,6 @@ module.exports.execute = async function execute(interaction) {
       playerRoleIds: uniqIds(Array.isArray(saved.playerRoleIds) ? saved.playerRoleIds : [], 25),
       postRoleIds: uniqIds(Array.isArray(saved.postRoleIds) ? saved.postRoleIds : legacyPostRoleIds, 25),
 
-      // automations
       automations: {
         enabled: !!saved?.automations?.enabled,
         pseudo: {
@@ -517,37 +513,30 @@ module.exports.execute = async function execute(interaction) {
     // kill old session
     const prev = SETUP_SESSIONS.get(scope);
     if (prev) {
-      try {
-        await prev.end("replaced").catch(() => {});
-      } catch {}
+      try { await prev.end("replaced").catch(() => {}); } catch {}
     }
 
     const CID = {
       page: `setup:page:${scope}`,
 
-      // bot page
       botInfoBtn: `setup:btn:botInfo:${scope}`,
       botInfoModal: `setup:modal:botInfo:${scope}`,
 
-      // channels
       dispos: `setup:ch:dispos:${scope}`,
       staffReports: `setup:ch:staff:${scope}`,
       pseudoScan: `setup:ch:pseudoScan:${scope}`,
       checkDispo: `setup:ch:checkDispo:${scope}`,
 
-      // roles
       staff: `setup:role:staff:${scope}`,
       players: `setup:role:players:${scope}`,
       posts: `setup:role:posts:${scope}`,
 
-      // ids
       idsAButton: `setup:btn:idsA:${scope}`,
       idsBButton: `setup:btn:idsB:${scope}`,
       idsClear: `setup:btn:idsClear:${scope}`,
       idsAModal: `setup:modal:idsA:${scope}`,
       idsBModal: `setup:modal:idsB:${scope}`,
 
-      // automations
       autoTab: `setup:auto:tab:${scope}`,
       autoGlobal: `setup:btn:autoGlobal:${scope}`,
       autoPseudo: `setup:btn:autoPseudo:${scope}`,
@@ -562,7 +551,6 @@ module.exports.execute = async function execute(interaction) {
 
       clearTabTimes: `setup:btn:clearTabTimes:${scope}`,
 
-      // actions
       preview: `setup:btn:preview:${scope}`,
       confirmSaveBtn: `setup:btn:confirmSave:${scope}`,
       confirmSaveModal: `setup:modal:confirmSave:${scope}`,
@@ -570,15 +558,13 @@ module.exports.execute = async function execute(interaction) {
       cancel: `setup:btn:cancel:${scope}`,
     };
 
-    let page = "bot"; // bot | channels | roles | ids | automations
-    let autoTab = "check"; // check | rappel
+    let page = "bot";       // bot | channels | roles | ids | automations
+    let autoTab = "check";  // check | rappel
     let dirty = false;
 
     const preset = PRESET_TIMES.map(normalizeTimeStr).filter(Boolean);
 
-    const markDirty = () => {
-      dirty = true;
-    };
+    const markDirty = () => { dirty = true; };
 
     function rowPageSelect() {
       return new ActionRowBuilder().addComponents(
@@ -597,30 +583,14 @@ module.exports.execute = async function execute(interaction) {
       );
     }
 
-    // ✅ row actions adaptative pour rester à 5 rows max sur la page automations
     function rowActions() {
       if (page === "automations") {
         return new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(CID.pseudoMinuteBtn)
-            .setLabel(`${ICON.clock} Minute`)
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId(CID.clearTabTimes)
-            .setLabel(`${ICON.broom} Clear horaires`)
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(CID.confirmSaveBtn)
-            .setLabel(`${ICON.confirm} Confirmer`)
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId(CID.reset)
-            .setLabel(`${ICON.reset} Reset`)
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(CID.cancel)
-            .setLabel(`${ICON.cancel} Annuler`)
-            .setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId(CID.pseudoMinuteBtn).setLabel(`${ICON.clock} Minute`).setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(CID.clearTabTimes).setLabel(`${ICON.broom} Clear horaires`).setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(CID.confirmSaveBtn).setLabel(`${ICON.confirm} Confirmer`).setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(CID.reset).setLabel(`${ICON.reset} Reset`).setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(CID.cancel).setLabel(`${ICON.cancel} Annuler`).setStyle(ButtonStyle.Danger)
         );
       }
 
@@ -633,77 +603,63 @@ module.exports.execute = async function execute(interaction) {
     }
 
     function componentsForPage() {
-      // Toujours 2 blocs: page select + actions
       const rows = [rowPageSelect()];
 
       if (page === "bot") {
         rows.push(
           new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(CID.botInfoBtn)
-              .setLabel(`${ICON.edit} Nom + Image`)
-              .setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId(CID.botInfoBtn).setLabel(`${ICON.edit} Nom + Image`).setStyle(ButtonStyle.Primary)
           )
         );
-      } else if (page === "channels") {
+      }
+
+      if (page === "channels") {
         rows.push(
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
               .setCustomId(CID.dispos)
               .setPlaceholder(`${ICON.dispos} Salon Dispos (requis)`)
-              .setMinValues(0)
-              .setMaxValues(1)
+              .setMinValues(0).setMaxValues(1)
               .addChannelTypes(ChannelType.GuildText)
           ),
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
               .setCustomId(CID.staffReports)
               .setPlaceholder(`${ICON.staffReports} Salon Staff (requis)`)
-              .setMinValues(0)
-              .setMaxValues(1)
+              .setMinValues(0).setMaxValues(1)
               .addChannelTypes(ChannelType.GuildText)
           ),
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
               .setCustomId(CID.pseudoScan)
               .setPlaceholder(`${ICON.pseudoScan} Salon Pseudos (opt)`)
-              .setMinValues(0)
-              .setMaxValues(1)
+              .setMinValues(0).setMaxValues(1)
               .addChannelTypes(ChannelType.GuildText)
           )
         );
-      } else if (page === "roles") {
+      }
+
+      if (page === "roles") {
         rows.push(
           new ActionRowBuilder().addComponents(
-            new RoleSelectMenuBuilder()
-              .setCustomId(CID.staff)
-              .setPlaceholder(`${ICON.staff} Rôles Staff (>=1 requis)`)
-              .setMinValues(0)
-              .setMaxValues(25)
+            new RoleSelectMenuBuilder().setCustomId(CID.staff).setPlaceholder(`${ICON.staff} Rôles Staff (>=1 requis)`).setMinValues(0).setMaxValues(25)
           ),
           new ActionRowBuilder().addComponents(
-            new RoleSelectMenuBuilder()
-              .setCustomId(CID.players)
-              .setPlaceholder(`${ICON.players} Rôles Joueurs (>=1 requis)`)
-              .setMinValues(0)
-              .setMaxValues(25)
+            new RoleSelectMenuBuilder().setCustomId(CID.players).setPlaceholder(`${ICON.players} Rôles Joueurs (>=1 requis)`).setMinValues(0).setMaxValues(25)
           ),
           new ActionRowBuilder().addComponents(
-            new RoleSelectMenuBuilder()
-              .setCustomId(CID.posts)
-              .setPlaceholder(`${ICON.postes} Rôles Postes (0..25)`)
-              .setMinValues(0)
-              .setMaxValues(25)
+            new RoleSelectMenuBuilder().setCustomId(CID.posts).setPlaceholder(`${ICON.postes} Rôles Postes (0..25)`).setMinValues(0).setMaxValues(25)
           )
         );
-      } else if (page === "ids") {
+      }
+
+      if (page === "ids") {
         rows.push(
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
               .setCustomId(CID.checkDispo)
               .setPlaceholder(`${ICON.checkDispo} Salon CheckDispo (opt)`)
-              .setMinValues(0)
-              .setMaxValues(1)
+              .setMinValues(0).setMaxValues(1)
               .addChannelTypes(ChannelType.GuildText)
           ),
           new ActionRowBuilder().addComponents(
@@ -712,51 +668,34 @@ module.exports.execute = async function execute(interaction) {
             new ButtonBuilder().setCustomId(CID.idsClear).setLabel(`${ICON.broom} Clear IDs`).setStyle(ButtonStyle.Secondary)
           )
         );
-      } else if (page === "automations") {
-        // ✅ IMPORTANT: ne pas dépasser 5 rows total.
-        // rows[0] = page select
-        rows.push(
-          // Row 2: Toggles
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(CID.autoGlobal)
-              .setLabel("Global")
-              .setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-            new ButtonBuilder()
-              .setCustomId(CID.autoPseudo)
-              .setLabel("Pseudo")
-              .setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-            new ButtonBuilder()
-              .setCustomId(CID.autoCheck)
-              .setLabel("CheckDispo")
-              .setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
-            new ButtonBuilder()
-              .setCustomId(CID.autoRappel)
-              .setLabel("Rappel")
-              .setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary)
-          ),
+      }
 
-          // Row 3: Choix onglet horaires
+      if (page === "automations") {
+        // ⚠️ total rows <= 5 (row0 page + row1 toggles + row2 tab + row3 select + row4 actions)
+        rows.push(
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(CID.autoGlobal).setLabel("Global").setStyle(draft.automations.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(CID.autoPseudo).setLabel("Pseudo").setStyle(draft.automations.pseudo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(CID.autoCheck).setLabel("CheckDispo").setStyle(draft.automations.checkDispo.enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(CID.autoRappel).setLabel("Rappel").setStyle(draft.automations.rappel.enabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+          ),
           new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder()
               .setCustomId(CID.autoTab)
               .setPlaceholder("Configurer horaires…")
-              .setMinValues(1)
-              .setMaxValues(1)
+              .setMinValues(1).setMaxValues(1)
               .addOptions(
                 { label: "Horaires CheckDispo", value: "check", default: autoTab === "check" },
                 { label: "Horaires Rappel", value: "rappel", default: autoTab === "rappel" }
               )
           ),
-
-          // Row 4: Select horaires (selon autoTab)
           autoTab === "check"
             ? new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder()
                   .setCustomId(CID.checkTimes)
                   .setPlaceholder(`${ICON.times} Horaires CheckDispo (max 12)`)
                   .setMinValues(0)
-                  .setMaxValues(Math.min(12, preset.length))
+                  .setMaxValues(12)
                   .addOptions(
                     preset.map((t) => ({
                       label: t,
@@ -770,7 +709,7 @@ module.exports.execute = async function execute(interaction) {
                   .setCustomId(CID.rappelTimes)
                   .setPlaceholder(`${ICON.rappel} Horaires Rappel (max 12)`)
                   .setMinValues(0)
-                  .setMaxValues(Math.min(12, preset.length))
+                  .setMaxValues(12)
                   .addOptions(
                     preset.map((t) => ({
                       label: t,
@@ -786,25 +725,29 @@ module.exports.execute = async function execute(interaction) {
       return rows;
     }
 
+    /**
+     * ✅ Defaults robustes:
+     * - on ne dépend PAS de instanceof Builder (fragile suivant versions)
+     * - on teste la présence de méthodes setDefaultChannels / setDefaultRoles
+     */
     function applyDefaultsToRows(rows) {
       try {
         for (const row of rows) {
-          const c = row.components?.[0];
-          if (!c) continue;
+          for (const c of row.components || []) {
+            const cid = c?.data?.custom_id;
 
-          // Channel selects
-          if (c instanceof ChannelSelectMenuBuilder) {
-            if (c.data.custom_id === CID.dispos) c.setDefaultChannels(draft.disposChannelId ? [draft.disposChannelId] : []);
-            if (c.data.custom_id === CID.staffReports) c.setDefaultChannels(draft.staffReportsChannelId ? [draft.staffReportsChannelId] : []);
-            if (c.data.custom_id === CID.pseudoScan) c.setDefaultChannels(draft.pseudoScanChannelId ? [draft.pseudoScanChannelId] : []);
-            if (c.data.custom_id === CID.checkDispo) c.setDefaultChannels(draft.checkDispoChannelId ? [draft.checkDispoChannelId] : []);
-          }
+            if (typeof c?.setDefaultChannels === "function") {
+              if (cid === CID.dispos) c.setDefaultChannels(draft.disposChannelId ? [draft.disposChannelId] : []);
+              if (cid === CID.staffReports) c.setDefaultChannels(draft.staffReportsChannelId ? [draft.staffReportsChannelId] : []);
+              if (cid === CID.pseudoScan) c.setDefaultChannels(draft.pseudoScanChannelId ? [draft.pseudoScanChannelId] : []);
+              if (cid === CID.checkDispo) c.setDefaultChannels(draft.checkDispoChannelId ? [draft.checkDispoChannelId] : []);
+            }
 
-          // Role selects
-          if (c instanceof RoleSelectMenuBuilder) {
-            if (c.data.custom_id === CID.staff) c.setDefaultRoles((draft.staffRoleIds || []).slice(0, 25));
-            if (c.data.custom_id === CID.players) c.setDefaultRoles((draft.playerRoleIds || []).slice(0, 25));
-            if (c.data.custom_id === CID.posts) c.setDefaultRoles((draft.postRoleIds || []).slice(0, 25));
+            if (typeof c?.setDefaultRoles === "function") {
+              if (cid === CID.staff) c.setDefaultRoles((draft.staffRoleIds || []).slice(0, 25));
+              if (cid === CID.players) c.setDefaultRoles((draft.playerRoleIds || []).slice(0, 25));
+              if (cid === CID.posts) c.setDefaultRoles((draft.postRoleIds || []).slice(0, 25));
+            }
           }
         }
       } catch {}
@@ -823,29 +766,29 @@ module.exports.execute = async function execute(interaction) {
     const doRefresh = async () => {
       const rows = componentsForPage();
       applyDefaultsToRows(rows);
-      await interaction
-        .editReply({
-          embeds: [buildEmbed(guild, draft, { page, dirty })],
-          components: rows,
-        })
-        .catch(() => {});
+      await interaction.editReply({
+        embeds: [buildEmbed(guild, draft, { page, dirty })],
+        components: rows,
+      }).catch(() => {});
     };
 
     const refresh = createRefreshQueue(doRefresh);
 
     let ended = false;
-    async function end(reason = "end") {
+    async function end() {
       if (ended) return;
       ended = true;
       SETUP_SESSIONS.delete(scope);
       try {
-        await interaction
-          .editReply({ content: ICON.time, embeds: [buildEmbed(guild, draft, { page, dirty })], components: [] })
-          .catch(() => {});
+        await interaction.editReply({
+          content: ICON.time,
+          embeds: [buildEmbed(guild, draft, { page, dirty })],
+          components: [],
+        }).catch(() => {});
       } catch {}
     }
 
-    const timeout = setTimeout(() => end("timeout").catch(() => {}), 10 * 60 * 1000);
+    const timeout = setTimeout(() => end().catch(() => {}), 10 * 60 * 1000);
     timeout.unref?.();
 
     async function handle(i) {
@@ -856,14 +799,11 @@ module.exports.execute = async function execute(interaction) {
           const iconRaw = clampUrlText(i.fields.getTextInputValue("botIconUrl"));
           const icon = iconRaw ? normalizeUrlOrNull(iconRaw) : null;
 
-          // Si URL fournie mais invalide => on refuse pour éviter un mauvais état
           if (iconRaw && !icon) {
-            await i
-              .reply({
-                content: `⚠️ URL invalide. Mets une URL qui commence par \`http://\` ou \`https://\` (ou laisse vide).`,
-                flags: MessageFlags.Ephemeral,
-              })
-              .catch(() => {});
+            await i.reply({
+              content: `⚠️ URL invalide. Mets une URL http(s) d’image (évite \`discord.com/channels/...\`) ou laisse vide.`,
+              flags: MessageFlags.Ephemeral,
+            }).catch(() => {});
             return;
           }
 
@@ -911,9 +851,7 @@ module.exports.execute = async function execute(interaction) {
         if (i.customId === CID.confirmSaveModal) {
           const txt = String(i.fields.getTextInputValue("confirm") || "").trim().toUpperCase();
           if (txt !== "CONFIRMER") {
-            await i
-              .reply({ content: "⚠️ Confirmation refusée. Tape exactement: `CONFIRMER`.", flags: MessageFlags.Ephemeral })
-              .catch(() => {});
+            await i.reply({ content: "⚠️ Confirmation refusée. Tape exactement: `CONFIRMER`.", flags: MessageFlags.Ephemeral }).catch(() => {});
             return;
           }
 
@@ -924,38 +862,30 @@ module.exports.execute = async function execute(interaction) {
             (draft.playerRoleIds || []).length > 0;
 
           if (!requiredOk) {
-            await i
-              .reply({ content: "⚠️ Setup incomplet (requis manquants).", flags: MessageFlags.Ephemeral })
-              .catch(() => {});
+            await i.reply({ content: "⚠️ Setup incomplet (requis manquants).", flags: MessageFlags.Ephemeral }).catch(() => {});
             return;
           }
 
           const legacyPosts = (draft.postRoleIds || []).map((roleId) => ({ roleId: String(roleId), label: "POSTE" }));
 
           upsertGuildConfig(guildId, {
-            // ✅ bot
             botLabel: clampLabel(draft.botLabel, { fallback: DEFAULT_BOT_LABEL }),
             botIconUrl: normalizeUrlOrNull(draft.botIconUrl),
 
-            // salons
             disposChannelId: draft.disposChannelId,
             staffReportsChannelId: draft.staffReportsChannelId,
             pseudoScanChannelId: draft.pseudoScanChannelId,
             checkDispoChannelId: draft.checkDispoChannelId,
 
-            // ids
             dispoMessageIds: normalizeDispoMessageIds(draft.dispoMessageIds),
 
-            // roles
             staffRoleIds: uniqIds(draft.staffRoleIds, 25),
             playerRoleIds: uniqIds(draft.playerRoleIds, 25),
             postRoleIds: uniqIds(draft.postRoleIds, 25),
 
-            // compat legacy
             staffRoleId: draft.staffRoleIds[0] || null,
             posts: legacyPosts,
 
-            // automations
             automations: {
               enabled: !!draft.automations.enabled,
               pseudo: {
@@ -978,7 +908,7 @@ module.exports.execute = async function execute(interaction) {
 
           dirty = false;
           await i.reply({ content: `${ICON.save} Sauvegardé.`, flags: MessageFlags.Ephemeral }).catch(() => {});
-          return end("saved");
+          return end();
         }
 
         return;
@@ -1039,9 +969,7 @@ module.exports.execute = async function execute(interaction) {
       if (i.customId === CID.preview) return refresh();
 
       if (i.customId === CID.botInfoBtn) {
-        return i
-          .showModal(buildBotInfoModal(CID.botInfoModal, { botLabel: draft.botLabel, botIconUrl: draft.botIconUrl }))
-          .catch(() => {});
+        return i.showModal(buildBotInfoModal(CID.botInfoModal, { botLabel: draft.botLabel, botIconUrl: draft.botIconUrl })).catch(() => {});
       }
 
       if (i.customId === CID.confirmSaveBtn) {
@@ -1074,7 +1002,7 @@ module.exports.execute = async function execute(interaction) {
         return refresh();
       }
 
-      if (i.customId === CID.cancel) return end("cancel");
+      if (i.customId === CID.cancel) return end();
 
       // IDs
       if (i.customId === CID.idsAButton) return i.showModal(buildIdsModalA(CID.idsAModal, draft.dispoMessageIds)).catch(() => {});
@@ -1105,10 +1033,8 @@ module.exports.execute = async function execute(interaction) {
       }
     }
 
-    // register session
     SETUP_SESSIONS.set(scope, { guildId, userId, handle, end });
 
-    // initial refresh
     refresh().catch(() => {});
   } catch {
     try {
