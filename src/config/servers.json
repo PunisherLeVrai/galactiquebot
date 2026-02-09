@@ -2,7 +2,8 @@
   "version": 1,
   "guilds": {
     "1392639720491581551": {
-      "botLabel": "XIG BLAUGRANA FC Staff",
+      "botLabel": "XIG Bot",
+      "botIconUrl": null,
       "disposChannelId": "1429059902852173936",
       "staffReportsChannelId": "1446471718943326259",
       "pseudoScanChannelId": "1464277188001136765",
@@ -42,82 +43,26 @@
         "1444317741505974333"
       ],
       "posts": [
-        {
-          "roleId": "1429389198531498085",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389245935779953",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389286742036560",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1444317466468810854",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389418958946346",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389494863532062",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389702842290206",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1444317534084923392",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389840767516794",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389901157236806",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1444317591781769217",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1429389946183090377",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1444317669859004518",
-          "label": "POSTE"
-        },
-        {
-          "roleId": "1444317741505974333",
-          "label": "POSTE"
-        }
+        { "roleId": "1429389198531498085", "label": "POSTE" },
+        { "roleId": "1429389245935779953", "label": "POSTE" },
+        { "roleId": "1429389286742036560", "label": "POSTE" },
+        { "roleId": "1444317466468810854", "label": "POSTE" },
+        { "roleId": "1429389418958946346", "label": "POSTE" },
+        { "roleId": "1429389494863532062", "label": "POSTE" },
+        { "roleId": "1429389702842290206", "label": "POSTE" },
+        { "roleId": "1444317534084923392", "label": "POSTE" },
+        { "roleId": "1429389840767516794", "label": "POSTE" },
+        { "roleId": "1429389901157236806", "label": "POSTE" },
+        { "roleId": "1444317591781769217", "label": "POSTE" },
+        { "roleId": "1429389946183090377", "label": "POSTE" },
+        { "roleId": "1444317669859004518", "label": "POSTE" },
+        { "roleId": "1444317741505974333", "label": "POSTE" }
       ],
       "automations": {
         "enabled": true,
-        "pseudo": {
-          "enabled": true,
-          "minute": 10
-        },
-        "checkDispo": {
-          "enabled": true,
-          "times": [
-            "12:00",
-            "17:00"
-          ]
-        },
-        "rappel": {
-          "enabled": true,
-          "times": [
-            "12:00"
-          ]
-        }
+        "pseudo": { "enabled": true, "minute": 10 },
+        "checkDispo": { "enabled": true, "times": ["12:00", "17:00"] },
+        "rappel": { "enabled": true, "times": ["12:00"] }
       },
       "setupBy": "448539638420733963",
       "setupAt": "2026-01-31T01:03:17.748Z",
@@ -125,7 +70,8 @@
       "staffRoleId": "1393784275853246666"
     },
     "1410246320324870217": {
-      "botLabel": "XIG BLAUGRANA FC Staff",
+      "botLabel": "XIG Bot",
+      "botIconUrl": null,
       "disposChannelId": "1466965199897624829",
       "staffReportsChannelId": "1448731756478857337",
       "pseudoScanChannelId": null,
@@ -152,23 +98,9 @@
       "posts": [],
       "automations": {
         "enabled": true,
-        "pseudo": {
-          "enabled": true,
-          "minute": 10
-        },
-        "checkDispo": {
-          "enabled": true,
-          "times": [
-            "12:00",
-            "19:00"
-          ]
-        },
-        "rappel": {
-          "enabled": true,
-          "times": [
-            "12:00"
-          ]
-        }
+        "pseudo": { "enabled": true, "minute": 10 },
+        "checkDispo": { "enabled": true, "times": ["12:00", "19:00"] },
+        "rappel": { "enabled": true, "times": ["12:00"] }
       },
       "setupBy": "448539638420733963",
       "setupAt": "2026-01-31T01:58:46.471Z",
