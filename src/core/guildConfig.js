@@ -31,7 +31,7 @@ const DEFAULT_DATA = { version: 1, guilds: {} };
 // Defaults
 // -----------
 const DEFAULT_GUILD = {
-  botLabel: "XIG BLAUGRANA FC Staff",
+  botLabel: "XIG Bot",
 
   // salons
   disposChannelId: null,
