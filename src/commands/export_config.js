@@ -2,7 +2,7 @@
 // Export complet servers.json — STAFF ONLY — ephemeral
 // CommonJS — discord.js v14
 
-const { SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder } = require("discord.js");
+const { SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder, MessageFlags } = require("discord.js");
 const { exportAllConfig, getGuildConfig, CONFIG_PATH } = require("../core/guildConfig");
 
 // Même helper que /setup et /pseudo
@@ -34,11 +34,11 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
+      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", flags: MessageFlags.Ephemeral });
 
       const cfg = getGuildConfig(interaction.guildId) || {};
       if (!isStaff(interaction.member, cfg)) {
-        return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
+        return interaction.reply({ content: "⛔ Accès réservé au STAFF.", flags: MessageFlags.Ephemeral });
       }
 
       const data = exportAllConfig() || { version: 1, guilds: {} };
@@ -76,13 +76,13 @@ module.exports = {
           `auto.checkDispo: **${cd?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(cd?.times) ? cd.times.length : 0}**\n` +
           `auto.rappel: **${rp?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(rp?.times) ? rp.times.length : 0}**`,
         files: [attachment],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } catch {
       try {
         if (interaction.deferred) return interaction.editReply({ content: "⚠️" }).catch(() => {});
-        if (!interaction.replied) return interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
-        return interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
+        if (!interaction.replied) return interaction.reply({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
+        return interaction.followUp({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
       } catch {}
     }
   },
