@@ -7,6 +7,7 @@
 // - Horaires automations via presets (select multi) ✅
 // - Save = confirmation obligatoire (taper "CONFIRMER") ✅
 // + BotLabel + BotIconUrl configurables (page Bot) ✅
+// ✅ FIX: pas de troncature d’URL (512) + clamp dédié label (64)
 // CommonJS — discord.js v14
 
 const {
@@ -169,18 +170,25 @@ function parseScopeFromCustomId(customId) {
   return `${guildId}:${userId}`;
 }
 
-function clampText(s, { max = 64, fallback = "" } = {}) {
+// --------------------
+// ✅ FIX: clamp séparé label (64) / url (512)
+// --------------------
+function clampLabel(s, { fallback = DEFAULT_BOT_LABEL } = {}) {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
   if (!t) return fallback;
-  return t.slice(0, max);
+  return t.slice(0, 64);
+}
+
+function clampUrlText(s) {
+  const t = String(s ?? "").trim();
+  return t ? t.slice(0, 512) : "";
 }
 
 function normalizeUrlOrNull(s) {
-  const t = String(s ?? "").trim();
+  const t = clampUrlText(s);
   if (!t) return null;
   if (!/^https?:\/\/\S+/i.test(t)) return null;
-  // limite prudente
-  return t.slice(0, 512);
+  return t; // déjà 512 max
 }
 
 // ✅ IMPORTANT: tous les boutons qui ouvrent un modal doivent être exemptés de deferUpdate()
@@ -226,7 +234,7 @@ function buildEmbed(guild, draft, { page = "channels", dirty = false } = {}) {
   const statusLine = requiredOk ? `${ICON.ok} OK` : `${ICON.warn} Incomplet`;
   const dirtyLine = dirty ? `\n${ICON.warn} Modifs non sauvegardées (CONFIRMER requis)` : "";
 
-  const botLabel = clampText(draft.botLabel, { max: 64, fallback: DEFAULT_BOT_LABEL });
+  const botLabel = clampLabel(draft.botLabel, { fallback: DEFAULT_BOT_LABEL });
   const botIconUrl = normalizeUrlOrNull(draft.botIconUrl);
 
   const emb = new EmbedBuilder()
@@ -245,7 +253,7 @@ function buildEmbed(guild, draft, { page = "channels", dirty = false } = {}) {
         name: `${ICON.bot} Bot`,
         value: [
           `${ICON.bot} Nom: **${botLabel}**`,
-          `${ICON.image} Image: ${botIconUrl ? `\`${botIconUrl}\`` : "—"}`,
+          `${ICON.image} Image: ${botIconUrl ? botIconUrl : "—"}`,
         ].join("\n"),
         inline: false,
       },
@@ -417,7 +425,7 @@ function buildBotInfoModal(customId, { botLabel, botIconUrl }) {
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setPlaceholder(DEFAULT_BOT_LABEL)
-    .setValue(clampText(botLabel, { max: 64, fallback: DEFAULT_BOT_LABEL }));
+    .setValue(clampLabel(botLabel, { fallback: DEFAULT_BOT_LABEL }));
 
   const icon = new TextInputBuilder()
     .setCustomId("botIconUrl")
@@ -425,7 +433,7 @@ function buildBotInfoModal(customId, { botLabel, botIconUrl }) {
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setPlaceholder("https://exemple.com/logo.png")
-    .setValue(String(botIconUrl || ""));
+    .setValue(clampUrlText(botIconUrl || ""));
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(name),
@@ -467,7 +475,7 @@ module.exports.execute = async function execute(interaction) {
 
     const draft = {
       // ✅ BOT
-      botLabel: clampText(saved.botLabel, { max: 64, fallback: DEFAULT_BOT_LABEL }),
+      botLabel: clampLabel(saved.botLabel, { fallback: DEFAULT_BOT_LABEL }),
       botIconUrl: saved.botIconUrl ? String(saved.botIconUrl) : null,
 
       // salons
@@ -844,8 +852,8 @@ module.exports.execute = async function execute(interaction) {
       // MODALS
       if (i.isModalSubmit?.()) {
         if (i.customId === CID.botInfoModal) {
-          const name = clampText(i.fields.getTextInputValue("botLabel"), { max: 64, fallback: DEFAULT_BOT_LABEL });
-          const iconRaw = String(i.fields.getTextInputValue("botIconUrl") || "").trim();
+          const name = clampLabel(i.fields.getTextInputValue("botLabel"), { fallback: DEFAULT_BOT_LABEL });
+          const iconRaw = clampUrlText(i.fields.getTextInputValue("botIconUrl"));
           const icon = iconRaw ? normalizeUrlOrNull(iconRaw) : null;
 
           // Si URL fournie mais invalide => on refuse pour éviter un mauvais état
@@ -926,7 +934,7 @@ module.exports.execute = async function execute(interaction) {
 
           upsertGuildConfig(guildId, {
             // ✅ bot
-            botLabel: clampText(draft.botLabel, { max: 64, fallback: DEFAULT_BOT_LABEL }),
+            botLabel: clampLabel(draft.botLabel, { fallback: DEFAULT_BOT_LABEL }),
             botIconUrl: normalizeUrlOrNull(draft.botIconUrl),
 
             // salons
