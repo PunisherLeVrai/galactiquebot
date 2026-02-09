@@ -2,7 +2,7 @@
 // Export complet servers.json — STAFF ONLY — ephemeral
 // CommonJS — discord.js v14
 
-const { SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder, MessageFlags } = require("discord.js");
+const { SlashCommandBuilder, PermissionFlagsBits, AttachmentBuilder } = require("discord.js");
 const { exportAllConfig, getGuildConfig, CONFIG_PATH } = require("../core/guildConfig");
 
 // Même helper que /setup et /pseudo
@@ -19,13 +19,6 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const stamp = (d = new Date()) =>
   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}_${pad2(d.getHours())}-${pad2(d.getMinutes())}`;
 
-function cleanOneLine(s, max = 80) {
-  return String(s || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
-}
-
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
@@ -34,11 +27,11 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", flags: MessageFlags.Ephemeral });
+      if (!interaction.inGuild()) return interaction.reply({ content: "⛔", ephemeral: true });
 
       const cfg = getGuildConfig(interaction.guildId) || {};
       if (!isStaff(interaction.member, cfg)) {
-        return interaction.reply({ content: "⛔ Accès réservé au STAFF.", flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
       }
 
       const data = exportAllConfig() || { version: 1, guilds: {} };
@@ -55,10 +48,7 @@ module.exports = {
       const hasCheckDispoCh = !!g.checkDispoChannelId;
 
       const cd = auto?.checkDispo || {};
-      const rp = auto?.rappel || {};
-
-      const botLabel = cleanOneLine(g?.botLabel || "XIG Bot", 80);
-      const botIconUrl = cleanOneLine(g?.botIconUrl || "", 140);
+      const rd = auto?.reminderDispo || {};
 
       return interaction.reply({
         content:
@@ -66,23 +56,19 @@ module.exports = {
           `Fichier : \`${filename}\`\n` +
           `Chemin interne : \`${CONFIG_PATH}\`\n` +
           `Guilds exportées: **${guildCount}**\n` +
-          `\n` +
-          `🤖 botLabel: **${botLabel}**\n` +
-          `🖼️ botIconUrl: ${botIconUrl ? botIconUrl : "—"}\n` +
-          `\n` +
           `checkDispoChannelId (ce serveur): **${hasCheckDispoCh ? "oui" : "non"}**\n` +
           `dispoMessageIds (ce serveur): **${hasDispoIds ? "oui (7)" : "non"}**\n` +
           `automations.global: **${auto?.enabled ? "ON" : "OFF"}**\n` +
           `auto.checkDispo: **${cd?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(cd?.times) ? cd.times.length : 0}**\n` +
-          `auto.rappel: **${rp?.enabled ? "ON" : "OFF"}** — times: **${Array.isArray(rp?.times) ? rp.times.length : 0}**`,
+          `auto.reminderDispo: **${rd?.enabled ? "ON" : "OFF"}** — mode: \`${rd?.mode || "channel"}\` — times: **${Array.isArray(rd?.times) ? rd.times.length : 0}**`,
         files: [attachment],
-        flags: MessageFlags.Ephemeral,
+        ephemeral: true,
       });
     } catch {
       try {
         if (interaction.deferred) return interaction.editReply({ content: "⚠️" }).catch(() => {});
-        if (!interaction.replied) return interaction.reply({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
-        return interaction.followUp({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
+        if (!interaction.replied) return interaction.reply({ content: "⚠️", ephemeral: true }).catch(() => {});
+        return interaction.followUp({ content: "⚠️", ephemeral: true }).catch(() => {});
       } catch {}
     }
   },
