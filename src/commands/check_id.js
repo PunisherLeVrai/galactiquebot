@@ -13,6 +13,10 @@
 // - check (default): affiche embed
 // - rappel: affiche embed + envoie rappel (salon / mp / les2)
 //
+// ✅ IMPORTANT (ta demande):
+// - Si rappelMode inclut "salon" => la mention/rappel est FORCÉMENT envoyé dans le salon des disponibilités (sourceChannel)
+//   (le salon où se trouve le message analysé). On ignore tout autre salon.
+//
 // CommonJS — discord.js v14
 
 const {
@@ -215,13 +219,6 @@ module.exports = {
           { name: "Les deux", value: "les2" }
         )
     )
-    .addChannelOption((opt) =>
-      opt
-        .setName("rappel_salon")
-        .setDescription("Salon où poster le rappel (si salon/les2)")
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(false)
-    )
     .addStringOption((opt) =>
       opt
         .setName("message")
@@ -255,7 +252,7 @@ module.exports = {
         return interaction.reply("⚠️ Salon source introuvable/invalide (donne l’option `salon` ou configure /setup).");
       }
 
-      // rôles filtre (0..3) => tu peux augmenter si tu veux
+      // rôles filtre (0..3)
       const r1 = interaction.options.getRole("role_1");
       const r2 = interaction.options.getRole("role_2");
       const r3 = interaction.options.getRole("role_3");
@@ -286,8 +283,8 @@ module.exports = {
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${sourceChannel.id}>\n` +
-            `Message : \`${messageId}\`\n\n` +
-            `⚠️ Message introuvable.`
+              `Message : \`${messageId}\`\n\n` +
+              `⚠️ Message introuvable.`
           )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -306,9 +303,9 @@ module.exports = {
           .setColor(0x5865f2)
           .setDescription(
             `Salon : <#${sourceChannel.id}>\n` +
-            `Message : \`${messageId}\`\n\n` +
-            `🚫 **Impossible de lire les réactions.**\n` +
-            `Vérifie: **ViewChannel + ReadMessageHistory**, et l’intent **GuildMessageReactions**.`
+              `Message : \`${messageId}\`\n\n` +
+              `🚫 **Impossible de lire les réactions.**\n` +
+              `Vérifie: **ViewChannel + ReadMessageHistory**, et l’intent **GuildMessageReactions**.`
           )
           .setFooter({ text: "XIG BLAUGRANA FC Staff" });
 
@@ -336,10 +333,10 @@ module.exports = {
         .setColor(0x5865f2)
         .setDescription(
           `Salon : <#${sourceChannel.id}>\n` +
-          `Message : \`${messageId}\`\n` +
-          `Filtre : **${roleLine}**\n` +
-          `Cibles : **${targetIds.size}**` +
-          warn
+            `Message : \`${messageId}\`\n` +
+            `Filtre : **${roleLine}**\n` +
+            `Cibles : **${targetIds.size}**` +
+            warn
         )
         .addFields(
           { name: `🟩 ✅ Présents (${ok.length})`, value: mentionList(ok, { max: 60 }) },
@@ -359,29 +356,13 @@ module.exports = {
         const link = buildMessageLink(interaction.guildId, sourceChannel.id, messageId);
         const baseText =
           customMsg ||
-          `📌 **Rappel**\nMerci de répondre sur le message (✅ / ❌).` +
-            (link ? `\n➡️ ${link}` : "");
+          `📌 **Rappel**\nMerci de répondre sur le message (✅ / ❌).` + (link ? `\n➡️ ${link}` : "");
 
-        // salon de rappel
-        let outChannel = null;
-        if (rappelMode === "salon" || rappelMode === "les2") {
-          outChannel = interaction.options.getChannel("rappel_salon") || null;
-          if (!outChannel) {
-            // fallback: staffReportsChannelId puis sourceChannel
-            if (cfg.staffReportsChannelId) outChannel = await interaction.guild.channels.fetch(cfg.staffReportsChannelId).catch(() => null);
-            if (!outChannel) outChannel = sourceChannel;
-          }
-
-          if (!outChannel || !outChannel.isTextBased?.()) {
-            return interaction.editReply({ content: "⚠️ Salon de rappel invalide.", embeds: [embed] });
-          }
-        }
-
-        // 1) Salon
+        // ✅ Salon FORCÉ = salon des dispos (sourceChannel)
         let salonSent = false;
-        if (outChannel) {
+        if (rappelMode === "salon" || rappelMode === "les2") {
           const mention = mentionList(missing, { max: 80, empty: "—" });
-          await outChannel
+          await sourceChannel
             .send({
               content: `${mention}\n\n${baseText}`,
               allowedMentions: { users: missing.slice(0, 100), roles: [], repliedUser: false },
@@ -390,7 +371,7 @@ module.exports = {
           salonSent = true;
         }
 
-        // 2) MP
+        // MP
         let dmOk = 0;
         let dmFail = 0;
         if (rappelMode === "mp" || rappelMode === "les2") {
@@ -405,7 +386,7 @@ module.exports = {
 
         embed.addFields({
           name: "📣 Rappel",
-          value: `Salon: **${salonSent ? "oui" : "non"}**\nMP: **${dmOk} ok / ${dmFail} échec**`,
+          value: `Salon (dispos): **${salonSent ? "oui" : "non"}**\nMP: **${dmOk} ok / ${dmFail} échec**`,
         });
 
         return interaction.editReply({ content: "✅ Terminé + rappel envoyé.", embeds: [embed] });
