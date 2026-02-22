@@ -3,7 +3,7 @@
 // Crée 1..7 messages Dispo (Lun..Dim) dans un salon + ajoute ✅/❌
 // ✅ PAS de sauvegarde d'IDs
 // ✅ Utilisation simple : tout se fait via les options du slash
-// ✅ Support 0..N images (1 message / jour avec 0..N fichiers)
+// ✅ Image liée à un jour : 1 image max par jour (image_lun, image_mar, ...)
 // ✅ Possibilité de ne mettre aucun texte (aucun contenu / description)
 //
 // CommonJS — discord.js v14
@@ -114,29 +114,47 @@ module.exports.data = new SlashCommandBuilder()
       .setDescription("Ne PAS mettre le texte par défaut si aucun texte n'est fourni")
       .setRequired(false)
   )
-  // Images (0..4). Si au moins 1 image => mode Image, attachées à chaque message.
+  // Images liées à chaque jour (0..7). 1 image max par jour.
   .addAttachmentOption((opt) =>
     opt
-      .setName("image_1")
-      .setDescription("Image 1 (optionnelle)")
+      .setName("image_lun")
+      .setDescription("Image pour Lundi (optionnelle)")
       .setRequired(false)
   )
   .addAttachmentOption((opt) =>
     opt
-      .setName("image_2")
-      .setDescription("Image 2 (optionnelle)")
+      .setName("image_mar")
+      .setDescription("Image pour Mardi (optionnelle)")
       .setRequired(false)
   )
   .addAttachmentOption((opt) =>
     opt
-      .setName("image_3")
-      .setDescription("Image 3 (optionnelle)")
+      .setName("image_mer")
+      .setDescription("Image pour Mercredi (optionnelle)")
       .setRequired(false)
   )
   .addAttachmentOption((opt) =>
     opt
-      .setName("image_4")
-      .setDescription("Image 4 (optionnelle)")
+      .setName("image_jeu")
+      .setDescription("Image pour Jeudi (optionnelle)")
+      .setRequired(false)
+  )
+  .addAttachmentOption((opt) =>
+    opt
+      .setName("image_ven")
+      .setDescription("Image pour Vendredi (optionnelle)")
+      .setRequired(false)
+  )
+  .addAttachmentOption((opt) =>
+    opt
+      .setName("image_sam")
+      .setDescription("Image pour Samedi (optionnelle)")
+      .setRequired(false)
+  )
+  .addAttachmentOption((opt) =>
+    opt
+      .setName("image_dim")
+      .setDescription("Image pour Dimanche (optionnelle)")
       .setRequired(false)
   )
   .setDefaultMemberPermissions(0n);
@@ -200,22 +218,23 @@ module.exports.execute = async function execute(interaction) {
     const text = clampText(rawText, 1900);
     const noDefaultText = interaction.options.getBoolean("no_default_text") || false;
 
-    // Images (0..4)
-    const attachments = [];
-    const a1 = interaction.options.getAttachment("image_1");
-    const a2 = interaction.options.getAttachment("image_2");
-    const a3 = interaction.options.getAttachment("image_3");
-    const a4 = interaction.options.getAttachment("image_4");
-    for (const a of [a1, a2, a3, a4]) {
-      if (a && a.url) {
-        attachments.push({
-          url: a.url,
-          name: a.name || "image.png",
-        });
-      }
-    }
-
-    const mode = attachments.length > 0 ? "image" : "embed";
+    // Images par jour (0..7) => index 0..6
+    const dayImages = [
+      interaction.options.getAttachment("image_lun") || null, // 0
+      interaction.options.getAttachment("image_mar") || null, // 1
+      interaction.options.getAttachment("image_mer") || null, // 2
+      interaction.options.getAttachment("image_jeu") || null, // 3
+      interaction.options.getAttachment("image_ven") || null, // 4
+      interaction.options.getAttachment("image_sam") || null, // 5
+      interaction.options.getAttachment("image_dim") || null, // 6
+    ].map((a) =>
+      a && a.url
+        ? {
+            url: a.url,
+            name: a.name || "image.png",
+          }
+        : null
+    );
 
     await interaction.reply({
       content: "⏳ Création des messages de dispo...",
@@ -223,17 +242,38 @@ module.exports.execute = async function execute(interaction) {
     });
 
     const created = [];
+    let anyImage = false;
+    let anyEmbed = false;
 
     for (const dayIndex of days) {
       const dayFull = DAYS_FULL[dayIndex];
       const dayShort = DAYS_SHORT[dayIndex];
+      const img = dayImages[dayIndex];
 
       let content = "";
       let embeds = [];
       let files = [];
 
-      if (mode === "embed") {
-        // EMBED
+      if (img) {
+        // MODE IMAGE POUR CE JOUR
+        files = [
+          {
+            attachment: img.url,
+            name: img.name || `dispo_${dayShort}.png`,
+          },
+        ];
+
+        if (text) {
+          content = text;
+        } else if (!noDefaultText) {
+          content = `Disponibilités — ${dayFull}\nRéagis : ✅ présent | ❌ absent`;
+        } else {
+          content = ""; // pas de texte du tout
+        }
+
+        anyImage = true;
+      } else {
+        // MODE EMBED POUR CE JOUR (pas d'image)
         const embed = new EmbedBuilder()
           .setTitle(`Disponibilités — ${dayFull}`)
           .setColor(0x5865f2);
@@ -247,20 +287,7 @@ module.exports.execute = async function execute(interaction) {
 
         embeds = [embed];
         content = ""; // rien en plus
-      } else {
-        // IMAGE(S)
-        files = attachments.map((a, idx) => ({
-          attachment: a.url,
-          name: a.name || `dispo_${dayShort}_${idx + 1}.png`,
-        }));
-
-        if (text) {
-          content = text;
-        } else if (!noDefaultText) {
-          content = `Disponibilités — ${dayFull}\nRéagis : ✅ présent | ❌ absent`;
-        } else {
-          content = ""; // pas de texte du tout
-        }
+        anyEmbed = true;
       }
 
       const msg = await channel
@@ -288,12 +315,17 @@ module.exports.execute = async function execute(interaction) {
       ? created.map((x) => `${DAYS_SHORT[x.dayIndex]}: \`${x.id}\``).join("\n")
       : "—";
 
+    let modeLabel;
+    if (anyImage && anyEmbed) modeLabel = "Mix (Images + Embeds)";
+    else if (anyImage) modeLabel = "Images uniquement";
+    else modeLabel = "Embeds uniquement";
+
     return interaction
       .editReply({
         content:
           `${ICON.ok} Messages créés: **${created.length}**\n` +
           `Salon: <#${channel.id}>\n` +
-          `Mode: **${mode === "image" ? "Image (attachments)" : "Embed"}**\n` +
+          `Mode: **${modeLabel}**\n` +
           `Texte: **${text ? "personnalisé" : noDefaultText ? "aucun" : "par défaut"}**\n\n` +
           `IDs (info):\n${createdList}`,
       })
