@@ -1,22 +1,17 @@
 // src/commands/create_dispo.js
-// /create_dispo — STAFF ONLY — EPHEMERAL — 1 message + session (style /setup)
+// /create_dispo — STAFF ONLY — NON EPHEMERE (réponse EPHEMERE mais pas de session)
 // Crée 1..7 messages Dispo (Lun..Dim) dans un salon + ajoute ✅/❌
 // ✅ PAS de sauvegarde d'IDs
-// Modes: embed | image (attachment)
+// ✅ Utilisation simple : tout se fait via les options du slash
+// ✅ Support 0..N images (1 message / jour avec 0..N fichiers)
+// ✅ Possibilité de ne mettre aucun texte (aucun contenu / description)
+//
 // CommonJS — discord.js v14
 
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
-  ActionRowBuilder,
-  ChannelSelectMenuBuilder,
-  StringSelectMenuBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
   ChannelType,
   MessageFlags,
 } = require("discord.js");
@@ -27,15 +22,6 @@ const ICON = {
   no: "⛔",
   warn: "⚠️",
   ok: "✅",
-  time: "⏳",
-  title: "🧾",
-  channel: "📅",
-  mode: "🧩",
-  days: "🗓️",
-  edit: "✏️",
-  broom: "🧹",
-  confirm: "✅",
-  cancel: "❎",
 };
 
 const DAYS_FULL = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
@@ -48,29 +34,10 @@ function isStaff(member, cfg) {
   return ids.some((id) => id && member.roles?.cache?.has?.(String(id)));
 }
 
-function parseScopeFromCustomId(customId) {
-  // format: "cdispo:xxx:<guildId>:<userId>"
-  const s = String(customId || "");
-  const parts = s.split(":");
-  if (parts.length < 4) return null;
-  const userId = parts[parts.length - 1];
-  const guildId = parts[parts.length - 2];
-  if (!/^\d{15,25}$/.test(guildId) || !/^\d{15,25}$/.test(userId)) return null;
-  return `${guildId}:${userId}`;
-}
-
-function createRefreshQueue(fn) {
-  let chain = Promise.resolve();
-  return () => {
-    chain = chain.then(fn).catch(() => {});
-    return chain;
-  };
-}
-
-// Boutons qui ouvrent un modal => PAS de deferUpdate()
-function isModalOpenButtonCustomId(customId) {
-  const s = String(customId || "");
-  return s.includes("cdispo:modal:") || s.includes("cdispo:btn:confirm:") || s.includes("cdispo:btn:editText:");
+function resolveDefaultChannelId(cfg) {
+  // cible = disposChannelId en priorité
+  const v = cfg?.disposChannelId ? String(cfg.disposChannelId) : null;
+  return v || null;
 }
 
 function clampText(s, max = 1900) {
@@ -79,131 +46,98 @@ function clampText(s, max = 1900) {
   return t.slice(0, max);
 }
 
-function resolveDefaultChannelId(cfg) {
-  // cible = disposChannelId en priorité
-  const v = cfg?.disposChannelId ? String(cfg.disposChannelId) : null;
-  return v || null;
-}
-
-function buildDefaultEmbed({ dayIndex, title, desc }) {
-  const day = DAYS_FULL[dayIndex];
-  return new EmbedBuilder()
-    .setTitle(title ? `${title} — ${day}` : `Disponibilités — ${day}`)
-    .setDescription(desc || "Réagis : ✅ présent | ❌ absent")
-    .setColor(0x5865f2);
-}
-
-function buildSummaryEmbed(guild, draft, { dirty = false } = {}) {
-  const dayList = draft.days.map((i) => DAYS_SHORT[i]).join(" • ") || "—";
-
-  const lines = [
-    `${draft.channelId ? `<#${draft.channelId}>` : "—"} — salon cible`,
-    `${draft.mode === "image" ? "Image (attachement)" : "Embed"} — mode`,
-    `${dayList} — jours à créer`,
-    `Texte: ${draft.text ? "oui" : "non"}`,
-    `Attachment: ${draft.attachmentName ? `oui (${draft.attachmentName})` : "non"}`,
-    "",
-    `Publier = bouton + taper \`CONFIRMER\``,
-  ];
-
-  const header = dirty ? `${ICON.warn} Modifs non publiées` : `${ICON.ok} Prêt`;
-
-  return new EmbedBuilder()
-    .setTitle(`${ICON.title} Create Dispo — ${guild.name}`)
-    .setColor(0x5865f2)
-    .setDescription([header, "", ...lines].join("\n"))
-    .setFooter({ text: "XIG BLAUGRANA FC Staff" });
-}
-
-function buildConfirmModal(customId) {
-  const modal = new ModalBuilder().setCustomId(customId).setTitle("CONFIRMATION — Publier");
-  const input = new TextInputBuilder()
-    .setCustomId("confirm")
-    .setLabel('Tape "CONFIRMER" pour publier')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder("CONFIRMER");
-  modal.addComponents(new ActionRowBuilder().addComponents(input));
-  return modal;
-}
-
-function buildEditTextModal(customId, curText) {
-  const modal = new ModalBuilder().setCustomId(customId).setTitle("Texte Dispo (optionnel)");
-  const input = new TextInputBuilder()
-    .setCustomId("text")
-    .setLabel("Description/texte (optionnel)")
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(false)
-    .setValue(clampText(curText || "", 1900));
-  modal.addComponents(new ActionRowBuilder().addComponents(input));
-  return modal;
-}
-
-// --------------------
-// Sessions + global listener
-// --------------------
-const CDISPO_SESSIONS = new Map();
-let GLOBAL_CDISPO_LISTENER_READY = false;
-
-function ensureGlobalCreateDispoListener(client) {
-  if (GLOBAL_CDISPO_LISTENER_READY) return;
-  if (!client?.on) return;
-
-  GLOBAL_CDISPO_LISTENER_READY = true;
-
-  client.on("interactionCreate", async (i) => {
-    try {
-      if (!i?.inGuild?.()) return;
-
-      const isComponent = i.isButton?.() || i.isStringSelectMenu?.() || i.isChannelSelectMenu?.();
-      const isModal = typeof i.isModalSubmit === "function" && i.isModalSubmit();
-      if (!isComponent && !isModal) return;
-
-      const customId = String(i.customId || "");
-      if (!customId.startsWith("cdispo:")) return;
-
-      const scope = parseScopeFromCustomId(customId);
-      if (!scope) return;
-
-      const session = CDISPO_SESSIONS.get(scope);
-      if (!session) {
-        try {
-          if (isComponent && !i.deferred && !i.replied) await i.deferUpdate().catch(() => {});
-        } catch {}
-        try {
-          if (!i.replied) {
-            await i
-              .followUp({ content: "⚠️ Session /create_dispo expirée. Relance la commande.", flags: MessageFlags.Ephemeral })
-              .catch(() => {});
-          }
-        } catch {}
-        return;
-      }
-
-      if (String(i.user?.id) !== String(session.userId)) return;
-      if (String(i.guildId) !== String(session.guildId)) return;
-
-      if (isComponent && !isModalOpenButtonCustomId(customId)) {
-        if (!i.deferred && !i.replied) await i.deferUpdate().catch(() => {});
-      }
-
-      await session.handle(i).catch(() => {});
-    } catch {
-      // silencieux
-    }
-  });
-}
-
-// --------------------
-// Command
-// --------------------
-module.exports.ensureGlobalCreateDispoListener = ensureGlobalCreateDispoListener;
-
 module.exports.data = new SlashCommandBuilder()
   .setName("create_dispo")
   .setDescription("STAFF: Créer 1..7 messages Dispo (Lun..Dim) dans un salon (sans sauvegarde).")
+  // Salon cible (optionnel, sinon salon des dispos du /setup)
+  .addChannelOption((opt) =>
+    opt
+      .setName("salon")
+      .setDescription("Salon où publier les messages (sinon: salon Dispos configuré)")
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(false)
+  )
+  // Sélection des jours (booléens). Si aucun n'est true => tous les jours.
+  .addBooleanOption((opt) =>
+    opt
+      .setName("lun")
+      .setDescription("Créer le message pour Lundi")
+      .setRequired(false)
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("mar")
+      .setDescription("Créer le message pour Mardi")
+      .setRequired(false)
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("mer")
+      .setDescription("Créer le message pour Mercredi")
+      .setRequired(false)
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("jeu")
+      .setDescription("Créer le message pour Jeudi")
+      .setRequired(false)
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("ven")
+      .setDescription("Créer le message pour Vendredi")
+      .setRequired(false)
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("sam")
+      .setDescription("Créer le message pour Samedi")
+      .setRequired(false)
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("dim")
+      .setDescription("Créer le message pour Dimanche")
+      .setRequired(false)
+  )
+  // Texte optionnel
+  .addStringOption((opt) =>
+    opt
+      .setName("texte")
+      .setDescription("Texte commun à tous les messages (optionnel)")
+      .setRequired(false)
+  )
+  // Si true et aucun texte fourni => aucun texte par défaut (vraiment message vide + images ou embed sans description)
+  .addBooleanOption((opt) =>
+    opt
+      .setName("no_default_text")
+      .setDescription("Ne PAS mettre le texte par défaut si aucun texte n'est fourni")
+      .setRequired(false)
+  )
+  // Images (0..4). Si au moins 1 image => mode Image, attachées à chaque message.
   .addAttachmentOption((opt) =>
-    opt.setName("image").setDescription("Optionnel: image à utiliser (mode Image)").setRequired(false)
+    opt
+      .setName("image_1")
+      .setDescription("Image 1 (optionnelle)")
+      .setRequired(false)
+  )
+  .addAttachmentOption((opt) =>
+    opt
+      .setName("image_2")
+      .setDescription("Image 2 (optionnelle)")
+      .setRequired(false)
+  )
+  .addAttachmentOption((opt) =>
+    opt
+      .setName("image_3")
+      .setDescription("Image 3 (optionnelle)")
+      .setRequired(false)
+  )
+  .addAttachmentOption((opt) =>
+    opt
+      .setName("image_4")
+      .setDescription("Image 4 (optionnelle)")
+      .setRequired(false)
   )
   .setDefaultMemberPermissions(0n);
 
@@ -213,319 +147,167 @@ module.exports.execute = async function execute(interaction) {
       return interaction.reply({ content: ICON.no, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
 
-    ensureGlobalCreateDispoListener(interaction.client);
-
     const guild = interaction.guild;
     const guildId = guild.id;
-
     const cfg = getGuildConfig(guildId) || {};
-    if (!isStaff(interaction.member, cfg)) {
-      return interaction.reply({ content: `${ICON.no} Accès réservé au STAFF.`, flags: MessageFlags.Ephemeral }).catch(() => {});
-    }
 
-    const defaultChannelId = resolveDefaultChannelId(cfg);
-    if (!defaultChannelId) {
+    if (!isStaff(interaction.member, cfg)) {
       return interaction
-        .reply({ content: "⚠️ Aucun salon Dispos configuré. Fais d’abord `/setup`.", flags: MessageFlags.Ephemeral })
+        .reply({ content: `${ICON.no} Accès réservé au STAFF.`, flags: MessageFlags.Ephemeral })
         .catch(() => {});
     }
 
-    const att = interaction.options.getAttachment("image");
-    const userId = interaction.user.id;
-    const scope = `${guildId}:${userId}`;
-
-    // kill old session
-    const prev = CDISPO_SESSIONS.get(scope);
-    if (prev) {
-      try { await prev.end("replaced").catch(() => {}); } catch {}
+    // Salon cible
+    let channel = interaction.options.getChannel("salon") || null;
+    if (!channel) {
+      const defId = resolveDefaultChannelId(cfg);
+      if (defId) {
+        channel = await guild.channels.fetch(defId).catch(() => null);
+      }
     }
 
-    const draft = {
-      channelId: defaultChannelId,
-      mode: att ? "image" : "embed",
-      days: [0, 1, 2, 3, 4, 5, 6],
-      text: "",
-      attachmentUrl: att?.url || null,
-      attachmentName: att?.name || null,
+    if (!channel || !channel.isTextBased?.()) {
+      return interaction
+        .reply({
+          content: "⚠️ Salon cible introuvable/invalide. Utilise l'option `salon` ou configure le salon Dispos dans `/setup`.",
+          flags: MessageFlags.Ephemeral,
+        })
+        .catch(() => {});
+    }
+
+    // Jours sélectionnés (indices 0..6)
+    const dayFlags = {
+      0: interaction.options.getBoolean("lun") || false,
+      1: interaction.options.getBoolean("mar") || false,
+      2: interaction.options.getBoolean("mer") || false,
+      3: interaction.options.getBoolean("jeu") || false,
+      4: interaction.options.getBoolean("ven") || false,
+      5: interaction.options.getBoolean("sam") || false,
+      6: interaction.options.getBoolean("dim") || false,
     };
 
-    let dirty = false;
-    const markDirty = () => { dirty = true; };
+    let days = Object.entries(dayFlags)
+      .filter(([, v]) => v)
+      .map(([k]) => Number(k));
 
-    const CID = {
-      channel: `cdispo:ch:channel:${scope}`,
-      mode: `cdispo:sel:mode:${scope}`,
-      days: `cdispo:sel:days:${scope}`,
-
-      editTextBtn: `cdispo:btn:editText:${scope}`,
-      editTextModal: `cdispo:modal:editText:${scope}`,
-
-      clearTextBtn: `cdispo:btn:clearText:${scope}`,
-
-      confirmBtn: `cdispo:btn:confirm:${scope}`,
-      confirmModal: `cdispo:modal:confirm:${scope}`,
-
-      resetBtn: `cdispo:btn:reset:${scope}`,
-      cancelBtn: `cdispo:btn:cancel:${scope}`,
-    };
-
-    function rowChannel() {
-      return new ActionRowBuilder().addComponents(
-        new ChannelSelectMenuBuilder()
-          .setCustomId(CID.channel)
-          .setPlaceholder(`${ICON.channel} Salon où publier`)
-          .setMinValues(1)
-          .setMaxValues(1)
-          .addChannelTypes(ChannelType.GuildText)
-      );
+    // Si aucun jour coché => tous les jours
+    if (days.length === 0) {
+      days = [0, 1, 2, 3, 4, 5, 6];
     }
 
-    function rowMode() {
-      return new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(CID.mode)
-          .setPlaceholder(`${ICON.mode} Mode`)
-          .setMinValues(1)
-          .setMaxValues(1)
-          .addOptions(
-            { label: "Embed", value: "embed", default: draft.mode === "embed" },
-            { label: "Image (attachement)", value: "image", default: draft.mode === "image" }
-          )
-      );
+    // Texte & options
+    const rawText = interaction.options.getString("texte") || "";
+    const text = clampText(rawText, 1900);
+    const noDefaultText = interaction.options.getBoolean("no_default_text") || false;
+
+    // Images (0..4)
+    const attachments = [];
+    const a1 = interaction.options.getAttachment("image_1");
+    const a2 = interaction.options.getAttachment("image_2");
+    const a3 = interaction.options.getAttachment("image_3");
+    const a4 = interaction.options.getAttachment("image_4");
+    for (const a of [a1, a2, a3, a4]) {
+      if (a && a.url) {
+        attachments.push({
+          url: a.url,
+          name: a.name || "image.png",
+        });
+      }
     }
 
-    function rowDays() {
-      return new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(CID.days)
-          .setPlaceholder(`${ICON.days} Jours à créer (1..7)`)
-          .setMinValues(1)
-          .setMaxValues(7)
-          .addOptions(
-            DAYS_SHORT.map((d, idx) => ({
-              label: d,
-              value: String(idx),
-              default: draft.days.includes(idx),
-            }))
-          )
-      );
-    }
-
-    function rowActions() {
-      return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(CID.editTextBtn).setLabel(`${ICON.edit} Texte`).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(CID.clearTextBtn).setLabel(`${ICON.broom} Clear texte`).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.confirmBtn).setLabel(`${ICON.confirm} Publier`).setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(CID.resetBtn).setLabel("Reset").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(CID.cancelBtn).setLabel(`${ICON.cancel} Annuler`).setStyle(ButtonStyle.Danger)
-      );
-    }
-
-    function applyDefaults(rows) {
-      try {
-        for (const row of rows) {
-          const c = row.components?.[0];
-          if (!c) continue;
-          if (c instanceof ChannelSelectMenuBuilder) {
-            if (c.data.custom_id === CID.channel) c.setDefaultChannels(draft.channelId ? [draft.channelId] : []);
-          }
-        }
-      } catch {}
-    }
-
-    function components() {
-      const rows = [rowChannel(), rowMode(), rowDays(), rowActions()];
-      applyDefaults(rows);
-      return rows;
-    }
+    const mode = attachments.length > 0 ? "image" : "embed";
 
     await interaction.reply({
-      embeds: [buildSummaryEmbed(guild, draft, { dirty })],
-      components: components(),
+      content: "⏳ Création des messages de dispo...",
       flags: MessageFlags.Ephemeral,
     });
 
-    const doRefresh = async () => {
-      await interaction
-        .editReply({ embeds: [buildSummaryEmbed(guild, draft, { dirty })], components: components() })
-        .catch(() => {});
-    };
+    const created = [];
 
-    const refresh = createRefreshQueue(doRefresh);
+    for (const dayIndex of days) {
+      const dayFull = DAYS_FULL[dayIndex];
+      const dayShort = DAYS_SHORT[dayIndex];
 
-    let ended = false;
-    async function end(reason = "end") {
-      if (ended) return;
-      ended = true;
-      CDISPO_SESSIONS.delete(scope);
-      try {
-        await interaction
-          .editReply({ content: ICON.time, embeds: [buildSummaryEmbed(guild, draft, { dirty })], components: [] })
-          .catch(() => {});
-      } catch {}
-    }
+      let content = "";
+      let embeds = [];
+      let files = [];
 
-    const timeout = setTimeout(() => end("timeout").catch(() => {}), 10 * 60 * 1000);
-    timeout.unref?.();
+      if (mode === "embed") {
+        // EMBED
+        const embed = new EmbedBuilder()
+          .setTitle(`Disponibilités — ${dayFull}`)
+          .setColor(0x5865f2);
 
-    async function publishNow() {
-      if (!draft.channelId) {
-        await interaction.followUp({ content: "⚠️ Aucun salon sélectionné.", flags: MessageFlags.Ephemeral }).catch(() => {});
-        return;
-      }
-      if (!Array.isArray(draft.days) || draft.days.length < 1 || draft.days.length > 7) {
-        await interaction.followUp({ content: "⚠️ Choisis 1 à 7 jours.", flags: MessageFlags.Ephemeral }).catch(() => {});
-        return;
-      }
-      if (draft.mode === "image" && !draft.attachmentUrl) {
-        await interaction.followUp({
-          content: "⚠️ Mode Image choisi, mais aucune image fournie. Relance `/create_dispo image:<fichier>` ou repasse en Embed.",
-          flags: MessageFlags.Ephemeral,
-        }).catch(() => {});
-        return;
-      }
+        if (text) {
+          embed.setDescription(text);
+        } else if (!noDefaultText) {
+          embed.setDescription("Réagis : ✅ présent | ❌ absent");
+        }
+        // si noDefaultText=true et pas de texte => embed sans description
 
-      const channel = await guild.channels.fetch(String(draft.channelId)).catch(() => null);
-      if (!channel || !channel.isTextBased?.()) {
-        await interaction.followUp({ content: "⚠️ Le salon cible doit être un salon texte.", flags: MessageFlags.Ephemeral }).catch(() => {});
-        return;
-      }
+        embeds = [embed];
+        content = ""; // rien en plus
+      } else {
+        // IMAGE(S)
+        files = attachments.map((a, idx) => ({
+          attachment: a.url,
+          name: a.name || `dispo_${dayShort}_${idx + 1}.png`,
+        }));
 
-      const created = [];
-
-      for (const dayIndex of draft.days) {
-        const dayLabel = DAYS_FULL[dayIndex];
-        let sent = null;
-
-        if (draft.mode === "embed") {
-          const emb = buildDefaultEmbed({
-            dayIndex,
-            title: "Disponibilités",
-            desc: draft.text ? clampText(draft.text, 1900) : "Réagis : ✅ présent | ❌ absent",
-          });
-
-          sent = await channel.send({ embeds: [emb] }).catch(() => null);
+        if (text) {
+          content = text;
+        } else if (!noDefaultText) {
+          content = `Disponibilités — ${dayFull}\nRéagis : ✅ présent | ❌ absent`;
         } else {
-          const caption = draft.text
-            ? clampText(draft.text, 1800)
-            : `Disponibilités — ${dayLabel}\nRéagis : ✅ présent | ❌ absent`;
-
-          sent = await channel
-            .send({
-              content: caption,
-              files: [{ attachment: draft.attachmentUrl, name: draft.attachmentName || `dispo_${DAYS_SHORT[dayIndex]}.png` }],
-            })
-            .catch(() => null);
+          content = ""; // pas de texte du tout
         }
-
-        if (!sent?.id) continue;
-
-        try { await sent.react("✅").catch(() => {}); } catch {}
-        try { await sent.react("❌").catch(() => {}); } catch {}
-
-        created.push({ dayIndex, id: sent.id });
       }
 
-      const createdList = created.length
-        ? created.map((x) => `${DAYS_SHORT[x.dayIndex]}: \`${x.id}\``).join("\n")
-        : "—";
+      const msg = await channel
+        .send({
+          content: content || undefined,
+          embeds: embeds.length ? embeds : undefined,
+          files: files.length ? files : undefined,
+        })
+        .catch(() => null);
 
-      await interaction.followUp({
-        content: `✅ Messages créés: **${created.length}**\nSalon: <#${draft.channelId}>\nIDs (info):\n${createdList}`,
-        flags: MessageFlags.Ephemeral,
-      }).catch(() => {});
+      if (!msg?.id) continue;
 
-      return end("published");
+      // Ajout réactions
+      try {
+        await msg.react("✅").catch(() => {});
+      } catch {}
+      try {
+        await msg.react("❌").catch(() => {});
+      } catch {}
+
+      created.push({ dayIndex, id: msg.id });
     }
 
-    async function handle(i) {
-      // MODALS
-      if (i.isModalSubmit?.()) {
-        if (i.customId === CID.editTextModal) {
-          draft.text = clampText(i.fields.getTextInputValue("text"), 1900);
-          markDirty();
-          await i.reply({ content: "✅ Texte mis à jour.", flags: MessageFlags.Ephemeral }).catch(() => {});
-          return refresh();
-        }
+    const createdList = created.length
+      ? created.map((x) => `${DAYS_SHORT[x.dayIndex]}: \`${x.id}\``).join("\n")
+      : "—";
 
-        if (i.customId === CID.confirmModal) {
-          const txt = String(i.fields.getTextInputValue("confirm") || "").trim().toUpperCase();
-          if (txt !== "CONFIRMER") {
-            await i.reply({ content: "⚠️ Confirmation refusée. Tape exactement: `CONFIRMER`.", flags: MessageFlags.Ephemeral }).catch(() => {});
-            return;
-          }
-          await i.reply({ content: "⏳ Publication en cours…", flags: MessageFlags.Ephemeral }).catch(() => {});
-          return publishNow();
-        }
-
-        return;
-      }
-
-      // CHANNEL
-      if (i.isChannelSelectMenu?.() && i.customId === CID.channel) {
-        draft.channelId = i.values?.[0] ? String(i.values[0]) : null;
-        markDirty();
-        return refresh();
-      }
-
-      // MODE
-      if (i.isStringSelectMenu?.() && i.customId === CID.mode) {
-        const v = i.values?.[0];
-        if (v === "embed" || v === "image") {
-          draft.mode = v;
-          markDirty();
-          return refresh();
-        }
-      }
-
-      // DAYS
-      if (i.isStringSelectMenu?.() && i.customId === CID.days) {
-        const picked = (i.values || [])
-          .map((x) => Number(x))
-          .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
-        draft.days = Array.from(new Set(picked)).sort((a, b) => a - b);
-        markDirty();
-        return refresh();
-      }
-
-      // BUTTONS
-      if (!i.isButton?.()) return;
-
-      if (i.customId === CID.editTextBtn) {
-        return i.showModal(buildEditTextModal(CID.editTextModal, draft.text)).catch(() => {});
-      }
-
-      if (i.customId === CID.clearTextBtn) {
-        draft.text = "";
-        markDirty();
-        return refresh();
-      }
-
-      if (i.customId === CID.confirmBtn) {
-        return i.showModal(buildConfirmModal(CID.confirmModal)).catch(() => {});
-      }
-
-      if (i.customId === CID.resetBtn) {
-        draft.channelId = defaultChannelId;
-        draft.mode = att ? "image" : "embed";
-        draft.days = [0, 1, 2, 3, 4, 5, 6];
-        draft.text = "";
-        markDirty();
-        return refresh();
-      }
-
-      if (i.customId === CID.cancelBtn) return end("cancel");
-    }
-
-    CDISPO_SESSIONS.set(scope, { guildId, userId, handle, end });
-
-    refresh().catch(() => {});
+    return interaction
+      .editReply({
+        content:
+          `${ICON.ok} Messages créés: **${created.length}**\n` +
+          `Salon: <#${channel.id}>\n` +
+          `Mode: **${mode === "image" ? "Image (attachments)" : "Embed"}**\n` +
+          `Texte: **${text ? "personnalisé" : noDefaultText ? "aucun" : "par défaut"}**\n\n` +
+          `IDs (info):\n${createdList}`,
+      })
+      .catch(() => {});
   } catch {
     try {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction
+          .reply({ content: "⚠️ Erreur inconnue.", flags: MessageFlags.Ephemeral })
+          .catch(() => {});
       } else {
-        await interaction.followUp({ content: "⚠️", flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction
+          .editReply({ content: "⚠️ Erreur inconnue.", flags: MessageFlags.Ephemeral })
+          .catch(() => {});
       }
     } catch {}
   }
