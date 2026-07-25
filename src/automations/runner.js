@@ -1,86 +1,104 @@
 // src/automations/runner.js
-// Automation runner — CommonJS — MULTI JOBS
-//
-// ✅ PSEUDO
-// ✅ CHECK_DISPO (AUTO REPORT)
-// ✅ RAPPEL_DISPO (AUTO REMIND)  <-- aligné sur /setup (cfg.automations.rappel)
-//
-// ✅ LOGIQUE DEMANDÉE :
-// - Présents / Absents : TOUS ceux qui ont répondu (✅/❌) (hors bots)
-// - Sans réaction : UNIQUEMENT le rôle joueur (cfg.playerRoleIds)
-//
-// 🔒 Renforcement MAX des réactions / fetch (inchangé)
-// 🧠 Fix circular dependency: lazy-require dans tick() / fonctions
+// Runner des automations PROSYNC
+// CommonJS — discord.js v14
 
 const { EmbedBuilder } = require("discord.js");
 
-// --------------------
-// Constantes
-// --------------------
-const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+const DAYS = [
+  "Lundi",
+  "Mardi",
+  "Mercredi",
+  "Jeudi",
+  "Vendredi",
+  "Samedi",
+  "Dimanche",
+];
 
-// JS getDay(): 0=Dim .. 6=Sam  -> nous: 0=Lun .. 6=Dim
-function dayIndexFromDate(d = new Date()) {
-  const js = d.getDay();
-  return js === 0 ? 6 : js - 1;
+function dayIndexFromDate(date = new Date()) {
+  const jsDay = date.getDay();
+  return jsDay === 0 ? 6 : jsDay - 1;
 }
 
-// --------------------
-// Helpers généraux
-// --------------------
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function sleep(milliseconds) {
+  return new Promise((resolve) =>
+    setTimeout(resolve, milliseconds)
+  );
 }
 
-function cleanText(s, max = 64) {
-  return String(s || "")
+function cleanText(value, max = 64) {
+  return String(value || "")
     .replace(/[`|]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 }
 
-function uniq(arr) {
-  return Array.from(new Set((arr || []).map(String))).filter(Boolean);
+function uniq(input) {
+  return Array.from(
+    new Set(
+      (input || []).map((value) => String(value))
+    )
+  ).filter(Boolean);
 }
 
-function mentionList(ids, { empty = "—", max = 40 } = {}) {
-  const u = uniq(ids);
-  if (!u.length) return empty;
+function mentionList(
+  ids,
+  { empty = "—", max = 40 } = {}
+) {
+  const values = uniq(ids);
 
-  const sliced = u.slice(0, max).map((id) => `<@${id}>`);
-  const more = u.length > max ? `\n… +${u.length - max}` : "";
-  return sliced.join(" ") + more;
+  if (!values.length) return empty;
+
+  const mentions = values
+    .slice(0, max)
+    .map((id) => `<@${id}>`);
+
+  const more =
+    values.length > max
+      ? `\n… +${values.length - max}`
+      : "";
+
+  return mentions.join(" ") + more;
 }
 
-// --------------------
-// 🔒 Message / Reactions hardening
-// --------------------
 async function safeFetchMessage(channel, messageId) {
   if (!channel || !messageId) return null;
+
   try {
-    return await channel.messages.fetch(String(messageId));
+    return await channel.messages.fetch(
+      String(messageId)
+    );
   } catch {
     return null;
   }
 }
 
-async function ensureFreshMessage(msg) {
-  if (!msg) return null;
+async function ensureFreshMessage(message) {
+  if (!message) return null;
 
   try {
-    if (msg.partial) {
-      const m = await msg.fetch().catch(() => null);
-      return m || msg;
+    if (message.partial) {
+      const fetched = await message
+        .fetch()
+        .catch(() => null);
+
+      return fetched || message;
     }
-    const m = await msg.fetch({ force: true }).catch(() => null);
-    return m || msg;
+
+    const fetched = await message
+      .fetch({ force: true })
+      .catch(() => null);
+
+    return fetched || message;
   } catch {
     try {
-      const m = await msg.fetch().catch(() => null);
-      return m || msg;
+      const fetched = await message
+        .fetch()
+        .catch(() => null);
+
+      return fetched || message;
     } catch {
-      return msg;
+      return message;
     }
   }
 }
@@ -89,15 +107,23 @@ function findReactionInCache(message, emojiName) {
   if (!message?.reactions?.cache) return null;
 
   return (
-    message.reactions.cache.find((r) => r?.emoji?.name === emojiName) ||
-    message.reactions.cache.find((r) => r?.emoji?.toString?.() === emojiName)
+    message.reactions.cache.find(
+      (reaction) =>
+        reaction?.emoji?.name === emojiName
+    ) ||
+    message.reactions.cache.find(
+      (reaction) =>
+        reaction?.emoji?.toString?.() === emojiName
+    )
   );
 }
 
 async function tryFetchReactions(message) {
   try {
     if (message?.reactions?.fetch) {
-      await message.reactions.fetch().catch(() => null);
+      await message.reactions
+        .fetch()
+        .catch(() => null);
     }
   } catch {}
 }
@@ -106,480 +132,1071 @@ async function ensureFreshReaction(reaction) {
   if (!reaction) return null;
 
   try {
-    if (reaction.partial && typeof reaction.fetch === "function") {
-      const r = await reaction.fetch().catch(() => null);
-      return r || reaction;
+    if (
+      reaction.partial &&
+      typeof reaction.fetch === "function"
+    ) {
+      const fetched = await reaction
+        .fetch()
+        .catch(() => null);
+
+      return fetched || reaction;
     }
+
     return reaction;
   } catch {
     return reaction;
   }
 }
 
-// pagination safe (même si beaucoup de réactions)
-async function fetchAllReactionUsers(reaction, { maxPages = 15 } = {}) {
-  const out = new Set();
-  if (!reaction?.users?.fetch) return out;
+async function fetchAllReactionUsers(
+  reaction,
+  { maxPages = 15 } = {}
+) {
+  const output = new Set();
 
-  let after = undefined;
+  if (!reaction?.users?.fetch) return output;
+
+  let after;
   let pages = 0;
 
   while (pages < maxPages) {
     pages++;
-    const users = await reaction.users.fetch({ limit: 100, after }).catch(() => null);
+
+    const users = await reaction.users
+      .fetch({
+        limit: 100,
+        after,
+      })
+      .catch(() => null);
+
     if (!users || users.size === 0) break;
 
-    for (const u of users.values()) {
-      if (!u?.id) continue;
-      if (u.bot) continue;
-      out.add(u.id);
+    for (const user of users.values()) {
+      if (!user?.id || user.bot) continue;
+      output.add(user.id);
     }
 
     after = users.last()?.id;
+
     if (!after || users.size < 100) break;
   }
 
-  return out;
+  return output;
 }
 
-async function collectReactionUserIdsStrong(message, emojiName) {
-  const out = new Set();
+async function collectReactionUserIdsStrong(
+  message,
+  emojiName
+) {
+  const output = new Set();
 
-  if (!message) return { ok: false, reason: "no_message", users: out };
+  if (!message) {
+    return {
+      ok: false,
+      reason: "no_message",
+      users: output,
+    };
+  }
 
-  const freshMsg = await ensureFreshMessage(message);
+  const freshMessage =
+    await ensureFreshMessage(message);
 
-  const cacheSize1 = freshMsg?.reactions?.cache?.size ?? 0;
-  if (cacheSize1 === 0) await tryFetchReactions(freshMsg);
+  if (
+    (freshMessage?.reactions?.cache?.size ?? 0) === 0
+  ) {
+    await tryFetchReactions(freshMessage);
+  }
 
-  let reaction = findReactionInCache(freshMsg, emojiName);
+  let reaction = findReactionInCache(
+    freshMessage,
+    emojiName
+  );
 
   if (!reaction) {
-    await tryFetchReactions(freshMsg);
-    reaction = findReactionInCache(freshMsg, emojiName);
+    await tryFetchReactions(freshMessage);
+
+    reaction = findReactionInCache(
+      freshMessage,
+      emojiName
+    );
   }
 
   if (!reaction) {
-    const cacheSize2 = freshMsg?.reactions?.cache?.size ?? 0;
-    if (cacheSize2 === 0) return { ok: false, reason: "reactions_unavailable", users: out };
-    return { ok: true, reason: "emoji_not_found", users: out };
+    const cacheSize =
+      freshMessage?.reactions?.cache?.size ?? 0;
+
+    if (cacheSize === 0) {
+      return {
+        ok: false,
+        reason: "reactions_unavailable",
+        users: output,
+      };
+    }
+
+    return {
+      ok: true,
+      reason: "emoji_not_found",
+      users: output,
+    };
   }
 
   reaction = await ensureFreshReaction(reaction);
 
   try {
-    const users = await fetchAllReactionUsers(reaction);
-    for (const id of users) out.add(id);
+    const users =
+      await fetchAllReactionUsers(reaction);
+
+    for (const id of users) {
+      output.add(id);
+    }
   } catch {
-    return { ok: false, reason: "users_fetch_failed", users: out };
+    return {
+      ok: false,
+      reason: "users_fetch_failed",
+      users: output,
+    };
   }
 
-  return { ok: true, reason: "ok", users: out };
+  return {
+    ok: true,
+    reason: "ok",
+    users: output,
+  };
 }
 
-// --------------------
-// PSEUDO — scan salon
-// --------------------
 function parsePlatformIdFromContent(content) {
-  const txt = String(content || "");
-  const re = /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i;
-  const m = txt.match(re);
-  if (!m) return null;
+  const match = String(content || "").match(
+    /\b(psn|xbox|ea)\s*:\s*\/?\s*([^\s|]{2,64})/i
+  );
 
-  const platform = String(m[1]).toLowerCase();
-  const value = cleanText(m[2], 40);
-  if (!value) return null;
+  if (!match) return null;
 
-  return { platform, value };
+  const platform = String(match[1]).toLowerCase();
+  const value = cleanText(match[2], 40);
+
+  return value
+    ? {
+        platform,
+        value,
+      }
+    : null;
 }
 
-async function scanPseudoChannel(channel, { limit = 300 } = {}) {
-  const out = new Map();
+async function scanPseudoChannel(
+  channel,
+  { limit = 300 } = {}
+) {
+  const output = new Map();
 
-  let lastId = undefined;
-  let fetched = 0;
+  let lastId;
+  let fetchedCount = 0;
 
-  while (fetched < limit) {
-    const batchSize = Math.min(100, limit - fetched);
-    const messages = await channel.messages.fetch({ limit: batchSize, before: lastId }).catch(() => null);
+  while (fetchedCount < limit) {
+    const batchSize = Math.min(
+      100,
+      limit - fetchedCount
+    );
+
+    const messages = await channel.messages
+      .fetch({
+        limit: batchSize,
+        before: lastId,
+      })
+      .catch(() => null);
+
     if (!messages || messages.size === 0) break;
 
-    for (const msg of messages.values()) {
-      if (!msg?.author?.id) continue;
-      if (msg.author.bot) continue;
+    for (const message of messages.values()) {
+      if (!message?.author?.id || message.author.bot) {
+        continue;
+      }
 
-      const parsed = parsePlatformIdFromContent(msg.content);
+      const parsed = parsePlatformIdFromContent(
+        message.content
+      );
+
       if (!parsed) continue;
 
-      const userId = msg.author.id;
-      const cur = out.get(userId) || {};
+      const current =
+        output.get(message.author.id) || {};
 
-      // du + récent au + ancien -> ne remplace pas si déjà trouvé
-      if (!cur[parsed.platform]) {
-        cur[parsed.platform] = parsed.value;
-        out.set(userId, cur);
+      if (!current[parsed.platform]) {
+        current[parsed.platform] = parsed.value;
+        output.set(message.author.id, current);
       }
     }
 
-    fetched += messages.size;
+    fetchedCount += messages.size;
     lastId = messages.last()?.id;
+
     if (!lastId) break;
   }
 
-  return out;
+  return output;
 }
 
-async function runPseudoForGuild(guild, cfg, { scanLimit = 300, throttleMs = 850 } = {}) {
-  if (!guild) return { storedCount: 0, ok: 0, fail: 0, skipped: 0, notManageable: 0, scanned: false };
+async function runPseudoForGuild(
+  guild,
+  config,
+  { scanLimit = 300, throttleMs = 850 } = {}
+) {
+  if (!guild) {
+    return {
+      storedCount: 0,
+      ok: 0,
+      fail: 0,
+      skipped: 0,
+      notManageable: 0,
+      scanned: false,
+    };
+  }
 
-  // 🔧 lazy require (anti circular)
-  const { importAllPseudos } = require("../core/pseudoStore");
-  const { buildMemberLine } = require("../core/memberDisplay");
+  const { importAllPseudos } = require(
+    "../core/pseudoStore"
+  );
 
-  // 1) Scan (si salon configuré + accessible)
+  const { buildMemberLine } = require(
+    "../core/memberDisplay"
+  );
+
   let storedCount = 0;
   let scanned = false;
 
-  const pseudoScanChannelId = cfg?.pseudoScanChannelId;
-  if (pseudoScanChannelId) {
-    const ch = await guild.channels.fetch(pseudoScanChannelId).catch(() => null);
-    if (ch && typeof ch.isTextBased === "function" && ch.isTextBased()) {
-      const scannedMap = await scanPseudoChannel(ch, { limit: scanLimit }).catch(() => new Map());
+  if (config?.pseudoScanChannelId) {
+    const channel = await guild.channels
+      .fetch(config.pseudoScanChannelId)
+      .catch(() => null);
+
+    if (channel?.isTextBased?.()) {
+      const scannedMap = await scanPseudoChannel(
+        channel,
+        { limit: scanLimit }
+      ).catch(() => new Map());
 
       const usersPayload = {};
-      for (const [userId, patch] of scannedMap.entries()) {
-        if (!patch || typeof patch !== "object") continue;
 
-        const u = {};
-        if (patch.psn) u.psn = patch.psn;
-        if (patch.xbox) u.xbox = patch.xbox;
-        if (patch.ea) u.ea = patch.ea;
+      for (const [userId, patch] of scannedMap) {
+        const user = {};
 
-        if (Object.keys(u).length) {
-          usersPayload[String(userId)] = u;
+        if (patch.psn) user.psn = patch.psn;
+        if (patch.xbox) user.xbox = patch.xbox;
+        if (patch.ea) user.ea = patch.ea;
+
+        if (Object.keys(user).length > 0) {
+          usersPayload[String(userId)] = user;
           storedCount++;
         }
       }
 
       if (storedCount > 0) {
-        importAllPseudos({ version: 1, guilds: { [String(guild.id)]: { users: usersPayload } } }, { replace: false });
+        importAllPseudos(
+          {
+            version: 1,
+            guilds: {
+              [String(guild.id)]: {
+                users: usersPayload,
+              },
+            },
+          },
+          { replace: false }
+        );
       }
 
       scanned = true;
     }
   }
 
-  // 2) Sync nicknames
   await guild.members.fetch().catch(() => null);
-  const members = guild.members.cache.filter((m) => m && !m.user.bot);
+
+  const members = guild.members.cache.filter(
+    (member) => member && !member.user.bot
+  );
 
   let ok = 0;
   let fail = 0;
   let skipped = 0;
   let notManageable = 0;
 
-  for (const m of members.values()) {
-    if (!m.manageable) {
+  for (const member of members.values()) {
+    if (!member.manageable) {
       notManageable++;
       continue;
     }
 
-    const line = buildMemberLine(m, cfg);
-    if (!line || line.length < 2) {
+    const nickname = buildMemberLine(
+      member,
+      config
+    );
+
+    if (!nickname || nickname.length < 2) {
       skipped++;
       continue;
     }
 
-    if ((m.nickname || "") === line) {
+    if ((member.nickname || "") === nickname) {
       skipped++;
       continue;
     }
 
     try {
-      await m.setNickname(line, "PSEUDO_AUTO_SYNC");
+      await member.setNickname(
+        nickname,
+        "PROSYNC — synchronisation automatique"
+      );
+
       ok++;
     } catch {
       fail++;
     }
 
-    await sleep(throttleMs);
+    if (throttleMs > 0) {
+      await sleep(throttleMs);
+    }
   }
 
-  return { storedCount, ok, fail, skipped, notManageable, scanned };
+  return {
+    storedCount,
+    ok,
+    fail,
+    skipped,
+    notManageable,
+    scanned,
+  };
 }
 
-// --------------------
-// CHECK_DISPO — job auto
-// --------------------
-function hasAnyRoleId(member, ids) {
-  const arr = Array.isArray(ids) ? ids : [];
-  return arr.some((id) => id && member.roles.cache.has(String(id)));
+function hasAnyRoleId(member, roleIds) {
+  return (Array.isArray(roleIds) ? roleIds : []).some(
+    (roleId) =>
+      roleId &&
+      member.roles.cache.has(String(roleId))
+  );
 }
 
-function getDispoMessageIds(cfg) {
-  if (Array.isArray(cfg?.dispoMessageIds)) {
-    const a = cfg.dispoMessageIds.slice(0, 7).map((v) => (v ? String(v) : null));
-    while (a.length < 7) a.push(null);
-    return a;
+function getDispoMessageIds(config) {
+  if (Array.isArray(config?.dispoMessageIds)) {
+    const values = config.dispoMessageIds
+      .slice(0, 7)
+      .map((value) =>
+        value ? String(value) : null
+      );
+
+    while (values.length < 7) {
+      values.push(null);
+    }
+
+    return values;
   }
 
-  // compat legacy
   const legacy = [];
-  for (let i = 0; i < 7; i++) legacy.push(cfg?.[`dispoMessageId_${i}`] ? String(cfg[`dispoMessageId_${i}`]) : null);
-  while (legacy.length < 7) legacy.push(null);
+
+  for (let index = 0; index < 7; index++) {
+    legacy.push(
+      config?.[`dispoMessageId_${index}`]
+        ? String(
+            config[`dispoMessageId_${index}`]
+          )
+        : null
+    );
+  }
+
   return legacy.slice(0, 7);
 }
 
-function resolveDispoChannelId(cfg) {
-  const v =
-    cfg?.checkDispoChannelId && String(cfg.checkDispoChannelId) !== "null"
-      ? cfg.checkDispoChannelId
-      : cfg?.disposChannelId;
-  return v ? String(v) : null;
+function resolveDispoChannelId(config) {
+  const value =
+    config?.checkDispoChannelId &&
+    String(config.checkDispoChannelId) !== "null"
+      ? config.checkDispoChannelId
+      : config?.disposChannelId;
+
+  return value ? String(value) : null;
 }
 
-async function runCheckDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
-  if (!guild) return { ok: false, reason: "no_guild" };
+async function runCheckDispoForGuild(
+  guild,
+  config,
+  { throttleMs = 0 } = {}
+) {
+  if (!guild) {
+    return { ok: false, reason: "no_guild" };
+  }
 
-  const reportChannelId = cfg?.staffReportsChannelId ? String(cfg.staffReportsChannelId) : null;
-  if (!reportChannelId) return { ok: false, reason: "no_staff_reports_channel" };
+  const reportChannelId =
+    config?.staffReportsChannelId
+      ? String(config.staffReportsChannelId)
+      : null;
 
-  const disposChannelId = resolveDispoChannelId(cfg);
-  if (!disposChannelId) return { ok: false, reason: "no_dispo_channel" };
+  const dispoChannelId =
+    resolveDispoChannelId(config);
 
-  const messageIds = getDispoMessageIds(cfg);
-  const idx = dayIndexFromDate(new Date());
-  const dayLabel = DAYS[idx];
-  const mid = messageIds[idx];
+  if (!reportChannelId) {
+    return {
+      ok: false,
+      reason: "no_staff_reports_channel",
+    };
+  }
 
-  const reportChannel = await guild.channels.fetch(reportChannelId).catch(() => null);
-  if (!reportChannel || !reportChannel.isTextBased?.()) return { ok: false, reason: "invalid_report_channel" };
+  if (!dispoChannelId) {
+    return {
+      ok: false,
+      reason: "no_dispo_channel",
+    };
+  }
 
-  const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
-  if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
+  const dayIndex = dayIndexFromDate(new Date());
+  const dayLabel = DAYS[dayIndex];
+  const messageId =
+    getDispoMessageIds(config)[dayIndex];
+
+  const reportChannel = await guild.channels
+    .fetch(reportChannelId)
+    .catch(() => null);
+
+  const dispoChannel = await guild.channels
+    .fetch(dispoChannelId)
+    .catch(() => null);
+
+  if (!reportChannel?.isTextBased?.()) {
+    return {
+      ok: false,
+      reason: "invalid_report_channel",
+    };
+  }
+
+  if (!dispoChannel?.isTextBased?.()) {
+    return {
+      ok: false,
+      reason: "invalid_dispo_channel",
+    };
+  }
 
   await guild.members.fetch().catch(() => null);
 
-  // ✅ Rôle joueur uniquement pour "Sans réaction"
-  const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
-  if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
+  const playerRoleIds = Array.isArray(
+    config?.playerRoleIds
+  )
+    ? config.playerRoleIds
+    : [];
+
+  if (!playerRoleIds.length) {
+    return {
+      ok: false,
+      reason: "no_player_roles",
+    };
+  }
 
   const players = guild.members.cache
-    .filter((m) => m && !m.user.bot)
-    .filter((m) => hasAnyRoleId(m, playerRoleIds));
+    .filter(
+      (member) => member && !member.user.bot
+    )
+    .filter((member) =>
+      hasAnyRoleId(member, playerRoleIds)
+    );
 
-  const playerIds = new Set(players.map((m) => m.user.id));
+  const playerIds = new Set(
+    players.map((member) => member.id)
+  );
 
   const embed = new EmbedBuilder()
     .setTitle(`📊 Check Dispo — ${dayLabel}`)
-    .setColor(0x5865f2)
+    .setColor(0xed4245)
     .setDescription(
-      `Salon : <#${disposChannelId}>\n` +
-        `Présents/Absents : **tous** les répondants (✅/❌)\n` +
-        `Sans réaction : rôles Joueurs (👟)\n` +
+      `Salon : <#${dispoChannelId}>\n` +
         `Joueurs détectés : **${playerIds.size}**`
     )
-    .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+    .setFooter({ text: "PROSYNC" });
 
-  if (!mid) {
-    embed.addFields({ name: "⚠️ Message", value: "ID du message non configuré pour ce jour (Lun..Dim).", inline: false });
-    await reportChannel.send({ embeds: [embed] }).catch(() => null);
-    if (throttleMs) await sleep(throttleMs);
-    return { ok: true, dayIndex: idx, dayLabel, mid: null };
+  if (!messageId) {
+    embed.addFields({
+      name: "⚠️ Message",
+      value:
+        "Aucun ID configuré pour ce jour.",
+    });
+
+    await reportChannel
+      .send({ embeds: [embed] })
+      .catch(() => null);
+
+    return {
+      ok: true,
+      dayIndex,
+      dayLabel,
+      messageId: null,
+    };
   }
 
-  const msg = await safeFetchMessage(dispoChannel, mid);
-  if (!msg) {
-    embed.addFields({ name: "⚠️ Message", value: `Message introuvable (ID: \`${mid}\`).`, inline: false });
-    await reportChannel.send({ embeds: [embed] }).catch(() => null);
-    if (throttleMs) await sleep(throttleMs);
-    return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true };
+  const message = await safeFetchMessage(
+    dispoChannel,
+    messageId
+  );
+
+  if (!message) {
+    embed.addFields({
+      name: "⚠️ Message",
+      value: `Message introuvable : \`${messageId}\`.`,
+    });
+
+    await reportChannel
+      .send({ embeds: [embed] })
+      .catch(() => null);
+
+    return {
+      ok: true,
+      dayIndex,
+      dayLabel,
+      messageId,
+      missingMessage: true,
+    };
   }
 
-  const okRes = await collectReactionUserIdsStrong(msg, "✅");
-  const noRes = await collectReactionUserIdsStrong(msg, "❌");
+  const yesResult =
+    await collectReactionUserIdsStrong(
+      message,
+      "✅"
+    );
+
+  const noResult =
+    await collectReactionUserIdsStrong(
+      message,
+      "❌"
+    );
 
   const bothUnavailable =
-    !okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable";
+    !yesResult.ok &&
+    yesResult.reason === "reactions_unavailable" &&
+    !noResult.ok &&
+    noResult.reason === "reactions_unavailable";
 
   if (bothUnavailable) {
     embed.addFields({
       name: "🚫 Réactions indisponibles",
       value:
-        "Impossible de lire les réactions sur ce message.\n" +
-        "Vérifie: **ViewChannel + ReadMessageHistory** sur le salon dispo, et l’intent **GuildMessageReactions**.",
-      inline: false,
+        "Vérifie les permissions View Channel, Read Message History et l’intent GuildMessageReactions.",
     });
-    await reportChannel.send({ embeds: [embed] }).catch(() => null);
-    if (throttleMs) await sleep(throttleMs);
-    return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true };
+
+    await reportChannel
+      .send({ embeds: [embed] })
+      .catch(() => null);
+
+    return {
+      ok: true,
+      dayIndex,
+      dayLabel,
+      messageId,
+      reactionsUnavailable: true,
+    };
   }
 
-  // ✅ Présents/Absents = TOUT LE MONDE (hors bots) qui a réagi
-  const okAll = Array.from(okRes.users);
-  const noAll = Array.from(noRes.users);
+  const yesIds = Array.from(yesResult.users);
+  const noIds = Array.from(noResult.users);
+  const reacted = new Set([...yesIds, ...noIds]);
 
-  // ✅ Sans réaction = UNIQUEMENT joueurs
-  const reacted = new Set([...okAll, ...noAll]);
-  const missingPlayers = Array.from(playerIds).filter((id) => !reacted.has(id));
-
-  const warn =
-    (!okRes.ok && okRes.reason !== "emoji_not_found") || (!noRes.ok && noRes.reason !== "emoji_not_found")
-      ? `\n\n⚠️ Lecture réactions partielle: ✅(${okRes.ok ? "ok" : okRes.reason}) / ❌(${noRes.ok ? "ok" : noRes.reason})`
-      : "";
-
-  embed.setDescription(
-    `Salon : <#${disposChannelId}>\n` +
-      `Présents/Absents : **tous** les répondants (✅/❌)\n` +
-      `Sans réaction : rôles Joueurs (👟)\n` +
-      `Joueurs détectés : **${playerIds.size}**` +
-      warn
-  );
+  const missingPlayers = Array.from(
+    playerIds
+  ).filter((id) => !reacted.has(id));
 
   embed.addFields(
-    { name: `🟩 ✅ Présents (${okAll.length})`, value: mentionList(okAll), inline: false },
-    { name: `🟥 ❌ Absents (${noAll.length})`, value: mentionList(noAll), inline: false },
-    { name: `🟦 ⏳ Sans réaction — Joueurs (${missingPlayers.length})`, value: mentionList(missingPlayers), inline: false }
+    {
+      name: `🟩 Présents (${yesIds.length})`,
+      value: mentionList(yesIds),
+    },
+    {
+      name: `🟥 Absents (${noIds.length})`,
+      value: mentionList(noIds),
+    },
+    {
+      name: `🟦 Sans réaction (${missingPlayers.length})`,
+      value: mentionList(missingPlayers),
+    }
   );
 
-  await reportChannel.send({ embeds: [embed] }).catch(() => null);
-  if (throttleMs) await sleep(throttleMs);
+  await reportChannel
+    .send({ embeds: [embed] })
+    .catch(() => null);
 
-  return { ok: true, dayIndex: idx, dayLabel, mid };
+  if (throttleMs > 0) {
+    await sleep(throttleMs);
+  }
+
+  return {
+    ok: true,
+    dayIndex,
+    dayLabel,
+    messageId,
+  };
 }
 
-// --------------------
-// RAPPEL_DISPO — job auto (aligné /setup)
-// ✅ CHANGÉ: envoi dans le salon DISPO (et non staffReportsChannelId)
-// -> rappel UNIQUEMENT pour joueurs sans réaction
-// --------------------
-function buildMessageLink(guildId, channelId, messageId) {
-  if (!guildId || !channelId || !messageId) return null;
+function buildMessageLink(
+  guildId,
+  channelId,
+  messageId
+) {
+  if (!guildId || !channelId || !messageId) {
+    return null;
+  }
+
   return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
 }
 
-async function runRappelDispoForGuild(guild, cfg, { throttleMs = 0 } = {}) {
-  if (!guild) return { ok: false, reason: "no_guild" };
+async function runRappelDispoForGuild(
+  guild,
+  config,
+  { throttleMs = 0 } = {}
+) {
+  if (!guild) {
+    return { ok: false, reason: "no_guild" };
+  }
 
-  // ✅ salon dispo = salon d'envoi du rappel
-  const disposChannelId = resolveDispoChannelId(cfg);
-  if (!disposChannelId) return { ok: false, reason: "no_dispo_channel" };
+  const dispoChannelId =
+    resolveDispoChannelId(config);
 
-  const messageIds = getDispoMessageIds(cfg);
-  const idx = dayIndexFromDate(new Date());
-  const dayLabel = DAYS[idx];
-  const mid = messageIds[idx];
+  if (!dispoChannelId) {
+    return {
+      ok: false,
+      reason: "no_dispo_channel",
+    };
+  }
 
-  const dispoChannel = await guild.channels.fetch(disposChannelId).catch(() => null);
-  if (!dispoChannel || !dispoChannel.isTextBased?.()) return { ok: false, reason: "invalid_dispo_channel" };
+  const dayIndex = dayIndexFromDate(new Date());
+  const dayLabel = DAYS[dayIndex];
+  const messageId =
+    getDispoMessageIds(config)[dayIndex];
+
+  const channel = await guild.channels
+    .fetch(dispoChannelId)
+    .catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return {
+      ok: false,
+      reason: "invalid_dispo_channel",
+    };
+  }
+
+  if (!messageId) {
+    return {
+      ok: true,
+      dayIndex,
+      dayLabel,
+      messageId: null,
+      nothingToDo: true,
+    };
+  }
 
   await guild.members.fetch().catch(() => null);
 
-  // ✅ Rôle joueur uniquement pour "Sans réaction" / rappel
-  const playerRoleIds = Array.isArray(cfg?.playerRoleIds) ? cfg.playerRoleIds : [];
-  if (!playerRoleIds.length) return { ok: false, reason: "no_player_roles" };
+  const playerRoleIds = Array.isArray(
+    config?.playerRoleIds
+  )
+    ? config.playerRoleIds
+    : [];
+
+  if (!playerRoleIds.length) {
+    return {
+      ok: false,
+      reason: "no_player_roles",
+    };
+  }
 
   const players = guild.members.cache
-    .filter((m) => m && !m.user.bot)
-    .filter((m) => hasAnyRoleId(m, playerRoleIds));
+    .filter(
+      (member) => member && !member.user.bot
+    )
+    .filter((member) =>
+      hasAnyRoleId(member, playerRoleIds)
+    );
 
-  const playerIds = new Set(players.map((m) => m.user.id));
+  const playerIds = new Set(
+    players.map((member) => member.id)
+  );
 
-  if (!mid) {
-    return { ok: true, dayIndex: idx, dayLabel, mid: null, missing: [], nothingToDo: true };
+  const message = await safeFetchMessage(
+    channel,
+    messageId
+  );
+
+  if (!message) {
+    return {
+      ok: false,
+      reason: "message_not_found",
+    };
   }
 
-  const msg = await safeFetchMessage(dispoChannel, mid);
-  if (!msg) {
-    await dispoChannel
-      .send({
-        content:
-          `⚠️ **Rappel Dispo — ${dayLabel}**\n` +
-          `Message introuvable (ID: \`${mid}\`). Vérifie /setup → IDs (Lun..Dim).`,
-      })
-      .catch(() => null);
+  const yesResult =
+    await collectReactionUserIdsStrong(
+      message,
+      "✅"
+    );
 
-    if (throttleMs) await sleep(throttleMs);
-    return { ok: true, dayIndex: idx, dayLabel, mid, missingMessage: true, missing: [] };
+  const noResult =
+    await collectReactionUserIdsStrong(
+      message,
+      "❌"
+    );
+
+  const reacted = new Set([
+    ...yesResult.users,
+    ...noResult.users,
+  ]);
+
+  const missing = Array.from(playerIds).filter(
+    (id) => !reacted.has(id)
+  );
+
+  if (!missing.length) {
+    return {
+      ok: true,
+      dayIndex,
+      dayLabel,
+      messageId,
+      nothingToDo: true,
+    };
   }
 
-  const okRes = await collectReactionUserIdsStrong(msg, "✅");
-  const noRes = await collectReactionUserIdsStrong(msg, "❌");
+  const link = buildMessageLink(
+    guild.id,
+    dispoChannelId,
+    messageId
+  );
 
-  const bothUnavailable =
-    !okRes.ok && okRes.reason === "reactions_unavailable" && !noRes.ok && noRes.reason === "reactions_unavailable";
-
-  if (bothUnavailable) {
-    await dispoChannel
-      .send({
-        content:
-          `🚫 **Rappel Dispo — ${dayLabel}**\n` +
-          `Impossible de lire les réactions (permissions/intents/cache).\n` +
-          `Vérifie: **ViewChannel + ReadMessageHistory** sur <#${disposChannelId}> + intent **GuildMessageReactions**.`,
-      })
-      .catch(() => null);
-
-    if (throttleMs) await sleep(throttleMs);
-    return { ok: true, dayIndex: idx, dayLabel, mid, reactionsUnavailable: true, missing: [] };
-  }
-
-  const okAll = Array.from(okRes.users);
-  const noAll = Array.from(noRes.users);
-  const reacted = new Set([...okAll, ...noAll]);
-
-  // ✅ Rappel UNIQUEMENT pour joueurs sans réaction
-  const missingPlayers = Array.from(playerIds).filter((id) => !reacted.has(id));
-
-  if (!missingPlayers.length) {
-    return { ok: true, dayIndex: idx, dayLabel, mid, missing: [], nothingToDo: true };
-  }
-
-  const link = buildMessageLink(guild.id, disposChannelId, mid);
-
-  const content =
-    `⏰ **Rappel Dispo — ${dayLabel}**\n` +
-    `Merci de répondre au message (✅ ou ❌) dans <#${disposChannelId}>.` +
-    (link ? `\n➡️ ${link}` : "") +
-    `\n\n${mentionList(missingPlayers, { max: 60, empty: "—" })}`;
-
-  await dispoChannel
+  await channel
     .send({
-      content,
-      allowedMentions: { users: missingPlayers, roles: [], repliedUser: false },
+      content:
+        `⏰ **Rappel Dispo — ${dayLabel}**\n` +
+        `Merci de répondre avec ✅ ou ❌.` +
+        (link ? `\n➡️ ${link}` : "") +
+        `\n\n${mentionList(missing, {
+          max: 60,
+        })}`,
+      allowedMentions: {
+        users: missing.slice(0, 100),
+        roles: [],
+        repliedUser: false,
+      },
     })
     .catch(() => null);
 
-  if (throttleMs) await sleep(throttleMs);
+  if (throttleMs > 0) {
+    await sleep(throttleMs);
+  }
 
-  return { ok: true, dayIndex: idx, dayLabel, mid, missing: missingPlayers, sent: true };
+  return {
+    ok: true,
+    dayIndex,
+    dayLabel,
+    messageId,
+    missing,
+    sent: true,
+  };
 }
 
-// --------------------
-// Scheduler (HH:MM) — anti double-run
-// --------------------
-function pad2(n) {
-  return String(n).padStart(2, "0");
+// Ajoute le rôle aux joueurs sans réaction.
+// Retire le rôle aux joueurs ayant répondu.
+// Le rôle peut donc être régularisé automatiquement tant que
+// l'automation repasse au dernier horaire configuré.
+async function runAvertissementForGuild(
+  guild,
+  config,
+  { throttleMs = 250 } = {}
+) {
+  if (!guild) {
+    return { ok: false, reason: "no_guild" };
+  }
+
+  const warningRoleId =
+    config?.automations?.avertissement?.roleId
+      ? String(
+          config.automations.avertissement.roleId
+        )
+      : null;
+
+  if (!warningRoleId) {
+    return {
+      ok: false,
+      reason: "no_warning_role",
+    };
+  }
+
+  const warningRole = await guild.roles
+    .fetch(warningRoleId)
+    .catch(() => null);
+
+  if (!warningRole) {
+    return {
+      ok: false,
+      reason: "warning_role_not_found",
+    };
+  }
+
+  if (!warningRole.editable) {
+    return {
+      ok: false,
+      reason: "warning_role_not_editable",
+    };
+  }
+
+  const dispoChannelId =
+    resolveDispoChannelId(config);
+
+  if (!dispoChannelId) {
+    return {
+      ok: false,
+      reason: "no_dispo_channel",
+    };
+  }
+
+  const channel = await guild.channels
+    .fetch(dispoChannelId)
+    .catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return {
+      ok: false,
+      reason: "invalid_dispo_channel",
+    };
+  }
+
+  const playerRoleIds = Array.isArray(
+    config?.playerRoleIds
+  )
+    ? config.playerRoleIds
+    : [];
+
+  if (!playerRoleIds.length) {
+    return {
+      ok: false,
+      reason: "no_player_roles",
+    };
+  }
+
+  const dayIndex = dayIndexFromDate(new Date());
+  const dayLabel = DAYS[dayIndex];
+  const messageId =
+    getDispoMessageIds(config)[dayIndex];
+
+  if (!messageId) {
+    return {
+      ok: false,
+      reason: "no_dispo_message",
+      dayIndex,
+      dayLabel,
+    };
+  }
+
+  const message = await safeFetchMessage(
+    channel,
+    messageId
+  );
+
+  if (!message) {
+    return {
+      ok: false,
+      reason: "dispo_message_not_found",
+      dayIndex,
+      dayLabel,
+    };
+  }
+
+  const yesResult =
+    await collectReactionUserIdsStrong(
+      message,
+      "✅"
+    );
+
+  const noResult =
+    await collectReactionUserIdsStrong(
+      message,
+      "❌"
+    );
+
+  const bothUnavailable =
+    !yesResult.ok &&
+    yesResult.reason === "reactions_unavailable" &&
+    !noResult.ok &&
+    noResult.reason === "reactions_unavailable";
+
+  if (bothUnavailable) {
+    return {
+      ok: false,
+      reason: "reactions_unavailable",
+      dayIndex,
+      dayLabel,
+    };
+  }
+
+  await guild.members.fetch().catch(() => null);
+
+  const players = guild.members.cache
+    .filter(
+      (member) => member && !member.user.bot
+    )
+    .filter((member) =>
+      hasAnyRoleId(member, playerRoleIds)
+    );
+
+  const reactedIds = new Set([
+    ...yesResult.users,
+    ...noResult.users,
+  ]);
+
+  let added = 0;
+  let removed = 0;
+  let unchanged = 0;
+  let failed = 0;
+
+  const addedIds = [];
+  const removedIds = [];
+
+  for (const member of players.values()) {
+    const hasReacted = reactedIds.has(member.id);
+    const hasWarningRole =
+      member.roles.cache.has(warningRoleId);
+
+    try {
+      if (!hasReacted && !hasWarningRole) {
+        await member.roles.add(
+          warningRoleId,
+          `PROSYNC — disponibilité non renseignée (${dayLabel})`
+        );
+
+        added++;
+        addedIds.push(member.id);
+      } else if (hasReacted && hasWarningRole) {
+        await member.roles.remove(
+          warningRoleId,
+          `PROSYNC — disponibilité renseignée (${dayLabel})`
+        );
+
+        removed++;
+        removedIds.push(member.id);
+      } else {
+        unchanged++;
+      }
+    } catch {
+      failed++;
+    }
+
+    if (throttleMs > 0) {
+      await sleep(throttleMs);
+    }
+  }
+
+  const reportChannelId =
+    config?.staffReportsChannelId
+      ? String(config.staffReportsChannelId)
+      : null;
+
+  if (reportChannelId) {
+    const reportChannel = await guild.channels
+      .fetch(reportChannelId)
+      .catch(() => null);
+
+    if (reportChannel?.isTextBased?.()) {
+      const embed = new EmbedBuilder()
+        .setTitle(
+          `⚠️ Avertissements Dispo — ${dayLabel}`
+        )
+        .setColor(0xed4245)
+        .setDescription(
+          `Rôle : <@&${warningRoleId}>\n` +
+            `Message : \`${messageId}\`\n` +
+            `Joueurs contrôlés : **${players.size}**`
+        )
+        .addFields(
+          {
+            name: `Rôle ajouté (${added})`,
+            value: mentionList(addedIds),
+          },
+          {
+            name: `Rôle retiré (${removed})`,
+            value: mentionList(removedIds),
+          },
+          {
+            name: "Résultat",
+            value:
+              `Inchangés : **${unchanged}**\n` +
+              `Échecs : **${failed}**`,
+          }
+        )
+        .setFooter({ text: "PROSYNC" });
+
+      await reportChannel
+        .send({ embeds: [embed] })
+        .catch(() => null);
+    }
+  }
+
+  return {
+    ok: true,
+    dayIndex,
+    dayLabel,
+    messageId,
+    added,
+    removed,
+    unchanged,
+    failed,
+  };
 }
 
-function minuteKey(d = new Date()) {
-  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+function pad2(value) {
+  return String(value).padStart(2, "0");
 }
 
-function parseHHMM(s) {
-  const m = String(s || "").trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-  if (!m) return null;
-  return { hh: Number(m[1]), mm: Number(m[2]) };
+function minuteKey(date = new Date()) {
+  return (
+    `${date.getFullYear()}` +
+    `${pad2(date.getMonth() + 1)}` +
+    `${pad2(date.getDate())}` +
+    `${pad2(date.getHours())}` +
+    `${pad2(date.getMinutes())}`
+  );
 }
 
-// --------------------
-// Runner
-// --------------------
-function startAutomationRunner(client, opts = {}) {
-  const scanLimit = typeof opts.scanLimit === "number" ? opts.scanLimit : 300;
-  const throttleMsPseudo = typeof opts.throttleMsPseudo === "number" ? opts.throttleMsPseudo : 850;
-  const throttleMsCheck = typeof opts.throttleMsCheck === "number" ? opts.throttleMsCheck : 0;
-  const throttleMsRappel = typeof opts.throttleMsRappel === "number" ? opts.throttleMsRappel : 0;
-  const loopMs = typeof opts.loopMs === "number" ? opts.loopMs : 20_000;
+function parseHHMM(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+
+  if (!match) return null;
+
+  return {
+    hours: Number(match[1]),
+    minutes: Number(match[2]),
+  };
+}
+
+function startAutomationRunner(client, options = {}) {
+  const scanLimit =
+    typeof options.scanLimit === "number"
+      ? options.scanLimit
+      : 300;
+
+  const throttleMsPseudo =
+    typeof options.throttleMsPseudo === "number"
+      ? options.throttleMsPseudo
+      : 850;
+
+  const throttleMsCheck =
+    typeof options.throttleMsCheck === "number"
+      ? options.throttleMsCheck
+      : 0;
+
+  const throttleMsRappel =
+    typeof options.throttleMsRappel === "number"
+      ? options.throttleMsRappel
+      : 0;
+
+  const throttleMsAvertissement =
+    typeof options.throttleMsAvertissement ===
+    "number"
+      ? options.throttleMsAvertissement
+      : 250;
+
+  const loopMs =
+    typeof options.loopMs === "number"
+      ? options.loopMs
+      : 20_000;
 
   const lastRun = new Map();
 
@@ -588,80 +1205,197 @@ function startAutomationRunner(client, opts = {}) {
       if (!client?.guilds?.cache) return;
 
       const now = new Date();
-      const hh = now.getHours();
-      const mm = now.getMinutes();
-      const mKey = minuteKey(now);
+      const hours = now.getHours();
+      const minutes = now.getMinutes();
+      const currentMinuteKey = minuteKey(now);
 
-      // 🔧 lazy require (anti circular)
-      const { getGuildConfig } = require("../core/guildConfig");
+      const { getGuildConfig } = require(
+        "../core/guildConfig"
+      );
 
       for (const guild of client.guilds.cache.values()) {
-        const cfg = getGuildConfig(guild.id);
-        if (!cfg) continue;
+        const config = getGuildConfig(guild.id);
 
-        // ✅ switch global
-        if (cfg?.automations?.enabled !== true) continue;
+        if (!config) continue;
 
-        // ---------- PSEUDO ----------
-        if (cfg?.automations?.pseudo?.enabled === true) {
-          const pseudoMinute = Number.isInteger(cfg?.automations?.pseudo?.minute) ? cfg.automations.pseudo.minute : 10;
+        if (config.automations?.enabled !== true) {
+          continue;
+        }
 
-          if (mm === pseudoMinute) {
+        if (
+          config.automations?.pseudo?.enabled === true
+        ) {
+          const pseudoMinute = Number.isInteger(
+            config.automations.pseudo.minute
+          )
+            ? config.automations.pseudo.minute
+            : 10;
+
+          if (minutes === pseudoMinute) {
             const key = `${guild.id}:pseudo`;
-            if (lastRun.get(key) !== mKey) {
-              lastRun.set(key, mKey);
-              await runPseudoForGuild(guild, cfg, { scanLimit, throttleMs: throttleMsPseudo });
+
+            if (
+              lastRun.get(key) !== currentMinuteKey
+            ) {
+              lastRun.set(key, currentMinuteKey);
+
+              await runPseudoForGuild(guild, config, {
+                scanLimit,
+                throttleMs: throttleMsPseudo,
+              });
             }
           }
         }
 
-        // ---------- CHECK_DISPO ----------
-        if (cfg?.automations?.checkDispo?.enabled === true) {
-          const times = Array.isArray(cfg?.automations?.checkDispo?.times) ? cfg.automations.checkDispo.times : [];
-          for (const t of times) {
-            const parsed = parseHHMM(t);
+        if (
+          config.automations?.checkDispo?.enabled ===
+          true
+        ) {
+          const times = Array.isArray(
+            config.automations.checkDispo.times
+          )
+            ? config.automations.checkDispo.times
+            : [];
+
+          for (const time of times) {
+            const parsed = parseHHMM(time);
+
             if (!parsed) continue;
 
-            if (hh === parsed.hh && mm === parsed.mm) {
-              const key = `${guild.id}:check_dispo:${t}`;
-              if (lastRun.get(key) !== mKey) {
-                lastRun.set(key, mKey);
-                await runCheckDispoForGuild(guild, cfg, { throttleMs: throttleMsCheck });
+            if (
+              hours === parsed.hours &&
+              minutes === parsed.minutes
+            ) {
+              const key =
+                `${guild.id}:check_dispo:${time}`;
+
+              if (
+                lastRun.get(key) !==
+                currentMinuteKey
+              ) {
+                lastRun.set(
+                  key,
+                  currentMinuteKey
+                );
+
+                await runCheckDispoForGuild(
+                  guild,
+                  config,
+                  {
+                    throttleMs: throttleMsCheck,
+                  }
+                );
               }
             }
           }
         }
 
-        // ---------- RAPPEL_DISPO (aligné setup: automations.rappel) ----------
-        if (cfg?.automations?.rappel?.enabled === true) {
-          const times = Array.isArray(cfg?.automations?.rappel?.times) ? cfg.automations.rappel.times : [];
-          for (const t of times) {
-            const parsed = parseHHMM(t);
+        if (
+          config.automations?.rappel?.enabled === true
+        ) {
+          const times = Array.isArray(
+            config.automations.rappel.times
+          )
+            ? config.automations.rappel.times
+            : [];
+
+          for (const time of times) {
+            const parsed = parseHHMM(time);
+
             if (!parsed) continue;
 
-            if (hh === parsed.hh && mm === parsed.mm) {
-              const key = `${guild.id}:rappel_dispo:${t}`;
-              if (lastRun.get(key) !== mKey) {
-                lastRun.set(key, mKey);
-                await runRappelDispoForGuild(guild, cfg, { throttleMs: throttleMsRappel });
+            if (
+              hours === parsed.hours &&
+              minutes === parsed.minutes
+            ) {
+              const key =
+                `${guild.id}:rappel_dispo:${time}`;
+
+              if (
+                lastRun.get(key) !==
+                currentMinuteKey
+              ) {
+                lastRun.set(
+                  key,
+                  currentMinuteKey
+                );
+
+                await runRappelDispoForGuild(
+                  guild,
+                  config,
+                  {
+                    throttleMs:
+                      throttleMsRappel,
+                  }
+                );
               }
+            }
+          }
+        }
+
+        if (
+          config.automations?.avertissement
+            ?.enabled === true
+        ) {
+          const checkTimes = Array.isArray(
+            config.automations?.checkDispo?.times
+          )
+            ? [...config.automations.checkDispo.times]
+                .map(String)
+                .sort((a, b) => a.localeCompare(b))
+            : [];
+
+          const lastCheckTime =
+            checkTimes.length > 0
+              ? checkTimes[checkTimes.length - 1]
+              : null;
+
+          const parsed = parseHHMM(lastCheckTime);
+
+          if (
+            parsed &&
+            hours === parsed.hours &&
+            minutes === parsed.minutes
+          ) {
+            const key =
+              `${guild.id}:avertissement:${lastCheckTime}`;
+
+            if (
+              lastRun.get(key) !== currentMinuteKey
+            ) {
+              lastRun.set(key, currentMinuteKey);
+
+              await runAvertissementForGuild(
+                guild,
+                config,
+                {
+                  throttleMs:
+                    throttleMsAvertissement,
+                }
+              );
             }
           }
         }
       }
-    } catch {
-      // silencieux volontairement
+    } catch (error) {
+      console.error(
+        "[PROSYNC][AUTOMATION_TICK]",
+        error
+      );
     }
   }
 
   const timer = setInterval(tick, loopMs);
   timer.unref?.();
 
-  if (opts.runOnStart === true) tick();
+  if (options.runOnStart === true) {
+    tick().catch(() => {});
+  }
 
   return () => clearInterval(timer);
 }
 
 module.exports = {
   startAutomationRunner,
+  runAvertissementForGuild,
 };
