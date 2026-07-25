@@ -1,5 +1,6 @@
 // src/index.js
-// XIG BLAUGRANA FC Staff — minimal multi-serveur (discord.js v14)
+// PROSYNC — Bot Discord multi-serveur de gestion Club Pro
+// CommonJS — discord.js v14
 
 require("dotenv").config();
 
@@ -16,13 +17,12 @@ const fs = require("fs");
 const path = require("path");
 
 const { startAutomationRunner } = require("./automations/runner");
-
-// ✅ IMPORTANT : listener global setup
 const { ensureGlobalSetupListener } = require("./commands/setup");
 
 const TOKEN = process.env.TOKEN;
+
 if (!TOKEN) {
-  console.error("TOKEN manquant");
+  console.error("[PROSYNC] TOKEN manquant.");
   process.exit(1);
 }
 
@@ -30,57 +30,60 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-
-    // ✅ fetch messages (scan pseudo + fetch message dispo)
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // ⚠️ privileged intent (à activer sur le Dev Portal)
-
-    // ✅ lire réactions ✅/❌ sur les messages de dispo
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions,
   ],
-  partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
+  partials: [
+    Partials.Channel,
+    Partials.Message,
+    Partials.Reaction,
+    Partials.User,
+  ],
 });
 
 client.commands = new Collection();
 
-// ---------- Chargement auto des commandes (src/commands/*.js) ----------
+// --------------------------------------------------
+// Chargement automatique des commandes
+// --------------------------------------------------
 const cmdDir = path.join(__dirname, "commands");
 
 if (!fs.existsSync(cmdDir)) {
-  console.warn("[WARN] Dossier src/commands introuvable (aucune commande chargée).");
+  console.warn("[PROSYNC] Dossier src/commands introuvable.");
 } else {
-  const files = fs.readdirSync(cmdDir).filter((f) => f.endsWith(".js"));
+  const files = fs.readdirSync(cmdDir).filter((file) => file.endsWith(".js"));
 
   for (const file of files) {
     try {
-      const mod = require(path.join(cmdDir, file));
+      const command = require(path.join(cmdDir, file));
 
-      if (!mod?.data?.name || typeof mod.execute !== "function") {
-        console.warn(`[CMD_SKIP] ${file} (data/execute invalide)`);
+      if (!command?.data?.name || typeof command.execute !== "function") {
+        console.warn(`[PROSYNC][CMD_SKIP] ${file}`);
         continue;
       }
 
-      client.commands.set(mod.data.name, mod);
-      console.log(`[CMD] Loaded: /${mod.data.name}`);
-    } catch (e) {
-      console.error(`[CMD_LOAD_ERROR] ${file}`, e);
+      client.commands.set(command.data.name, command);
+      console.log(`[PROSYNC][CMD] /${command.data.name}`);
+    } catch (error) {
+      console.error(`[PROSYNC][CMD_LOAD_ERROR] ${file}`, error);
     }
   }
 }
 
-// ---------- Ready ----------
+// --------------------------------------------------
+// Ready
+// --------------------------------------------------
 client.once(Events.ClientReady, () => {
-  console.log(`Bot connecté : ${client.user.tag} (XIG BLAUGRANA FC Staff)`);
+  console.log(`[PROSYNC] Connecté : ${client.user.tag}`);
 
-  // ✅ 1) Installer le listener global de setup AU DÉMARRAGE
   try {
     ensureGlobalSetupListener(client);
-    console.log("[SETUP] Global listener prêt.");
-  } catch (e) {
-    console.error("[SETUP] Impossible d'installer le listener global.", e);
+    console.log("[PROSYNC][SETUP] Listener global prêt.");
+  } catch (error) {
+    console.error("[PROSYNC][SETUP] Installation du listener impossible.", error);
   }
 
-  // ✅ 2) Automation runner
   try {
     startAutomationRunner(client, {
       loopMs: 20_000,
@@ -88,42 +91,63 @@ client.once(Events.ClientReady, () => {
       throttleMsPseudo: 850,
       throttleMsCheck: 0,
       throttleMsRappel: 650,
+      throttleMsAvertissement: 250,
       runOnStart: true,
     });
 
-    console.log("[AUTO] Runner démarré (pseudo + check_dispo + rappel_dispo).");
-  } catch (e) {
-    console.error("[AUTO] Impossible de démarrer le runner.", e);
+    console.log(
+      "[PROSYNC][AUTO] Runner démarré : pseudo, check_dispo, rappel_dispo, avertissement."
+    );
+  } catch (error) {
+    console.error("[PROSYNC][AUTO] Démarrage du runner impossible.", error);
   }
 });
 
-// ---------- Interactions (slash commands ONLY) ----------
-// ⚠️ Buttons/select/modals gérés par listeners globaux (ex: setup.js)
+// --------------------------------------------------
+// Slash commands
+// Les composants de /setup sont gérés par son listener global.
+// --------------------------------------------------
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (!interaction.isChatInputCommand()) return;
 
-    const cmd = client.commands.get(interaction.commandName);
+    const command = client.commands.get(interaction.commandName);
 
-    if (!cmd) {
+    if (!command) {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "⚠️ Commande inconnue.", flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction
+          .reply({
+            content: "⚠️ Commande inconnue.",
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
       }
       return;
     }
 
-    // Note: pas besoin de passer client, mais si tes commandes l'attendent, OK.
-    await cmd.execute(interaction, client);
-  } catch (e) {
-    console.error("[INTERACTION_ERROR]", e);
+    await command.execute(interaction, client);
+  } catch (error) {
+    console.error("[PROSYNC][INTERACTION_ERROR]", error);
 
     try {
       if (interaction.deferred) {
-        await interaction.editReply({ content: "⚠️ Erreur interaction." }).catch(() => {});
+        await interaction
+          .editReply({ content: "⚠️ Erreur interaction." })
+          .catch(() => {});
       } else if (!interaction.replied) {
-        await interaction.reply({ content: "⚠️ Erreur interaction.", flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction
+          .reply({
+            content: "⚠️ Erreur interaction.",
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
       } else {
-        await interaction.followUp({ content: "⚠️ Erreur interaction.", flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction
+          .followUp({
+            content: "⚠️ Erreur interaction.",
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch(() => {});
       }
     } catch {}
   }
