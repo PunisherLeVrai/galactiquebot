@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "guilds": {
     "1392639720491581551": {
       "botLabel": "PROSYNC",
@@ -37,6 +37,10 @@
         "rappel": {
           "enabled": false,
           "times": []
+        },
+        "avertissement": {
+          "enabled": false,
+          "roleId": null
         }
       },
       "setupBy": "448539638420733963",
@@ -73,14 +77,13 @@
       "automations": {
         "enabled": true,
         "pseudo": {
-          "enabled": true,
+          "enabled": false,
           "minute": 10
         },
         "checkDispo": {
           "enabled": true,
           "times": [
-            "12:00",
-            "19:00"
+            "15:00"
           ]
         },
         "rappel": {
@@ -88,11 +91,15 @@
           "times": [
             "12:00"
           ]
+        },
+        "avertissement": {
+          "enabled": true,
+          "roleId": "1523758189655359539"
         }
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-07-11T12:32:21.899Z",
-      "updatedAt": "2026-07-11T12:32:21.907Z",
+      "setupAt": "2026-07-26T23:00:06.268Z",
+      "updatedAt": "2026-07-26T23:00:06.268Z",
       "staffRoleId": "1414648635437617263"
     },
     "1474746303039803483": {
@@ -135,12 +142,69 @@
         "rappel": {
           "enabled": false,
           "times": []
+        },
+        "avertissement": {
+          "enabled": false,
+          "roleId": null
         }
       },
       "setupBy": "448539638420733963",
       "setupAt": "2026-02-22T23:53:25.227Z",
       "updatedAt": "2026-02-22T23:53:25.227Z",
       "staffRoleId": "1474762709437382746"
+    },
+    "1525426830700576798": {
+      "botLabel": "PROSYNC",
+      "disposChannelId": "1531067751467319417",
+      "staffReportsChannelId": "1531063895911956501",
+      "pseudoScanChannelId": null,
+      "checkDispoChannelId": "1531067751467319417",
+      "dispoMessageIds": [
+        "1531069065219543110",
+        "1531069074610589707",
+        "1531069088879607878",
+        "1531069097138196491",
+        "1531069104713236560",
+        "1531069111487037554",
+        "1531069119611277412"
+      ],
+      "staffRoleIds": [
+        "1525426830700576806",
+        "1527803189548552344",
+        "1525426830700576807"
+      ],
+      "playerRoleIds": [
+        "1531070398391914667"
+      ],
+      "postRoleIds": [],
+      "posts": [],
+      "automations": {
+        "enabled": true,
+        "pseudo": {
+          "enabled": false,
+          "minute": 10
+        },
+        "checkDispo": {
+          "enabled": true,
+          "times": [
+            "12:00"
+          ]
+        },
+        "rappel": {
+          "enabled": true,
+          "times": [
+            "00:00"
+          ]
+        },
+        "avertissement": {
+          "enabled": false,
+          "roleId": null
+        }
+      },
+      "setupBy": "448539638420733963",
+      "setupAt": "2026-07-26T23:02:20.924Z",
+      "updatedAt": "2026-07-26T23:02:20.924Z",
+      "staffRoleId": "1525426830700576806"
     }
   }
 }
