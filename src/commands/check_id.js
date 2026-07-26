@@ -286,7 +286,7 @@ module.exports = {
               `Message : \`${messageId}\`\n\n` +
               `⚠️ Message introuvable.`
           )
-          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+          .setFooter({ text: "PROSYNC" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
@@ -307,7 +307,7 @@ module.exports = {
               `🚫 **Impossible de lire les réactions.**\n` +
               `Vérifie: **ViewChannel + ReadMessageHistory**, et l’intent **GuildMessageReactions**.`
           )
-          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+          .setFooter({ text: "PROSYNC" });
 
         return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
       }
@@ -343,7 +343,7 @@ module.exports = {
           { name: `🟥 ❌ Absents (${no.length})`, value: mentionList(no, { max: 60 }) },
           { name: `🟦 ⏳ Sans réaction (${missing.length})`, value: mentionList(missing, { max: 60 }) }
         )
-        .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+        .setFooter({ text: "PROSYNC" });
 
       // --------------------
       // Rappel optionnel
