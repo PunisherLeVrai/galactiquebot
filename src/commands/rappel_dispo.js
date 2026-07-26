@@ -301,7 +301,7 @@ module.exports = {
             `🚫 **Impossible de lire les réactions.**\n` +
             `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
           )
-          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+          .setFooter({ text: "PROSYNC" });
 
         return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
       }
@@ -385,7 +385,7 @@ module.exports = {
           { name: `🟦 Sans réaction (${missing.length})`, value: mentionList(missing) },
           { name: "Envoi", value: `Salon: **${salonSent ? "oui" : "non"}**\nMP: **${dmOk} ok / ${dmFail} échec**` }
         )
-        .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+        .setFooter({ text: "PROSYNC" });
 
       return interaction.editReply({ content: "✅ Rappel envoyé.", embeds: [embed] });
 
