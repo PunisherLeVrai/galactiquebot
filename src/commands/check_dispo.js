@@ -217,7 +217,7 @@ module.exports = {
             `Joueurs (pour 'Sans réaction') : **${playerIds.size}**\n\n` +
             `⚠️ ID du message non configuré pour ce jour.`
           )
-          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+          .setFooter({ text: "PROSYNC" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
@@ -233,7 +233,7 @@ module.exports = {
             `Joueurs (pour 'Sans réaction') : **${playerIds.size}**\n\n` +
             `⚠️ Message introuvable.`
           )
-          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+          .setFooter({ text: "PROSYNC" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
@@ -254,7 +254,7 @@ module.exports = {
             `🚫 **Impossible de lire les réactions.**\n` +
             `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
           )
-          .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+          .setFooter({ text: "PROSYNC" });
 
         return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
       }
@@ -287,7 +287,7 @@ module.exports = {
           { name: `🟥 ❌ Absents (tous) (${noAll.length})`, value: mentionList(noAll, { max: 60 }) },
           { name: `🟦 ⏳ Sans réaction (Joueurs) (${missingPlayers.length})`, value: mentionList(missingPlayers, { max: 60 }) }
         )
-        .setFooter({ text: "XIG BLAUGRANA FC Staff" });
+        .setFooter({ text: "PROSYNC" });
 
       return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
     } catch {
