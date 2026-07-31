@@ -425,3 +425,4 @@ function startAutomationRunner(client, options = {}) {
 module.exports = {
   startAutomationRunner,
   runAvertissementForGuild,
+};
