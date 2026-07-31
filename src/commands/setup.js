@@ -1,5 +1,3 @@
-src/commands/setup.js
-
 // src/commands/setup.js
 // Setup PROSYNC — multi-serveur — STAFF ONLY
 // CommonJS — discord.js v14
