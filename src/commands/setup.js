@@ -1,3 +1,5 @@
+src/commands/setup.js
+
 // src/commands/setup.js
 // Setup PROSYNC — multi-serveur — STAFF ONLY
 // CommonJS — discord.js v14
@@ -502,4 +504,67 @@ module.exports.execute = async function execute(interaction) {
     }
 
     if (i.isStringSelectMenu?.()) {
+      if (i.customId === CID.page) page = i.values[0];
+      else if (i.customId === CID.autoTab) autoTab = i.values[0];
+      else if (i.customId === CID.checkTimes) { draft.automations.checkDispo.times = normalizeTimes(i.values); dirty = true; }
+      else if (i.customId === CID.rappelTimes) { draft.automations.rappel.times = normalizeTimes(i.values); dirty = true; }
+      return refresh();
+    }
+
+    if (i.isChannelSelectMenu?.()) {
+      const value = i.values[0] || null;
+      if (i.customId === CID.dispos) draft.disposChannelId = value;
+      if (i.customId === CID.staffReports) draft.staffReportsChannelId = value;
+      if (i.customId === CID.pseudoScan) draft.pseudoScanChannelId = value;
+      if (i.customId === CID.checkDispo) draft.checkDispoChannelId = value;
+      dirty = true;
+      return refresh();
+    }
+
+    if (i.isRoleSelectMenu?.()) {
+      if (i.customId === CID.staff) draft.staffRoleIds = uniqIds(i.values);
+      if (i.customId === CID.players) draft.playerRoleIds = uniqIds(i.values);
+      if (i.customId === CID.posts) draft.postRoleIds = uniqIds(i.values);
+      const warningIndex = i.customId === CID.warning1 ? 0 : i.customId === CID.warning2 ? 1 : i.customId === CID.warning3 ? 2 : -1;
+      if (warningIndex >= 0) {
+        draft.automations.avertissement.roleIds[warningIndex] = i.values[0] || null;
+        draft.automations.avertissement.roleIds = normalizeWarningRoleIds(draft.automations.avertissement.roleIds);
+      }
+      dirty = true;
+      return refresh();
+    }
+
+    if (!i.isButton?.()) return;
+    if (i.customId === CID.save) return i.showModal(confirmModal(CID.saveModal));
+    if (i.customId === CID.minuteButton) return i.showModal(minuteModal(CID.minuteModal, draft.automations.pseudo.minute));
+    if (i.customId === CID.idsA) return i.showModal(idsModal(CID.idsAModal, ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'], draft.dispoMessageIds, 'IDs Lundi à Vendredi'));
+    if (i.customId === CID.idsB) return i.showModal(idsModal(CID.idsBModal, ['Sam', 'Dim'], draft.dispoMessageIds, 'IDs Samedi et Dimanche'));
+    if (i.customId === CID.cancel) return end();
+    if (i.customId === CID.preview) return refresh();
+    if (i.customId === CID.idsClear) { draft.dispoMessageIds = new Array(7).fill(null); dirty = true; return refresh(); }
+    if (i.customId === CID.autoGlobal) draft.automations.enabled = !draft.automations.enabled;
+    if (i.customId === CID.autoPseudo) draft.automations.pseudo.enabled = !draft.automations.pseudo.enabled;
+    if (i.customId === CID.autoCheck) draft.automations.checkDispo.enabled = !draft.automations.checkDispo.enabled;
+    if (i.customId === CID.autoRappel) draft.automations.rappel.enabled = !draft.automations.rappel.enabled;
+    if (i.customId === CID.autoWarning) draft.automations.avertissement.enabled = !draft.automations.avertissement.enabled;
+    if (i.customId === CID.clear) {
+      if (page === 'Automations' && autoTab === 'check') draft.automations.checkDispo.times = [];
+      else if (page === 'Automations' && autoTab === 'rappel') draft.automations.rappel.times = [];
+      else if (page === 'Automations' && autoTab.startsWith('warning')) draft.automations.avertissement.roleIds[Number(autoTab.at(-1)) - 1] = null;
+    }
+    if (i.customId === CID.reset) {
+      Object.assign(draft, {
+        disposChannelId: null, staffReportsChannelId: null, pseudoScanChannelId: null, checkDispoChannelId: null,
+        dispoMessageIds: new Array(7).fill(null), staffRoleIds: [], playerRoleIds: [], postRoleIds: [],
+        automations: { enabled: false, pseudo: { enabled: true, minute: 10 }, checkDispo: { enabled: false, times: [] }, rappel: { enabled: false, times: [] }, avertissement: { enabled: false, roleIds: [null, null, null], lastProcessedDate: null } },
+      });
+    }
+    dirty = true;
+    return refresh();
+  }
+
+  await interaction.reply({ embeds: [buildEmbed(interaction.guild, draft, page, dirty)], components: pageRows(), flags: MessageFlags.Ephemeral });
+  SESSIONS.set(scope, { guildId: interaction.guildId, userId: interaction.user.id, handle, end });
+  const timer = setTimeout(() => end().catch(() => {}), 10 * 60 * 1000);
+  timer.unref?.();
 };
