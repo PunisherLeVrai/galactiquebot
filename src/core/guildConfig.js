@@ -305,3 +305,4 @@ module.exports = {
   exportAllConfig,
   importAllConfig,
   resetGuildConfig,
+};
