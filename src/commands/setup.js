@@ -502,3 +502,4 @@ module.exports.execute = async function execute(interaction) {
     }
 
     if (i.isStringSelectMenu?.()) {
+};
