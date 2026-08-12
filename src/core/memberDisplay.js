@@ -6,7 +6,11 @@
 // Tout le nickname est forcé en MAJUSCULES.
 //
 // PSEUDO :
-// pseudo > psn > xbox > ea > username Discord
+// 1) pseudo personnalisé enregistré dans le salon pseudo
+// 2) sinon USERNAME Discord
+//
+// Les anciens champs PSN/XBOX/EA restent stockés pour compatibilité,
+// mais ils ne sont plus utilisés automatiquement dans le nickname.
 //
 // RÔLE :
 // 1) rôle STAFF le plus haut parmi cfg.staffRoleIds
@@ -45,28 +49,18 @@ function normalizeUsername(username) {
 // --------------------
 // PSEUDO
 // --------------------
-function stripAnyPlatformPrefix(value) {
-  const cleaned = cleanValue(value, 80);
-  if (!cleaned) return "";
-
-  return cleaned
-    .replace(/^\s*(psn|xbox|ea)\s*:\s*\/?\s*/i, "")
-    .trim();
-}
-
 function pickBestPseudo(member) {
   const entry = getUserPseudos(member.guild.id, member.user.id) || {};
 
-  const directPseudo = cleanValue(entry.pseudo, 40);
-  const psn = stripAnyPlatformPrefix(entry.psn);
-  const xbox = stripAnyPlatformPrefix(entry.xbox);
-  const ea = stripAnyPlatformPrefix(entry.ea);
+  // Un pseudo personnalisé n'est utilisé que s'il a été explicitement
+  // enregistré dans le salon pseudo.
+  const customPseudo = cleanValue(entry.pseudo, 40);
 
-  if (directPseudo) return directPseudo;
-  if (psn) return psn;
-  if (xbox) return xbox;
-  if (ea) return ea;
+  if (customPseudo) {
+    return customPseudo;
+  }
 
+  // Par défaut : username Discord.
   return normalizeUsername(member.user?.username);
 }
 
@@ -112,7 +106,6 @@ function resolveStaffRole(member, cfg) {
 
   if (!staffRoles || staffRoles.size === 0) return null;
 
-  // Priorité = hiérarchie Discord.
   const topRole = staffRoles.sort((a, b) => b.position - a.position).first();
   if (!topRole) return "STAFF";
 
@@ -126,7 +119,6 @@ function resolveConfiguredDisplayRole(member, cfg) {
   const roleId = cfg?.displayRoleId ? String(cfg.displayRoleId) : null;
   if (!roleId) return null;
 
-  // Le rôle n'est affiché que si le membre le possède réellement.
   if (!member.roles?.cache?.has(roleId)) return null;
 
   const role = member.guild?.roles?.cache?.get(roleId);
@@ -175,6 +167,7 @@ function resolvePosts(member, cfg) {
 // --------------------
 function fitNickname(postsText, roleText, pseudoText) {
   const parts = [];
+
   if (postsText) parts.push(postsText);
   if (roleText) parts.push(roleText);
 
@@ -190,8 +183,6 @@ function buildMemberLine(member, cfg) {
   const role = upper(resolveMainRole(member, cfg));
   const posts = resolvePosts(member, cfg).map(upper);
 
-  // Plusieurs postes restent groupés dans le premier bloc :
-  // DC/MDC / JOUEUR / PSEUDO
   const postsText = posts.join("/");
 
   return fitNickname(postsText, role, pseudo);
