@@ -339,18 +339,19 @@
         "avertissement": {
           "enabled": false,
           "roleIds": [
-            null,
-            null,
-            null
+            "1532497363636195478",
+            "1532497377024413766",
+            "1532497382355505332"
           ],
-          "roleId": null,
+          "roleId": "1532497363636195478",
           "lastProcessedDate": null
         }
       },
       "setupBy": "448539638420733963",
-      "setupAt": "2026-08-11T23:48:18.802Z",
-      "updatedAt": "2026-08-11T23:48:18.802Z",
-      "staffRoleId": "1532480277149126956"
+      "setupAt": "2026-08-12T00:52:01.406Z",
+      "updatedAt": "2026-08-12T00:52:01.407Z",
+      "staffRoleId": "1532480277149126956",
+      "displayRoleId": "1535616357687631962"
     }
   }
 }
