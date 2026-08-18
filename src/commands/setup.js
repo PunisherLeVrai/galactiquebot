@@ -1,11 +1,6 @@
 // src/commands/setup.js
 // Setup PROSYNC — multi-serveur — STAFF ONLY
 // CommonJS — discord.js v14
-//
-// Ajouts PSEUDO :
-// - Salon de saisie pseudo
-// - Rôle joueur affiché dans le nickname
-// - Format : POSTE / RÔLE / PSEUDO
 
 const {
   SlashCommandBuilder,
@@ -29,7 +24,15 @@ const {
   upsertGuildConfig,
 } = require("../core/guildConfig");
 
-const DAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+const DAYS = [
+  "Lun",
+  "Mar",
+  "Mer",
+  "Jeu",
+  "Ven",
+  "Sam",
+  "Dim",
+];
 
 const DAY_INDEX = {
   Lun: 0,
@@ -43,11 +46,11 @@ const DAY_INDEX = {
 
 const PRESET_TIMES = Array.from(
   { length: 24 },
-  (_, hour) => `${String(hour).padStart(2, "0")}:00`
+  (_, hour) =>
+    `${String(hour).padStart(2, "0")}:00`
 );
 
 const SESSIONS = new Map();
-
 let LISTENER_READY = false;
 
 function isStaff(member, config) {
@@ -65,8 +68,11 @@ function isStaff(member, config) {
     Array.isArray(config?.staffRoleIds)
       ? config.staffRoleIds
       : []
-  ).some((id) =>
-    member.roles?.cache?.has?.(String(id))
+  ).some(
+    (id) =>
+      member.roles?.cache?.has?.(
+        String(id)
+      )
   );
 }
 
@@ -108,6 +114,7 @@ function normalizeMessageIds(input) {
 
 function normalizeWarningRoleIds(input) {
   const source = Array.isArray(input) ? input : [];
+
   const output = [null, null, null];
   const seen = new Set();
 
@@ -164,7 +171,9 @@ function normalizeTimes(input, max = 12) {
     if (output.length >= max) break;
   }
 
-  return output.sort((a, b) => a.localeCompare(b));
+  return output.sort(
+    (a, b) => a.localeCompare(b)
+  );
 }
 
 function clampMinute(value) {
@@ -192,13 +201,17 @@ function fmtRoles(ids) {
     : [];
 
   return values.length
-    ? values.map((id) => `<@&${id}>`).join(" ")
+    ? values
+        .map((id) => `<@&${id}>`)
+        .join(" ")
     : "—";
 }
 
 function fmtTimes(values) {
   return values?.length
-    ? values.map((time) => `\`${time}\``).join(" ")
+    ? values
+        .map((time) => `\`${time}\``)
+        .join(" ")
     : "—";
 }
 
@@ -206,7 +219,9 @@ function fmtMessageIds(ids) {
   return DAYS.map(
     (day, index) =>
       `${day}: ${
-        ids[index] ? `\`${ids[index]}\`` : "—"
+        ids[index]
+          ? `\`${ids[index]}\``
+          : "—"
       }`
   ).join("\n");
 }
@@ -236,13 +251,15 @@ function opensModal(customId) {
 }
 
 function buildEmbed(guild, draft, page, dirty) {
-  const warningIds = normalizeWarningRoleIds(
-    draft.automations.avertissement.roleIds
-  );
+  const warningIds =
+    normalizeWarningRoleIds(
+      draft.automations.avertissement.roleIds
+    );
 
-  const checkTimes = normalizeTimes(
-    draft.automations.checkDispo.times
-  );
+  const checkTimes =
+    normalizeTimes(
+      draft.automations.checkDispo.times
+    );
 
   const lastCheck = checkTimes.at(-1) || null;
 
@@ -287,13 +304,14 @@ function buildEmbed(guild, draft, page, dirty) {
       {
         name: "Pseudos",
         value: [
-          `🎮 Salon saisie : ${fmtChannel(
+          `🎮 Salon source : ${fmtChannel(
             draft.pseudoScanChannelId
           )}`,
           `🏷️ Rôle joueur affiché : ${fmtRole(
             draft.displayRoleId
           )}`,
-          "✅ Le joueur écrit uniquement son pseudo dans le salon.",
+          "🔎 Le salon est rescanné avant chaque synchronisation.",
+          "👤 Aucun pseudo trouvé → username Discord.",
         ].join("\n"),
       },
       {
@@ -370,7 +388,9 @@ function buildEmbed(guild, draft, page, dirty) {
         ].join("\n"),
       }
     )
-    .setFooter({ text: "PROSYNC" });
+    .setFooter({
+      text: "PROSYNC",
+    });
 }
 
 function minuteModal(customId, value) {
@@ -391,28 +411,25 @@ function minuteModal(customId, value) {
     );
 }
 
-function idsModal(
-  customId,
-  days,
-  ids,
-  title
-) {
-  const modal = new ModalBuilder()
-    .setCustomId(customId)
-    .setTitle(title);
+function idsModal(customId, days, ids, title) {
+  const modal =
+    new ModalBuilder()
+      .setCustomId(customId)
+      .setTitle(title);
 
   modal.addComponents(
-    ...days.map((day) =>
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId(day)
-          .setLabel(`${day} — ID message`)
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setValue(
-            ids[DAY_INDEX[day]] || ""
-          )
-      )
+    ...days.map(
+      (day) =>
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId(day)
+            .setLabel(`${day} — ID message`)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setValue(
+              ids[DAY_INDEX[day]] || ""
+            )
+        )
     )
   );
 
@@ -435,12 +452,7 @@ function confirmModal(customId) {
 }
 
 function ensureGlobalSetupListener(client) {
-  if (
-    LISTENER_READY ||
-    !client?.on
-  ) {
-    return;
-  }
+  if (LISTENER_READY || !client?.on) return;
 
   LISTENER_READY = true;
 
@@ -459,12 +471,7 @@ function ensureGlobalSetupListener(client) {
         const isModal =
           interaction.isModalSubmit?.();
 
-        if (
-          !isComponent &&
-          !isModal
-        ) {
-          return;
-        }
+        if (!isComponent && !isModal) return;
 
         if (
           !String(
@@ -474,9 +481,8 @@ function ensureGlobalSetupListener(client) {
           return;
         }
 
-        const scope = parseScope(
-          interaction.customId
-        );
+        const scope =
+          parseScope(interaction.customId);
 
         const session = scope
           ? SESSIONS.get(scope)
@@ -514,9 +520,7 @@ function ensureGlobalSetupListener(client) {
 
         if (
           isComponent &&
-          !opensModal(
-            interaction.customId
-          ) &&
+          !opensModal(interaction.customId) &&
           !interaction.deferred &&
           !interaction.replied
         ) {
@@ -581,103 +585,93 @@ module.exports.execute =
     }
 
     const savedWarning =
-      saved.automations?.avertissement ||
-      {};
+      saved.automations?.avertissement || {};
 
     const draft = {
       disposChannelId:
         saved.disposChannelId || null,
 
       staffReportsChannelId:
-        saved.staffReportsChannelId ||
-        null,
+        saved.staffReportsChannelId || null,
 
-      // Nom conservé pour compatibilité avec ton guildConfig actuel.
-      // Il s'agit maintenant du SALON DE SAISIE, pas d'un scan PSN/Xbox/EA.
       pseudoScanChannelId:
-        saved.pseudoScanChannelId ||
-        null,
+        saved.pseudoScanChannelId || null,
 
       displayRoleId:
         saved.displayRoleId || null,
 
       checkDispoChannelId:
-        saved.checkDispoChannelId ||
-        null,
+        saved.checkDispoChannelId || null,
 
       dispoMessageIds:
         normalizeMessageIds(
           saved.dispoMessageIds
         ),
 
-      staffRoleIds: uniqIds(
-        saved.staffRoleIds ||
-          (saved.staffRoleId
-            ? [saved.staffRoleId]
-            : [])
-      ),
+      staffRoleIds:
+        uniqIds(
+          saved.staffRoleIds ||
+            (saved.staffRoleId
+              ? [saved.staffRoleId]
+              : [])
+        ),
 
-      playerRoleIds: uniqIds(
-        saved.playerRoleIds
-      ),
+      playerRoleIds:
+        uniqIds(saved.playerRoleIds),
 
-      postRoleIds: uniqIds(
-        saved.postRoleIds ||
-          (saved.posts || []).map(
-            (post) => post?.roleId
-          )
-      ),
+      postRoleIds:
+        uniqIds(
+          saved.postRoleIds ||
+            (saved.posts || []).map(
+              (post) => post?.roleId
+            )
+        ),
 
       automations: {
-        enabled: Boolean(
-          saved.automations?.enabled
-        ),
+        enabled:
+          Boolean(saved.automations?.enabled),
 
         pseudo: {
           enabled:
-            saved.automations?.pseudo
-              ?.enabled !== false,
+            saved.automations?.pseudo?.enabled !== false,
 
-          minute: clampMinute(
-            saved.automations?.pseudo
-              ?.minute
-          ),
+          minute:
+            clampMinute(
+              saved.automations?.pseudo?.minute
+            ),
         },
 
         checkDispo: {
-          enabled: Boolean(
-            saved.automations
-              ?.checkDispo?.enabled
-          ),
+          enabled:
+            Boolean(
+              saved.automations?.checkDispo?.enabled
+            ),
 
-          times: normalizeTimes(
-            saved.automations
-              ?.checkDispo?.times
-          ),
+          times:
+            normalizeTimes(
+              saved.automations?.checkDispo?.times
+            ),
         },
 
         rappel: {
-          enabled: Boolean(
-            saved.automations?.rappel
-              ?.enabled
-          ),
+          enabled:
+            Boolean(
+              saved.automations?.rappel?.enabled
+            ),
 
-          times: normalizeTimes(
-            saved.automations?.rappel
-              ?.times
-          ),
+          times:
+            normalizeTimes(
+              saved.automations?.rappel?.times
+            ),
         },
 
         avertissement: {
-          enabled: Boolean(
-            savedWarning.enabled
-          ),
+          enabled:
+            Boolean(savedWarning.enabled),
 
           roleIds:
             normalizeWarningRoleIds(
-              Array.isArray(
-                savedWarning.roleIds
-              )
+              Array.isArray(savedWarning.roleIds)
                 ? savedWarning.roleIds
                 : [
                     savedWarning.roleId,
@@ -687,13 +681,13 @@ module.exports.execute =
             ),
 
           lastProcessedDate:
-            savedWarning.lastProcessedDate ||
-            null,
+            savedWarning.lastProcessedDate || null,
         },
       },
     };
 
-    const scope = `${interaction.guildId}:${interaction.user.id}`;
+    const scope =
+      `${interaction.guildId}:${interaction.user.id}`;
 
     const oldSession =
       SESSIONS.get(scope);
@@ -717,8 +711,7 @@ module.exports.execute =
       staff: "role:staff",
       players: "role:players",
       posts: "role:posts",
-      displayRole:
-        "role:displayRole",
+      displayRole: "role:displayRole",
 
       warning1: "role:warning1",
       warning2: "role:warning2",
@@ -736,23 +729,17 @@ module.exports.execute =
       autoPseudo: "btn:autoPseudo",
       autoCheck: "btn:autoCheck",
       autoRappel: "btn:autoRappel",
-      autoWarning:
-        "btn:autoWarning",
+      autoWarning: "btn:autoWarning",
 
-      minuteButton:
-        "btn:openMinute",
-      minuteModal:
-        "modal:minute",
+      minuteButton: "btn:openMinute",
+      minuteModal: "modal:minute",
 
-      checkTimes:
-        "sel:checkTimes",
-      rappelTimes:
-        "sel:rappelTimes",
+      checkTimes: "sel:checkTimes",
+      rappelTimes: "sel:rappelTimes",
 
       clear: "btn:clearCurrent",
       save: "btn:confirmSave",
-      saveModal:
-        "modal:confirmSave",
+      saveModal: "modal:confirmSave",
       reset: "btn:reset",
       cancel: "btn:cancel",
       preview: "btn:preview",
@@ -814,9 +801,7 @@ module.exports.execute =
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
               .setCustomId(CID.dispos)
-              .setPlaceholder(
-                "📅 Salon Dispos"
-              )
+              .setPlaceholder("📅 Salon Dispos")
               .setMinValues(0)
               .setMaxValues(1)
               .addChannelTypes(
@@ -826,9 +811,7 @@ module.exports.execute =
 
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
-              .setCustomId(
-                CID.staffReports
-              )
+              .setCustomId(CID.staffReports)
               .setPlaceholder(
                 "📊 Salon Rapports Staff"
               )
@@ -875,11 +858,9 @@ module.exports.execute =
         rows.push(
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
-              .setCustomId(
-                CID.pseudoScan
-              )
+              .setCustomId(CID.pseudoScan)
               .setPlaceholder(
-                "🎮 Salon saisie pseudo"
+                "🎮 Salon source des pseudos"
               )
               .setMinValues(0)
               .setMaxValues(1)
@@ -890,11 +871,9 @@ module.exports.execute =
 
           new ActionRowBuilder().addComponents(
             new RoleSelectMenuBuilder()
-              .setCustomId(
-                CID.displayRole
-              )
+              .setCustomId(CID.displayRole)
               .setPlaceholder(
-                "🏷️ Rôle joueur affiché dans le pseudo"
+                "🏷️ Rôle joueur affiché dans le nickname"
               )
               .setMinValues(0)
               .setMaxValues(1)
@@ -904,9 +883,7 @@ module.exports.execute =
         rows.push(
           new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
-              .setCustomId(
-                CID.checkDispo
-              )
+              .setCustomId(CID.checkDispo)
               .setPlaceholder(
                 "🗓️ Salon Check Dispo"
               )
@@ -920,41 +897,25 @@ module.exports.execute =
           new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setCustomId(CID.idsA)
-              .setLabel(
-                "IDs Lun → Ven"
-              )
-              .setStyle(
-                ButtonStyle.Primary
-              ),
+              .setLabel("IDs Lun → Ven")
+              .setStyle(ButtonStyle.Primary),
 
             new ButtonBuilder()
               .setCustomId(CID.idsB)
-              .setLabel(
-                "IDs Sam → Dim"
-              )
-              .setStyle(
-                ButtonStyle.Primary
-              ),
+              .setLabel("IDs Sam → Dim")
+              .setStyle(ButtonStyle.Primary),
 
             new ButtonBuilder()
-              .setCustomId(
-                CID.idsClear
-              )
-              .setLabel(
-                "Effacer les IDs"
-              )
-              .setStyle(
-                ButtonStyle.Secondary
-              )
+              .setCustomId(CID.idsClear)
+              .setLabel("Effacer les IDs")
+              .setStyle(ButtonStyle.Secondary)
           )
         );
       } else {
         rows.push(
           new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-              .setCustomId(
-                CID.autoGlobal
-              )
+              .setCustomId(CID.autoGlobal)
               .setLabel("Global")
               .setStyle(
                 draft.automations.enabled
@@ -963,51 +924,37 @@ module.exports.execute =
               ),
 
             new ButtonBuilder()
-              .setCustomId(
-                CID.autoPseudo
-              )
+              .setCustomId(CID.autoPseudo)
               .setLabel("Pseudo")
               .setStyle(
-                draft.automations.pseudo
-                  .enabled
+                draft.automations.pseudo.enabled
                   ? ButtonStyle.Success
                   : ButtonStyle.Secondary
               ),
 
             new ButtonBuilder()
-              .setCustomId(
-                CID.autoCheck
-              )
+              .setCustomId(CID.autoCheck)
               .setLabel("Check")
               .setStyle(
-                draft.automations
-                  .checkDispo.enabled
+                draft.automations.checkDispo.enabled
                   ? ButtonStyle.Success
                   : ButtonStyle.Secondary
               ),
 
             new ButtonBuilder()
-              .setCustomId(
-                CID.autoRappel
-              )
+              .setCustomId(CID.autoRappel)
               .setLabel("Rappel")
               .setStyle(
-                draft.automations.rappel
-                  .enabled
+                draft.automations.rappel.enabled
                   ? ButtonStyle.Success
                   : ButtonStyle.Secondary
               ),
 
             new ButtonBuilder()
-              .setCustomId(
-                CID.autoWarning
-              )
-              .setLabel(
-                "Avertissement"
-              )
+              .setCustomId(CID.autoWarning)
+              .setLabel("Avertissement")
               .setStyle(
-                draft.automations
-                  .avertissement.enabled
+                draft.automations.avertissement.enabled
                   ? ButtonStyle.Danger
                   : ButtonStyle.Secondary
               )
@@ -1015,9 +962,7 @@ module.exports.execute =
 
           new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder()
-              .setCustomId(
-                CID.autoTab
-              )
+              .setCustomId(CID.autoTab)
               .setMinValues(1)
               .setMaxValues(1)
               .addOptions(
@@ -1040,24 +985,21 @@ module.exports.execute =
                     "Avertissement 1",
                   value: "warning1",
                   default:
-                    autoTab ===
-                    "warning1",
+                    autoTab === "warning1",
                 },
                 {
                   label:
                     "Avertissement 2",
                   value: "warning2",
                   default:
-                    autoTab ===
-                    "warning2",
+                    autoTab === "warning2",
                 },
                 {
                   label:
                     "Avertissement 3",
                   value: "warning3",
                   default:
-                    autoTab ===
-                    "warning3",
+                    autoTab === "warning3",
                 }
               )
           )
@@ -1069,10 +1011,8 @@ module.exports.execute =
         ) {
           const values =
             autoTab === "check"
-              ? draft.automations
-                  .checkDispo.times
-              : draft.automations
-                  .rappel.times;
+              ? draft.automations.checkDispo.times
+              : draft.automations.rappel.times;
 
           rows.push(
             new ActionRowBuilder().addComponents(
@@ -1090,9 +1030,7 @@ module.exports.execute =
                       label: time,
                       value: time,
                       default:
-                        values.includes(
-                          time
-                        ),
+                        values.includes(time),
                     })
                   )
                 )
@@ -1100,9 +1038,7 @@ module.exports.execute =
           );
         } else {
           const index =
-            Number(
-              autoTab.at(-1)
-            ) - 1;
+            Number(autoTab.at(-1)) - 1;
 
           rows.push(
             new ActionRowBuilder().addComponents(
@@ -1115,9 +1051,7 @@ module.exports.execute =
                   ][index]
                 )
                 .setPlaceholder(
-                  `Rôle Avertissement ${
-                    index + 1
-                  }`
+                  `Rôle Avertissement ${index + 1}`
                 )
                 .setMinValues(0)
                 .setMaxValues(1)
@@ -1126,64 +1060,45 @@ module.exports.execute =
         }
       }
 
-      const actionRow =
+      rows.push(
         new ActionRowBuilder().addComponents(
-          ...(page === "Automations"
-            ? [
-                new ButtonBuilder()
-                  .setCustomId(
-                    CID.minuteButton
-                  )
-                  .setLabel(
-                    "⏱️ Minute"
-                  )
-                  .setStyle(
-                    ButtonStyle.Primary
-                  ),
-              ]
-            : [
-                new ButtonBuilder()
-                  .setCustomId(
-                    CID.preview
-                  )
-                  .setLabel(
-                    "Aperçu"
-                  )
-                  .setStyle(
-                    ButtonStyle.Secondary
-                  ),
-              ]),
+          ...(
+            page === "Automations"
+              ? [
+                  new ButtonBuilder()
+                    .setCustomId(CID.minuteButton)
+                    .setLabel("⏱️ Minute")
+                    .setStyle(ButtonStyle.Primary),
+                ]
+              : [
+                  new ButtonBuilder()
+                    .setCustomId(CID.preview)
+                    .setLabel("Aperçu")
+                    .setStyle(ButtonStyle.Secondary),
+                ]
+          ),
 
           new ButtonBuilder()
             .setCustomId(CID.clear)
             .setLabel("Effacer")
-            .setStyle(
-              ButtonStyle.Secondary
-            ),
+            .setStyle(ButtonStyle.Secondary),
 
           new ButtonBuilder()
             .setCustomId(CID.save)
             .setLabel("Sauvegarder")
-            .setStyle(
-              ButtonStyle.Success
-            ),
+            .setStyle(ButtonStyle.Success),
 
           new ButtonBuilder()
             .setCustomId(CID.reset)
             .setLabel("Reset")
-            .setStyle(
-              ButtonStyle.Secondary
-            ),
+            .setStyle(ButtonStyle.Secondary),
 
           new ButtonBuilder()
             .setCustomId(CID.cancel)
             .setLabel("Annuler")
-            .setStyle(
-              ButtonStyle.Danger
-            )
-        );
-
-      rows.push(actionRow);
+            .setStyle(ButtonStyle.Danger)
+        )
+      );
 
       for (const row of rows) {
         const component =
@@ -1196,13 +1111,10 @@ module.exports.execute =
           const map = {
             [CID.dispos]:
               draft.disposChannelId,
-
             [CID.staffReports]:
               draft.staffReportsChannelId,
-
             [CID.pseudoScan]:
               draft.pseudoScanChannelId,
-
             [CID.checkDispo]:
               draft.checkDispoChannelId,
           };
@@ -1214,13 +1126,10 @@ module.exports.execute =
             )
           ) {
             component.setDefaultChannels(
-              map[
-                component.data.custom_id
-              ]
+              map[component.data.custom_id]
                 ? [
                     map[
-                      component.data
-                        .custom_id
+                      component.data.custom_id
                     ],
                   ]
                 : []
@@ -1235,49 +1144,34 @@ module.exports.execute =
           const map = {
             [CID.staff]:
               draft.staffRoleIds,
-
             [CID.players]:
               draft.playerRoleIds,
-
             [CID.posts]:
               draft.postRoleIds,
-
             [CID.displayRole]:
-              [
-                draft.displayRoleId,
-              ].filter(Boolean),
+              [draft.displayRoleId].filter(Boolean),
 
             [CID.warning1]:
               [
-                draft.automations
-                  .avertissement
-                  .roleIds[0],
+                draft.automations.avertissement.roleIds[0],
               ].filter(Boolean),
 
             [CID.warning2]:
               [
-                draft.automations
-                  .avertissement
-                  .roleIds[1],
+                draft.automations.avertissement.roleIds[1],
               ].filter(Boolean),
 
             [CID.warning3]:
               [
-                draft.automations
-                  .avertissement
-                  .roleIds[2],
+                draft.automations.avertissement.roleIds[2],
               ].filter(Boolean),
           };
 
           if (
-            map[
-              component.data.custom_id
-            ]
+            map[component.data.custom_id]
           ) {
             component.setDefaultRoles(
-              map[
-                component.data.custom_id
-              ]
+              map[component.data.custom_id]
             );
           }
         }
@@ -1306,7 +1200,6 @@ module.exports.execute =
       if (ended) return;
 
       ended = true;
-
       SESSIONS.delete(scope);
 
       await interaction
@@ -1327,8 +1220,7 @@ module.exports.execute =
     async function handle(i) {
       if (i.isModalSubmit?.()) {
         if (
-          i.customId ===
-          CID.minuteModal
+          i.customId === CID.minuteModal
         ) {
           draft.automations.pseudo.minute =
             clampMinute(
@@ -1350,14 +1242,11 @@ module.exports.execute =
         }
 
         if (
-          i.customId ===
-            CID.idsAModal ||
-          i.customId ===
-            CID.idsBModal
+          i.customId === CID.idsAModal ||
+          i.customId === CID.idsBModal
         ) {
           const days =
-            i.customId ===
-            CID.idsAModal
+            i.customId === CID.idsAModal
               ? [
                   "Lun",
                   "Mar",
@@ -1394,8 +1283,7 @@ module.exports.execute =
         }
 
         if (
-          i.customId ===
-          CID.saveModal
+          i.customId === CID.saveModal
         ) {
           if (
             String(
@@ -1417,8 +1305,7 @@ module.exports.execute =
 
           const warningIds =
             normalizeWarningRoleIds(
-              draft.automations
-                .avertissement.roleIds
+              draft.automations.avertissement.roleIds
             );
 
           if (
@@ -1436,8 +1323,19 @@ module.exports.execute =
           }
 
           if (
-            draft.automations
-              .avertissement.enabled &&
+            draft.automations.pseudo.enabled &&
+            !draft.pseudoScanChannelId
+          ) {
+            return i.reply({
+              content:
+                "⚠️ Configure un salon pseudo avant d’activer l’automation Pseudo.",
+              flags:
+                MessageFlags.Ephemeral,
+            });
+          }
+
+          if (
+            draft.automations.avertissement.enabled &&
             !warningIds[0]
           ) {
             return i.reply({
@@ -1463,10 +1361,8 @@ module.exports.execute =
           }
 
           if (
-            draft.automations
-              .avertissement.enabled &&
-            !draft.automations
-              .checkDispo.times.length
+            draft.automations.avertissement.enabled &&
+            !draft.automations.checkDispo.times.length
           ) {
             return i.reply({
               content:
@@ -1490,7 +1386,6 @@ module.exports.execute =
               pseudoScanChannelId:
                 draft.pseudoScanChannelId,
 
-              // NOUVEAU
               displayRoleId:
                 draft.displayRoleId,
 
@@ -1510,8 +1405,7 @@ module.exports.execute =
                 draft.postRoleIds,
 
               staffRoleId:
-                draft.staffRoleIds[0] ||
-                null,
+                draft.staffRoleIds[0] || null,
 
               posts:
                 draft.postRoleIds.map(
@@ -1523,37 +1417,29 @@ module.exports.execute =
 
               automations: {
                 enabled:
-                  draft.automations
-                    .enabled,
+                  draft.automations.enabled,
 
                 pseudo:
-                  draft.automations
-                    .pseudo,
+                  draft.automations.pseudo,
 
                 checkDispo:
-                  draft.automations
-                    .checkDispo,
+                  draft.automations.checkDispo,
 
                 rappel:
-                  draft.automations
-                    .rappel,
+                  draft.automations.rappel,
 
                 avertissement: {
                   enabled:
-                    draft.automations
-                      .avertissement
-                      .enabled,
+                    draft.automations.avertissement.enabled,
 
-                  roleIds: warningIds,
+                  roleIds:
+                    warningIds,
 
                   roleId:
-                    warningIds[0] ||
-                    null,
+                    warningIds[0] || null,
 
                   lastProcessedDate:
-                    draft.automations
-                      .avertissement
-                      .lastProcessedDate,
+                    draft.automations.avertissement.lastProcessedDate,
                 },
               },
 
@@ -1592,16 +1478,14 @@ module.exports.execute =
         ) {
           autoTab = i.values[0];
         } else if (
-          i.customId ===
-          CID.checkTimes
+          i.customId === CID.checkTimes
         ) {
           draft.automations.checkDispo.times =
             normalizeTimes(i.values);
 
           dirty = true;
         } else if (
-          i.customId ===
-          CID.rappelTimes
+          i.customId === CID.rappelTimes
         ) {
           draft.automations.rappel.times =
             normalizeTimes(i.values);
@@ -1626,24 +1510,21 @@ module.exports.execute =
         }
 
         if (
-          i.customId ===
-          CID.staffReports
+          i.customId === CID.staffReports
         ) {
           draft.staffReportsChannelId =
             value;
         }
 
         if (
-          i.customId ===
-          CID.pseudoScan
+          i.customId === CID.pseudoScan
         ) {
           draft.pseudoScanChannelId =
             value;
         }
 
         if (
-          i.customId ===
-          CID.checkDispo
+          i.customId === CID.checkDispo
         ) {
           draft.checkDispoChannelId =
             value;
@@ -1679,22 +1560,18 @@ module.exports.execute =
         }
 
         if (
-          i.customId ===
-          CID.displayRole
+          i.customId === CID.displayRole
         ) {
           draft.displayRoleId =
             i.values[0] || null;
         }
 
         const warningIndex =
-          i.customId ===
-          CID.warning1
+          i.customId === CID.warning1
             ? 0
-            : i.customId ===
-                CID.warning2
+            : i.customId === CID.warning2
               ? 1
-              : i.customId ===
-                  CID.warning3
+              : i.customId === CID.warning3
                 ? 2
                 : -1;
 
@@ -1707,8 +1584,7 @@ module.exports.execute =
 
           draft.automations.avertissement.roleIds =
             normalizeWarningRoleIds(
-              draft.automations
-                .avertissement.roleIds
+              draft.automations.avertissement.roleIds
             );
         }
 
@@ -1717,9 +1593,7 @@ module.exports.execute =
         return refresh();
       }
 
-      if (!i.isButton?.()) {
-        return;
-      }
+      if (!i.isButton?.()) return;
 
       if (
         i.customId === CID.save
@@ -1732,14 +1606,12 @@ module.exports.execute =
       }
 
       if (
-        i.customId ===
-        CID.minuteButton
+        i.customId === CID.minuteButton
       ) {
         return i.showModal(
           minuteModal(
             CID.minuteModal,
-            draft.automations.pseudo
-              .minute
+            draft.automations.pseudo.minute
           )
         );
       }
@@ -1789,8 +1661,7 @@ module.exports.execute =
       }
 
       if (
-        i.customId ===
-        CID.idsClear
+        i.customId === CID.idsClear
       ) {
         draft.dispoMessageIds =
           new Array(7).fill(null);
@@ -1801,47 +1672,38 @@ module.exports.execute =
       }
 
       if (
-        i.customId ===
-        CID.autoGlobal
+        i.customId === CID.autoGlobal
       ) {
         draft.automations.enabled =
           !draft.automations.enabled;
       }
 
       if (
-        i.customId ===
-        CID.autoPseudo
+        i.customId === CID.autoPseudo
       ) {
         draft.automations.pseudo.enabled =
-          !draft.automations.pseudo
-            .enabled;
+          !draft.automations.pseudo.enabled;
       }
 
       if (
-        i.customId ===
-        CID.autoCheck
+        i.customId === CID.autoCheck
       ) {
         draft.automations.checkDispo.enabled =
-          !draft.automations
-            .checkDispo.enabled;
+          !draft.automations.checkDispo.enabled;
       }
 
       if (
-        i.customId ===
-        CID.autoRappel
+        i.customId === CID.autoRappel
       ) {
         draft.automations.rappel.enabled =
-          !draft.automations.rappel
-            .enabled;
+          !draft.automations.rappel.enabled;
       }
 
       if (
-        i.customId ===
-        CID.autoWarning
+        i.customId === CID.autoWarning
       ) {
         draft.automations.avertissement.enabled =
-          !draft.automations
-            .avertissement.enabled;
+          !draft.automations.avertissement.enabled;
       }
 
       if (
@@ -1888,14 +1750,10 @@ module.exports.execute =
             [];
         } else if (
           page === "Automations" &&
-          autoTab.startsWith(
-            "warning"
-          )
+          autoTab.startsWith("warning")
         ) {
           draft.automations.avertissement.roleIds[
-            Number(
-              autoTab.at(-1)
-            ) - 1
+            Number(autoTab.at(-1)) - 1
           ] = null;
         }
       }
@@ -1903,53 +1761,52 @@ module.exports.execute =
       if (
         i.customId === CID.reset
       ) {
-        Object.assign(draft, {
-          disposChannelId: null,
-          staffReportsChannelId:
-            null,
-          pseudoScanChannelId:
-            null,
-          displayRoleId: null,
-          checkDispoChannelId:
-            null,
+        Object.assign(
+          draft,
+          {
+            disposChannelId: null,
+            staffReportsChannelId: null,
+            pseudoScanChannelId: null,
+            displayRoleId: null,
+            checkDispoChannelId: null,
 
-          dispoMessageIds:
-            new Array(7).fill(null),
+            dispoMessageIds:
+              new Array(7).fill(null),
 
-          staffRoleIds: [],
-          playerRoleIds: [],
-          postRoleIds: [],
+            staffRoleIds: [],
+            playerRoleIds: [],
+            postRoleIds: [],
 
-          automations: {
-            enabled: false,
-
-            pseudo: {
-              enabled: true,
-              minute: 10,
-            },
-
-            checkDispo: {
+            automations: {
               enabled: false,
-              times: [],
-            },
 
-            rappel: {
-              enabled: false,
-              times: [],
-            },
+              pseudo: {
+                enabled: true,
+                minute: 10,
+              },
 
-            avertissement: {
-              enabled: false,
-              roleIds: [
-                null,
-                null,
-                null,
-              ],
-              lastProcessedDate:
-                null,
+              checkDispo: {
+                enabled: false,
+                times: [],
+              },
+
+              rappel: {
+                enabled: false,
+                times: [],
+              },
+
+              avertissement: {
+                enabled: false,
+                roleIds: [
+                  null,
+                  null,
+                  null,
+                ],
+                lastProcessedDate: null,
+              },
             },
-          },
-        });
+          }
+        );
       }
 
       dirty = true;
@@ -1973,22 +1830,26 @@ module.exports.execute =
         MessageFlags.Ephemeral,
     });
 
-    SESSIONS.set(scope, {
-      guildId:
-        interaction.guildId,
+    SESSIONS.set(
+      scope,
+      {
+        guildId:
+          interaction.guildId,
 
-      userId:
-        interaction.user.id,
+        userId:
+          interaction.user.id,
 
-      handle,
-      end,
-    });
-
-    const timer = setTimeout(
-      () =>
-        end().catch(() => {}),
-      10 * 60 * 1000
+        handle,
+        end,
+      }
     );
+
+    const timer =
+      setTimeout(
+        () =>
+          end().catch(() => {}),
+        10 * 60 * 1000
+      );
 
     timer.unref?.();
   };
