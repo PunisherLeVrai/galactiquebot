@@ -2,17 +2,10 @@
 // Runner des automations PROSYNC — CommonJS
 //
 // PSEUDO :
-// - écoute en temps réel le salon cfg.pseudoScanChannelId
-// - le joueur écrit UNIQUEMENT son pseudo
-// - le bot enregistre le pseudo
-// - le bot met à jour le nickname
-// - le bot ajoute ✅ si le pseudo est valide
-//
-// Format nickname :
-// POSTE / RÔLE / PSEUDO
-//
-// Le scan PSN/XBOX/EA des 300 derniers messages a été supprimé.
-// Les anciennes données psn/xbox/ea restent compatibles via pseudoStore.js.
+// - rescane obligatoirement le salon pseudo avant synchronisation
+// - dernier pseudo valide par utilisateur
+// - aucun pseudo trouvé => username Discord
+// - listener temps réel conservé
 
 const { EmbedBuilder } = require("discord.js");
 
@@ -28,9 +21,7 @@ const DAYS = [
 
 let PSEUDO_LISTENER_READY = false;
 
-function dayIndexFromDate(
-  date = new Date()
-) {
+function dayIndexFromDate(date = new Date()) {
   return date.getDay() === 0
     ? 6
     : date.getDay() - 1;
@@ -51,11 +42,8 @@ function sleep(ms) {
 }
 
 function uniq(input) {
-  return [
-    ...new Set(
-      (input || []).map(String)
-    ),
-  ].filter(Boolean);
+  return [...new Set((input || []).map(String))]
+    .filter(Boolean);
 }
 
 function mentionList(
@@ -72,24 +60,20 @@ function mentionList(
       .map((id) => `<@${id}>`)
       .join(" ") +
     (values.length > max
-      ? `\n… +${
-          values.length - max
-        }`
+      ? `\n… +${values.length - max}`
       : "")
   );
 }
 
 // ======================================================
-// PSEUDO — SAISIE TEMPS RÉEL
+// PSEUDOS
 // ======================================================
 
 function cleanPseudoInput(content) {
-  const raw = String(
-    content || ""
-  ).trim();
+  const raw = String(content || "").trim();
 
-  // Uniquement une ligne / un pseudo.
   if (!raw) return null;
+
   if (
     raw.includes("\n") ||
     raw.includes("\r")
@@ -97,7 +81,6 @@ function cleanPseudoInput(content) {
     return null;
   }
 
-  // Évite de casser le format final.
   if (
     raw.includes("|") ||
     raw.includes("/")
@@ -110,7 +93,6 @@ function cleanPseudoInput(content) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Ajustable si tu veux accepter des pseudos plus longs.
   if (
     value.length < 2 ||
     value.length > 24
@@ -118,7 +100,6 @@ function cleanPseudoInput(content) {
     return null;
   }
 
-  // Refuse les mentions globales.
   if (
     value.includes("@everyone") ||
     value.includes("@here")
@@ -129,9 +110,161 @@ function cleanPseudoInput(content) {
   return value;
 }
 
-async function applyPseudoMessage(
-  message
+async function scanPseudoChannel(
+  channel,
+  { scanLimit = 300 } = {}
 ) {
+  if (!channel?.isTextBased?.()) {
+    return {
+      ok: false,
+      reason: "invalid_pseudo_channel",
+      pseudos: new Map(),
+      scannedMessages: 0,
+    };
+  }
+
+  const pseudos = new Map();
+
+  let before;
+  let scannedMessages = 0;
+
+  while (scannedMessages < scanLimit) {
+    const batchSize = Math.min(
+      100,
+      scanLimit - scannedMessages
+    );
+
+    const messages = await channel.messages
+      .fetch({
+        limit: batchSize,
+        before,
+      })
+      .catch(() => null);
+
+    if (!messages || messages.size === 0) break;
+
+    for (const message of messages.values()) {
+      scannedMessages++;
+
+      if (
+        !message?.author?.id ||
+        message.author.bot
+      ) {
+        continue;
+      }
+
+      const userId = String(message.author.id);
+
+      // Le salon est parcouru du plus récent au plus ancien.
+      if (pseudos.has(userId)) {
+        continue;
+      }
+
+      const pseudo = cleanPseudoInput(
+        message.content
+      );
+
+      if (!pseudo) continue;
+
+      pseudos.set(userId, {
+        pseudo,
+        messageId: String(message.id),
+      });
+    }
+
+    before = messages.last()?.id;
+
+    if (!before || messages.size < batchSize) {
+      break;
+    }
+  }
+
+  return {
+    ok: true,
+    pseudos,
+    scannedMessages,
+  };
+}
+
+async function syncPseudoStoreFromChannel(
+  guild,
+  config,
+  {
+    scanLimit = 300,
+    requirePseudoChannel = true,
+  } = {}
+) {
+  if (!guild) {
+    return {
+      ok: false,
+      reason: "no_guild",
+    };
+  }
+
+  const channelId = config?.pseudoScanChannelId
+    ? String(config.pseudoScanChannelId)
+    : null;
+
+  if (!channelId) {
+    return {
+      ok: !requirePseudoChannel,
+      reason: "no_pseudo_channel",
+      pseudosFound: 0,
+      pseudosCleared: 0,
+      scannedMessages: 0,
+    };
+  }
+
+  const channel = await guild.channels
+    .fetch(channelId)
+    .catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return {
+      ok: false,
+      reason: "invalid_pseudo_channel",
+      pseudosFound: 0,
+      pseudosCleared: 0,
+      scannedMessages: 0,
+    };
+  }
+
+  const scan = await scanPseudoChannel(
+    channel,
+    { scanLimit }
+  );
+
+  if (!scan.ok) {
+    return {
+      ...scan,
+      reason: scan.reason || "scan_failed",
+    };
+  }
+
+  const {
+    syncGuildPseudoSnapshot,
+  } = require("../core/pseudoStore");
+
+  const storeResult =
+    syncGuildPseudoSnapshot(
+      guild.id,
+      scan.pseudos,
+      {
+        clearMissing: true,
+      }
+    );
+
+  return {
+    ok: true,
+    channelId,
+    scannedMessages: scan.scannedMessages,
+    pseudosFound: scan.pseudos.size,
+    pseudosCleared: storeResult.cleared,
+    pseudosStored: storeResult.stored,
+  };
+}
+
+async function applyPseudoMessage(message) {
   if (
     !message?.guild ||
     !message?.author ||
@@ -145,15 +278,11 @@ async function applyPseudoMessage(
   } = require("../core/guildConfig");
 
   const config =
-    getGuildConfig(
-      message.guild.id
-    ) || {};
+    getGuildConfig(message.guild.id) || {};
 
   const pseudoChannelId =
     config?.pseudoScanChannelId
-      ? String(
-          config.pseudoScanChannelId
-        )
+      ? String(config.pseudoScanChannelId)
       : null;
 
   if (!pseudoChannelId) return;
@@ -165,15 +294,12 @@ async function applyPseudoMessage(
     return;
   }
 
-  const pseudo =
-    cleanPseudoInput(
-      message.content
-    );
+  const pseudo = cleanPseudoInput(
+    message.content
+  );
 
   if (!pseudo) {
-    await message
-      .react("❌")
-      .catch(() => {});
+    await message.react("❌").catch(() => {});
     return;
   }
 
@@ -185,8 +311,7 @@ async function applyPseudoMessage(
     buildMemberLine,
   } = require("../core/memberDisplay");
 
-  let member =
-    message.member || null;
+  let member = message.member || null;
 
   if (!member) {
     member = await message.guild.members
@@ -195,31 +320,27 @@ async function applyPseudoMessage(
   }
 
   if (!member) {
-    await message
-      .react("⚠️")
-      .catch(() => {});
+    await message.react("⚠️").catch(() => {});
     return;
   }
 
-  // Enregistrement immédiat.
   setUserPseudo(
     message.guild.id,
     message.author.id,
-    pseudo
+    pseudo,
+    {
+      sourceMessageId: message.id,
+    }
   );
 
   const nickname =
-    buildMemberLine(
-      member,
-      config
-    );
+    buildMemberLine(member, config);
 
   let nicknameApplied = true;
 
   if (
     nickname &&
-    (member.nickname || "") !==
-      nickname
+    (member.nickname || "") !== nickname
   ) {
     if (!member.manageable) {
       nicknameApplied = false;
@@ -240,22 +361,14 @@ async function applyPseudoMessage(
     }
   }
 
-  // ✅ = pseudo bien enregistré.
-  await message
-    .react("✅")
-    .catch(() => {});
+  await message.react("✅").catch(() => {});
 
-  // ⚠️ supplémentaire si Discord empêche la modification du nickname.
   if (!nicknameApplied) {
-    await message
-      .react("⚠️")
-      .catch(() => {});
+    await message.react("⚠️").catch(() => {});
   }
 }
 
-function ensurePseudoChannelListener(
-  client
-) {
+function ensurePseudoChannelListener(client) {
   if (
     PSEUDO_LISTENER_READY ||
     !client?.on
@@ -269,9 +382,7 @@ function ensurePseudoChannelListener(
     "messageCreate",
     async (message) => {
       try {
-        await applyPseudoMessage(
-          message
-        );
+        await applyPseudoMessage(message);
       } catch (error) {
         console.error(
           "[PROSYNC][PSEUDO_CHANNEL]",
@@ -282,27 +393,50 @@ function ensurePseudoChannelListener(
   );
 }
 
-// ======================================================
-// PSEUDO — SYNCHRONISATION PÉRIODIQUE
-// ======================================================
-
 async function runPseudoForGuild(
   guild,
   config,
-  { throttleMs = 850 } = {}
+  {
+    scanLimit = 300,
+    throttleMs = 850,
+    requirePseudoChannel = true,
+  } = {}
 ) {
+  if (!guild) {
+    return {
+      ok: false,
+      reason: "no_guild",
+    };
+  }
+
+  const scanResult =
+    await syncPseudoStoreFromChannel(
+      guild,
+      config,
+      {
+        scanLimit,
+        requirePseudoChannel,
+      }
+    );
+
+  if (!scanResult.ok) {
+    return {
+      ok: false,
+      ...scanResult,
+    };
+  }
+
   const {
     buildMemberLine,
   } = require("../core/memberDisplay");
 
+  const {
+    getUserPseudos,
+  } = require("../core/pseudoStore");
+
   await guild.members
     .fetch()
     .catch(() => null);
-
-  let ok = 0;
-  let fail = 0;
-  let skipped = 0;
-  let notManageable = 0;
 
   const members =
     guild.members.cache.filter(
@@ -311,10 +445,21 @@ async function runPseudoForGuild(
         !member.user.bot
     );
 
+  let okCount = 0;
+  let fail = 0;
+  let skipped = 0;
+  let notManageable = 0;
+  let usernameFallback = 0;
+
   for (const member of members.values()) {
-    if (!member.manageable) {
-      notManageable++;
-      continue;
+    const stored =
+      getUserPseudos(
+        guild.id,
+        member.id
+      );
+
+    if (!stored?.pseudo) {
+      usernameFallback++;
     }
 
     const nickname =
@@ -325,21 +470,32 @@ async function runPseudoForGuild(
 
     if (
       !nickname ||
-      nickname.length < 2 ||
-      (member.nickname || "") ===
-        nickname
+      nickname.length < 2
     ) {
       skipped++;
+      continue;
+    }
+
+    if (
+      (member.nickname || "") ===
+      nickname
+    ) {
+      skipped++;
+      continue;
+    }
+
+    if (!member.manageable) {
+      notManageable++;
       continue;
     }
 
     try {
       await member.setNickname(
         nickname,
-        "PROSYNC — synchronisation automatique"
+        "PROSYNC — synchronisation pseudo"
       );
 
-      ok++;
+      okCount++;
     } catch (error) {
       console.error(
         `[PROSYNC][PSEUDO_AUTO] ${member.user?.tag || member.id}:`,
@@ -355,7 +511,23 @@ async function runPseudoForGuild(
   }
 
   return {
-    ok,
+    ok: true,
+
+    scannedMessages:
+      scanResult.scannedMessages || 0,
+
+    pseudosFound:
+      scanResult.pseudosFound || 0,
+
+    pseudosCleared:
+      scanResult.pseudosCleared || 0,
+
+    pseudosStored:
+      scanResult.pseudosStored || 0,
+
+    usernameFallback,
+
+    okCount,
     fail,
     skipped,
     notManageable,
@@ -366,25 +538,15 @@ async function runPseudoForGuild(
 // DISPONIBILITÉS
 // ======================================================
 
-async function safeFetchMessage(
-  channel,
-  messageId
-) {
-  if (
-    !channel ||
-    !messageId
-  ) {
-    return null;
-  }
+async function safeFetchMessage(channel, messageId) {
+  if (!channel || !messageId) return null;
 
   return channel.messages
     .fetch(String(messageId))
     .catch(() => null);
 }
 
-async function ensureFreshMessage(
-  message
-) {
+async function ensureFreshMessage(message) {
   if (!message) return null;
 
   return message
@@ -396,65 +558,44 @@ async function ensureFreshMessage(
     );
 }
 
-function findReaction(
-  message,
-  emojiName
-) {
+function findReaction(message, emojiName) {
   return (
     message?.reactions?.cache?.find(
       (reaction) =>
-        reaction?.emoji?.name ===
-          emojiName ||
-        reaction?.emoji?.toString?.() ===
-          emojiName
+        reaction?.emoji?.name === emojiName ||
+        reaction?.emoji?.toString?.() === emojiName
     ) || null
   );
 }
 
-async function fetchAllReactionUsers(
-  reaction
-) {
+async function fetchAllReactionUsers(reaction) {
   const output = new Set();
 
-  if (
-    !reaction?.users?.fetch
-  ) {
+  if (!reaction?.users?.fetch) {
     return output;
   }
 
   let after;
 
-  for (
-    let page = 0;
-    page < 15;
-    page++
-  ) {
-    const users =
-      await reaction.users
-        .fetch({
-          limit: 100,
-          after,
-        })
-        .catch(() => null);
+  for (let page = 0; page < 15; page++) {
+    const users = await reaction.users
+      .fetch({
+        limit: 100,
+        after,
+      })
+      .catch(() => null);
 
     if (!users?.size) break;
 
     for (const user of users.values()) {
-      if (
-        user?.id &&
-        !user.bot
-      ) {
+      if (user?.id && !user.bot) {
         output.add(user.id);
       }
     }
 
-    after =
-      users.last()?.id;
+    after = users.last()?.id;
 
-    if (
-      !after ||
-      users.size < 100
-    ) {
+    if (!after || users.size < 100) {
       break;
     }
   }
@@ -477,13 +618,10 @@ async function collectReactionUserIdsStrong(
   }
 
   const fresh =
-    await ensureFreshMessage(
-      message
-    );
+    await ensureFreshMessage(message);
 
   if (
-    (fresh?.reactions?.cache
-      ?.size ?? 0) === 0 &&
+    (fresh?.reactions?.cache?.size ?? 0) === 0 &&
     fresh?.reactions?.fetch
   ) {
     await fresh.reactions
@@ -505,27 +643,25 @@ async function collectReactionUserIdsStrong(
       .fetch()
       .catch(() => null);
 
-    reaction = findReaction(
-      fresh,
-      emojiName
-    );
+    reaction =
+      findReaction(
+        fresh,
+        emojiName
+      );
   }
 
   if (!reaction) {
     return (
-      fresh?.reactions?.cache
-        ?.size ?? 0
+      fresh?.reactions?.cache?.size ?? 0
     ) === 0
       ? {
           ok: false,
-          reason:
-            "reactions_unavailable",
+          reason: "reactions_unavailable",
           users: empty,
         }
       : {
           ok: true,
-          reason:
-            "emoji_not_found",
+          reason: "emoji_not_found",
           users: empty,
         };
   }
@@ -534,12 +670,9 @@ async function collectReactionUserIdsStrong(
     reaction.partial &&
     reaction.fetch
   ) {
-    reaction =
-      await reaction
-        .fetch()
-        .catch(
-          () => reaction
-        );
+    reaction = await reaction
+      .fetch()
+      .catch(() => reaction);
   }
 
   const users =
@@ -555,16 +688,12 @@ async function collectReactionUserIdsStrong(
       }
     : {
         ok: false,
-        reason:
-          "users_fetch_failed",
+        reason: "users_fetch_failed",
         users: empty,
       };
 }
 
-function hasAnyRoleId(
-  member,
-  roleIds
-) {
+function hasAnyRoleId(member, roleIds) {
   return (
     Array.isArray(roleIds)
       ? roleIds
@@ -578,36 +707,25 @@ function hasAnyRoleId(
   );
 }
 
-function getDispoMessageIds(
-  config
-) {
+function getDispoMessageIds(config) {
   const ids =
-    Array.isArray(
-      config?.dispoMessageIds
-    )
-      ? config.dispoMessageIds.slice(
-          0,
-          7
-        )
+    Array.isArray(config?.dispoMessageIds)
+      ? config.dispoMessageIds.slice(0, 7)
       : [];
 
   while (ids.length < 7) {
     ids.push(null);
   }
 
-  return ids.map((id) =>
-    id ? String(id) : null
+  return ids.map(
+    (id) => (id ? String(id) : null)
   );
 }
 
-function resolveDispoChannelId(
-  config
-) {
+function resolveDispoChannelId(config) {
   const id =
     config?.checkDispoChannelId &&
-    String(
-      config.checkDispoChannelId
-    ) !== "null"
+    String(config.checkDispoChannelId) !== "null"
       ? config.checkDispoChannelId
       : config?.disposChannelId;
 
@@ -619,15 +737,12 @@ async function getPlayersAndReactions(
   config
 ) {
   const dispoChannelId =
-    resolveDispoChannelId(
-      config
-    );
+    resolveDispoChannelId(config);
 
   if (!dispoChannelId) {
     return {
       ok: false,
-      reason:
-        "no_dispo_channel",
+      reason: "no_dispo_channel",
     };
   }
 
@@ -636,30 +751,22 @@ async function getPlayersAndReactions(
       .fetch(dispoChannelId)
       .catch(() => null);
 
-  if (
-    !channel?.isTextBased?.()
-  ) {
+  if (!channel?.isTextBased?.()) {
     return {
       ok: false,
-      reason:
-        "invalid_dispo_channel",
+      reason: "invalid_dispo_channel",
     };
   }
 
   const playerRoleIds =
-    Array.isArray(
-      config?.playerRoleIds
-    )
+    Array.isArray(config?.playerRoleIds)
       ? config.playerRoleIds
       : [];
 
-  if (
-    !playerRoleIds.length
-  ) {
+  if (!playerRoleIds.length) {
     return {
       ok: false,
-      reason:
-        "no_player_roles",
+      reason: "no_player_roles",
     };
   }
 
@@ -677,8 +784,7 @@ async function getPlayersAndReactions(
   if (!messageId) {
     return {
       ok: false,
-      reason:
-        "no_dispo_message",
+      reason: "no_dispo_message",
       dayIndex,
       dayLabel,
       dispoChannelId,
@@ -694,8 +800,7 @@ async function getPlayersAndReactions(
   if (!message) {
     return {
       ok: false,
-      reason:
-        "dispo_message_not_found",
+      reason: "dispo_message_not_found",
       dayIndex,
       dayLabel,
       messageId,
@@ -717,16 +822,13 @@ async function getPlayersAndReactions(
 
   if (
     !yes.ok &&
-    yes.reason ===
-      "reactions_unavailable" &&
+    yes.reason === "reactions_unavailable" &&
     !no.ok &&
-    no.reason ===
-      "reactions_unavailable"
+    no.reason === "reactions_unavailable"
   ) {
     return {
       ok: false,
-      reason:
-        "reactions_unavailable",
+      reason: "reactions_unavailable",
       dayIndex,
       dayLabel,
       messageId,
@@ -784,13 +886,10 @@ async function runCheckDispoForGuild(
           .catch(() => null)
       : null;
 
-  if (
-    !reportChannel?.isTextBased?.()
-  ) {
+  if (!reportChannel?.isTextBased?.()) {
     return {
       ok: false,
-      reason:
-        "invalid_report_channel",
+      reason: "invalid_report_channel",
     };
   }
 
@@ -805,9 +904,7 @@ async function runCheckDispoForGuild(
       .setTitle(
         `📊 Check Dispo — ${
           result.dayLabel ||
-          DAYS[
-            dayIndexFromDate()
-          ]
+          DAYS[dayIndexFromDate()]
         }`
       )
       .setColor(0xed4245)
@@ -827,12 +924,11 @@ async function runCheckDispoForGuild(
         )
       );
 
-    const missing = [
-      ...playerIds,
-    ].filter(
-      (id) =>
-        !result.reactedIds.has(id)
-    );
+    const missing =
+      [...playerIds].filter(
+        (id) =>
+          !result.reactedIds.has(id)
+      );
 
     embed
       .setDescription(
@@ -842,20 +938,15 @@ async function runCheckDispoForGuild(
       .addFields(
         {
           name: `🟩 Présents (${result.yesIds.length})`,
-          value: mentionList(
-            result.yesIds
-          ),
+          value: mentionList(result.yesIds),
         },
         {
           name: `🟥 Absents (${result.noIds.length})`,
-          value: mentionList(
-            result.noIds
-          ),
+          value: mentionList(result.noIds),
         },
         {
           name: `🟦 Sans réaction (${missing.length})`,
-          value:
-            mentionList(missing),
+          value: mentionList(missing),
         }
       );
   }
@@ -902,12 +993,11 @@ async function runRappelDispoForGuild(
       )
     );
 
-  const missing = [
-    ...playerIds,
-  ].filter(
-    (id) =>
-      !result.reactedIds.has(id)
-  );
+  const missing =
+    [...playerIds].filter(
+      (id) =>
+        !result.reactedIds.has(id)
+    );
 
   if (!missing.length) {
     return {
@@ -928,20 +1018,13 @@ async function runRappelDispoForGuild(
       content:
         `⏰ **Rappel Dispo — ${result.dayLabel}**\n` +
         `Merci de répondre avec ✅ ou ❌.` +
-        `${
-          link
-            ? `\n➡️ ${link}`
-            : ""
-        }\n\n` +
-        mentionList(missing, {
+        (link ? `\n➡️ ${link}` : "") +
+        `\n\n${mentionList(missing, {
           max: 60,
-        }),
+        })}`,
 
       allowedMentions: {
-        users: missing.slice(
-          0,
-          100
-        ),
+        users: missing.slice(0, 100),
         roles: [],
         repliedUser: false,
       },
@@ -955,17 +1038,12 @@ async function runRappelDispoForGuild(
   };
 }
 
-function normalizeWarningRoleIds(
-  config
-) {
+function normalizeWarningRoleIds(config) {
   const warning =
-    config?.automations
-      ?.avertissement || {};
+    config?.automations?.avertissement || {};
 
   const source =
-    Array.isArray(
-      warning.roleIds
-    )
+    Array.isArray(warning.roleIds)
       ? warning.roleIds
       : [
           warning.roleId,
@@ -993,32 +1071,24 @@ async function runAvertissementForGuild(
   }
 
   const warningRoleIds =
-    normalizeWarningRoleIds(
-      config
-    );
+    normalizeWarningRoleIds(config);
 
-  if (
-    !warningRoleIds.length
-  ) {
+  if (!warningRoleIds.length) {
     return {
       ok: false,
-      reason:
-        "no_warning_roles",
+      reason: "no_warning_roles",
     };
   }
 
   const today = dateKey();
 
   if (
-    config?.automations
-      ?.avertissement
-      ?.lastProcessedDate ===
+    config?.automations?.avertissement?.lastProcessedDate ===
     today
   ) {
     return {
       ok: true,
-      reason:
-        "already_processed_today",
+      reason: "already_processed_today",
       skipped: true,
     };
   }
@@ -1032,8 +1102,7 @@ async function runAvertissementForGuild(
     if (!role) {
       return {
         ok: false,
-        reason:
-          "warning_role_not_found",
+        reason: "warning_role_not_found",
         roleId,
       };
     }
@@ -1041,8 +1110,7 @@ async function runAvertissementForGuild(
     if (!role.editable) {
       return {
         ok: false,
-        reason:
-          "warning_role_not_editable",
+        reason: "warning_role_not_editable",
         roleId,
       };
     }
@@ -1059,9 +1127,7 @@ async function runAvertissementForGuild(
   }
 
   const levelAddedIds =
-    warningRoleIds.map(
-      () => []
-    );
+    warningRoleIds.map(() => []);
 
   const regularizedIds = [];
   const maxLevelIds = [];
@@ -1070,132 +1136,96 @@ async function runAvertissementForGuild(
 
   for (const member of result.players.values()) {
     const hasReacted =
-      result.reactedIds.has(
-        member.id
-      );
+      result.reactedIds.has(member.id);
 
     const currentIndexes =
       warningRoleIds
         .map(
           (roleId, index) =>
-            member.roles.cache.has(
-              roleId
-            )
+            member.roles.cache.has(roleId)
               ? index
               : -1
         )
         .filter(
-          (index) =>
-            index >= 0
+          (index) => index >= 0
         );
 
     try {
       if (hasReacted) {
-        if (
-          currentIndexes.length
-        ) {
+        if (currentIndexes.length) {
           await member.roles.remove(
             currentIndexes.map(
               (index) =>
-                warningRoleIds[
-                  index
-                ]
+                warningRoleIds[index]
             ),
             `PROSYNC — disponibilité renseignée (${result.dayLabel})`
           );
 
-          regularizedIds.push(
-            member.id
-          );
+          regularizedIds.push(member.id);
         } else {
-          unchangedIds.push(
-            member.id
-          );
+          unchangedIds.push(member.id);
         }
       } else {
         const currentLevel =
           currentIndexes.length
-            ? Math.max(
-                ...currentIndexes
-              )
+            ? Math.max(...currentIndexes)
             : -1;
 
         const targetLevel =
           Math.min(
             currentLevel + 1,
-            warningRoleIds.length -
-              1
+            warningRoleIds.length - 1
           );
 
         if (
           currentLevel ===
-          warningRoleIds.length -
-            1
+          warningRoleIds.length - 1
         ) {
           const lowerRoles =
             currentIndexes
               .filter(
                 (index) =>
-                  index !==
-                  currentLevel
+                  index !== currentLevel
               )
               .map(
                 (index) =>
-                  warningRoleIds[
-                    index
-                  ]
+                  warningRoleIds[index]
               );
 
-          if (
-            lowerRoles.length
-          ) {
+          if (lowerRoles.length) {
             await member.roles.remove(
               lowerRoles,
               "PROSYNC — nettoyage anciens niveaux"
             );
           }
 
-          maxLevelIds.push(
-            member.id
-          );
+          maxLevelIds.push(member.id);
         } else {
-          if (
-            currentIndexes.length
-          ) {
+          if (currentIndexes.length) {
             await member.roles.remove(
               currentIndexes.map(
                 (index) =>
-                  warningRoleIds[
-                    index
-                  ]
+                  warningRoleIds[index]
               ),
-              `PROSYNC — montée niveau ${
-                targetLevel + 1
-              }`
+              `PROSYNC — montée niveau ${targetLevel + 1}`
             );
           }
 
           await member.roles.add(
-            warningRoleIds[
-              targetLevel
-            ],
+            warningRoleIds[targetLevel],
             `PROSYNC — disponibilité non renseignée (${result.dayLabel})`
           );
 
-          levelAddedIds[
-            targetLevel
-          ].push(member.id);
+          levelAddedIds[targetLevel].push(
+            member.id
+          );
         }
       }
     } catch {
-      failedIds.push(
-        member.id
-      );
+      failedIds.push(member.id);
     }
 
-    if (
-      throttleMs > 0
-    ) {
+    if (throttleMs > 0) {
       await sleep(throttleMs);
     }
   }
@@ -1209,8 +1239,7 @@ async function runAvertissementForGuild(
     {
       automations: {
         avertissement: {
-          lastProcessedDate:
-            today,
+          lastProcessedDate: today,
         },
       },
     }
@@ -1227,9 +1256,7 @@ async function runAvertissementForGuild(
           .catch(() => null)
       : null;
 
-  if (
-    reportChannel?.isTextBased?.()
-  ) {
+  if (reportChannel?.isTextBased?.()) {
     const embed =
       new EmbedBuilder()
         .setTitle(
@@ -1242,9 +1269,7 @@ async function runAvertissementForGuild(
             warningRoleIds
               .map(
                 (roleId, index) =>
-                  `${
-                    index + 1
-                  }. <@&${roleId}>`
+                  `${index + 1}. <@&${roleId}>`
               )
               .join("\n")
         );
@@ -1253,15 +1278,11 @@ async function runAvertissementForGuild(
       (roleId, index) => {
         embed.addFields({
           name:
-            `Niveau ${
-              index + 1
-            } attribué (` +
+            `Niveau ${index + 1} attribué (` +
             `${levelAddedIds[index].length})`,
 
           value: mentionList(
-            levelAddedIds[
-              index
-            ]
+            levelAddedIds[index]
           ),
         });
       }
@@ -1293,14 +1314,12 @@ async function runAvertissementForGuild(
           value:
             `Inchangés : **${unchangedIds.length}**\n` +
             `Échecs : **${failedIds.length}**` +
-            `${
-              failedIds.length
-                ? `\n${mentionList(
-                    failedIds,
-                    { max: 30 }
-                  )}`
-                : ""
-            }`,
+            (failedIds.length
+              ? `\n${mentionList(
+                  failedIds,
+                  { max: 30 }
+                )}`
+              : ""),
         }
       )
       .setFooter({
@@ -1316,12 +1335,10 @@ async function runAvertissementForGuild(
 
   return {
     ok: true,
-    dayIndex:
-      result.dayIndex,
-    dayLabel:
-      result.dayLabel,
-    messageId:
-      result.messageId,
+
+    dayIndex: result.dayIndex,
+    dayLabel: result.dayLabel,
+    messageId: result.messageId,
 
     levelsAdded:
       levelAddedIds.map(
@@ -1342,77 +1359,68 @@ async function runAvertissementForGuild(
   };
 }
 
+// ======================================================
+// RUNNER
+// ======================================================
+
 function parseHHMM(value) {
-  const match = String(
-    value || ""
-  )
-    .trim()
-    .match(
-      /^([01]?\d|2[0-3]):([0-5]\d)$/
-    );
+  const match =
+    String(value || "")
+      .trim()
+      .match(
+        /^([01]?\d|2[0-3]):([0-5]\d)$/
+      );
 
   return match
     ? {
-        hours: Number(
-          match[1]
-        ),
-        minutes: Number(
-          match[2]
-        ),
+        hours: Number(match[1]),
+        minutes: Number(match[2]),
       }
     : null;
 }
 
-function minuteKey(
-  date = new Date()
-) {
-  return `${dateKey(date).replaceAll(
-    "-",
-    ""
-  )}${String(
-    date.getHours()
-  ).padStart(2, "0")}${String(
-    date.getMinutes()
-  ).padStart(2, "0")}`;
+function minuteKey(date = new Date()) {
+  return (
+    `${dateKey(date).replaceAll("-", "")}` +
+    `${String(date.getHours()).padStart(2, "0")}` +
+    `${String(date.getMinutes()).padStart(2, "0")}`
+  );
 }
 
 function startAutomationRunner(
   client,
   options = {}
 ) {
-  // IMPORTANT :
-  // le listener pseudo démarre même si les automations sont OFF.
-  ensurePseudoChannelListener(
-    client
-  );
+  ensurePseudoChannelListener(client);
+
+  const scanLimit =
+    typeof options.scanLimit === "number"
+      ? options.scanLimit
+      : 300;
 
   const throttleMsPseudo =
-    typeof options.throttleMsPseudo ===
-    "number"
+    typeof options.throttleMsPseudo === "number"
       ? options.throttleMsPseudo
       : 850;
 
   const throttleMsAvertissement =
-    typeof options
-      .throttleMsAvertissement ===
-    "number"
+    typeof options.throttleMsAvertissement === "number"
       ? options.throttleMsAvertissement
       : 250;
 
   const loopMs =
-    typeof options.loopMs ===
-    "number"
+    typeof options.loopMs === "number"
       ? options.loopMs
       : 20_000;
 
-  const lastRun =
-    new Map();
+  const lastRun = new Map();
 
   async function tick() {
     try {
+      if (!client?.guilds?.cache) return;
+
       const now = new Date();
-      const keyNow =
-        minuteKey(now);
+      const keyNow = minuteKey(now);
 
       const {
         getGuildConfig,
@@ -1420,31 +1428,22 @@ function startAutomationRunner(
 
       for (const guild of client.guilds.cache.values()) {
         const config =
-          getGuildConfig(
-            guild.id
-          );
+          getGuildConfig(guild.id);
 
-        if (
-          !config?.automations
-            ?.enabled
-        ) {
+        if (!config?.automations?.enabled) {
           continue;
         }
 
         if (
-          config.automations
-            .pseudo?.enabled &&
+          config.automations.pseudo?.enabled &&
           now.getMinutes() ===
             (Number.isInteger(
-              config.automations
-                .pseudo.minute
+              config.automations.pseudo.minute
             )
-              ? config.automations
-                  .pseudo.minute
+              ? config.automations.pseudo.minute
               : 10)
         ) {
-          const key =
-            `${guild.id}:pseudo`;
+          const key = `${guild.id}:pseudo`;
 
           if (
             lastRun.get(key) !==
@@ -1459,8 +1458,9 @@ function startAutomationRunner(
               guild,
               config,
               {
-                throttleMs:
-                  throttleMsPseudo,
+                scanLimit,
+                throttleMs: throttleMsPseudo,
+                requirePseudoChannel: true,
               }
             );
           }
@@ -1474,35 +1474,27 @@ function startAutomationRunner(
         ] of [
           [
             "check",
-            config.automations
-              .checkDispo?.enabled,
-            config.automations
-              .checkDispo?.times,
+            config.automations.checkDispo?.enabled,
+            config.automations.checkDispo?.times,
             runCheckDispoForGuild,
           ],
           [
             "rappel",
-            config.automations
-              .rappel?.enabled,
-            config.automations
-              .rappel?.times,
+            config.automations.rappel?.enabled,
+            config.automations.rappel?.times,
             runRappelDispoForGuild,
           ],
         ]) {
           if (!enabled) continue;
 
-          for (const time of Array.isArray(times)
-            ? times
-            : []) {
+          for (const time of Array.isArray(times) ? times : []) {
             const parsed =
               parseHHMM(time);
 
             if (
               !parsed ||
-              parsed.hours !==
-                now.getHours() ||
-              parsed.minutes !==
-                now.getMinutes()
+              parsed.hours !== now.getHours() ||
+              parsed.minutes !== now.getMinutes()
             ) {
               continue;
             }
@@ -1528,21 +1520,19 @@ function startAutomationRunner(
         }
 
         if (
-          config.automations
-            .avertissement?.enabled
+          config.automations.avertissement?.enabled
         ) {
           const times =
             Array.isArray(
-              config.automations
-                .checkDispo?.times
+              config.automations.checkDispo?.times
             )
               ? [
-                  ...config.automations
-                    .checkDispo.times,
-                ].sort((a, b) =>
-                  String(a).localeCompare(
-                    String(b)
-                  )
+                  ...config.automations.checkDispo.times,
+                ].sort(
+                  (a, b) =>
+                    String(a).localeCompare(
+                      String(b)
+                    )
                 )
               : [];
 
@@ -1554,10 +1544,8 @@ function startAutomationRunner(
 
           if (
             parsed &&
-            parsed.hours ===
-              now.getHours() &&
-            parsed.minutes ===
-              now.getMinutes()
+            parsed.hours === now.getHours() &&
+            parsed.minutes === now.getMinutes()
           ) {
             const key =
               `${guild.id}:avertissement:${lastTime}`;
@@ -1599,10 +1587,7 @@ function startAutomationRunner(
 
   timer.unref?.();
 
-  if (
-    options.runOnStart ===
-    true
-  ) {
+  if (options.runOnStart === true) {
     tick().catch(() => {});
   }
 
@@ -1612,7 +1597,12 @@ function startAutomationRunner(
 
 module.exports = {
   startAutomationRunner,
+
   runPseudoForGuild,
+  scanPseudoChannel,
+  syncPseudoStoreFromChannel,
+
   runAvertissementForGuild,
+
   ensurePseudoChannelListener,
 };
