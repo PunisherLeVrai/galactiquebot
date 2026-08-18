@@ -1,114 +1,147 @@
 // src/commands/pseudo.js
-// /pseudo (STAFF ONLY)
-// Synchronise les nicknames de tous les membres selon le format :
-// POSTE / RÔLE / PSEUDO
+// /pseudo — STAFF ONLY
 //
-// Le salon pseudo n'est plus scanné par cette commande.
-// Les pseudos sont enregistrés en temps réel par le listener situé dans runner.js.
+// 1) scanne obligatoirement le salon pseudo
+// 2) prend le dernier pseudo valide de chaque membre
+// 3) met à jour pseudos.json
+// 4) si rien n'est trouvé dans le salon : username Discord
+// 5) applique POSTE / RÔLE / PSEUDO
 
-const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { getGuildConfig } = require("../core/guildConfig");
-const { buildMemberLine } = require("../core/memberDisplay");
+const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  MessageFlags,
+} = require("discord.js");
 
-function isStaff(member, cfg) {
+const {
+  getGuildConfig,
+} = require("../core/guildConfig");
+
+const {
+  runPseudoForGuild,
+} = require("../automations/runner");
+
+function isStaff(member, config) {
   if (!member) return false;
-  if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
 
-  const staffRoleIds = Array.isArray(cfg?.staffRoleIds) ? cfg.staffRoleIds : [];
-  return staffRoleIds.some((id) => id && member.roles.cache.has(String(id)));
-}
+  if (
+    member.permissions?.has?.(
+      PermissionFlagsBits.Administrator
+    )
+  ) {
+    return true;
+  }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const staffRoleIds = Array.isArray(config?.staffRoleIds)
+    ? config.staffRoleIds
+    : [];
+
+  return staffRoleIds.some(
+    (roleId) =>
+      roleId &&
+      member.roles?.cache?.has?.(String(roleId))
+  );
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("pseudo")
-    .setDescription("STAFF: synchronise les pseudos de tous les membres.")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDescription(
+      "STAFF: scanne le salon pseudo puis synchronise les nicknames."
+    )
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.Administrator
+    ),
 
   async execute(interaction) {
     try {
       if (!interaction.inGuild()) {
-        return interaction.reply({ content: "⛔", ephemeral: true });
+        return interaction.reply({
+          content: "⛔",
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
-      const cfg = getGuildConfig(interaction.guildId) || {};
+      const config =
+        getGuildConfig(interaction.guildId) || {};
 
-      if (!isStaff(interaction.member, cfg)) {
-        return interaction.reply({ content: "⛔ Accès réservé au STAFF.", ephemeral: true });
+      if (!isStaff(interaction.member, config)) {
+        return interaction.reply({
+          content: "⛔ Accès réservé au STAFF.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (!config.pseudoScanChannelId) {
+        return interaction.reply({
+          content:
+            "⚠️ Aucun salon pseudo configuré dans `/setup`.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
       await interaction.reply({
-        content: "⏳ Synchronisation des pseudos en cours...",
-        ephemeral: true,
+        content:
+          "⏳ Scan du salon pseudo puis synchronisation...",
+        flags: MessageFlags.Ephemeral,
       });
 
-      await interaction.guild.members.fetch().catch(() => null);
+      const result =
+        await runPseudoForGuild(
+          interaction.guild,
+          config,
+          {
+            scanLimit: 300,
+            throttleMs: 850,
+            requirePseudoChannel: true,
+          }
+        );
 
-      const members = interaction.guild.members.cache.filter(
-        (member) => member && !member.user.bot
-      );
+      if (!result.ok) {
+        const reasons = {
+          no_guild: "Serveur introuvable.",
+          no_pseudo_channel:
+            "Aucun salon pseudo configuré.",
+          invalid_pseudo_channel:
+            "Le salon pseudo est introuvable ou inaccessible.",
+          scan_failed:
+            "Le scan du salon pseudo a échoué.",
+        };
 
-      let ok = 0;
-      let fail = 0;
-      let skipped = 0;
-      let notManageable = 0;
-
-      for (const member of members.values()) {
-        if (!member.manageable) {
-          notManageable++;
-          continue;
-        }
-
-        const nickname = buildMemberLine(member, cfg);
-
-        if (!nickname || nickname.length < 2) {
-          skipped++;
-          continue;
-        }
-
-        if ((member.nickname || "") === nickname) {
-          skipped++;
-          continue;
-        }
-
-        try {
-          await member.setNickname(nickname, "PROSYNC — synchronisation manuelle");
-          ok++;
-        } catch (error) {
-          console.error(
-            `[PROSYNC][PSEUDO] Impossible de modifier ${member.user?.tag || member.id}:`,
-            error?.message || error
-          );
-          fail++;
-        }
-
-        // Évite d'enchaîner trop vite les changements de nicknames.
-        await sleep(850);
+        return interaction.editReply({
+          content:
+            `⚠️ Synchronisation impossible : ${
+              reasons[result.reason] || result.reason
+            }`,
+        });
       }
 
       return interaction.editReply({
         content:
           `✅ Synchronisation terminée.\n` +
-          `Format : **POSTE / RÔLE / PSEUDO**\n` +
-          `✅ Modifiés : **${ok}**\n` +
-          `⏭️ Inchangés : **${skipped}**\n` +
-          `⚠️ Échecs : **${fail}**\n` +
-          `🚫 Non modifiables : **${notManageable}**`,
+          `Format : **POSTE / RÔLE / PSEUDO**\n\n` +
+          `🔎 Messages scannés : **${result.scannedMessages}**\n` +
+          `🎮 Pseudos trouvés : **${result.pseudosFound}**\n` +
+          `🧹 Anciens pseudos vidés : **${result.pseudosCleared}**\n` +
+          `👤 Username Discord utilisé en secours : **${result.usernameFallback}**\n\n` +
+          `✅ Nicknames modifiés : **${result.okCount}**\n` +
+          `⏭️ Inchangés : **${result.skipped}**\n` +
+          `⚠️ Échecs : **${result.fail}**\n` +
+          `🚫 Non modifiables : **${result.notManageable}**`,
       });
     } catch (error) {
       console.error("[PROSYNC][PSEUDO_COMMAND]", error);
 
       try {
         if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({ content: "⚠️ Une erreur est survenue." }).catch(() => {});
+          await interaction.editReply({
+            content: "⚠️ Une erreur est survenue.",
+          });
         } else {
           await interaction.reply({
             content: "⚠️ Une erreur est survenue.",
-            ephemeral: true,
-          }).catch(() => {});
+            flags: MessageFlags.Ephemeral,
+          });
         }
       } catch {}
     }
