@@ -1,13 +1,10 @@
 // src/core/pseudoStore.js
 // Stockage pseudos multi-serveur — CommonJS
 //
-// Nouveau champ principal : pseudo
-// Compatibilité conservée avec : psn / xbox / ea
+// Priorité :
+// pseudo du salon > username Discord
 //
-// Priorité d'affichage utilisée ailleurs :
-// pseudo > psn > xbox > ea > username Discord
-//
-// Chemin : <root>/src/config/pseudos.json
+// PSN/XBOX/EA conservés uniquement pour compatibilité.
 
 const fs = require("fs");
 const path = require("path");
@@ -17,7 +14,7 @@ const DATA_DIR = path.join(ROOT_DIR, "src", "config");
 const STORE_PATH = path.join(DATA_DIR, "pseudos.json");
 
 const DEFAULT_DATA = {
-  version: 2,
+  version: 3,
   guilds: {},
 };
 
@@ -39,7 +36,10 @@ function safeReadJson(filePath, fallback) {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
-    return data && typeof data === "object" ? data : fallback;
+
+    return data && typeof data === "object"
+      ? data
+      : fallback;
   } catch {
     return fallback;
   }
@@ -49,13 +49,13 @@ function readAll() {
   ensureFile();
 
   const data = safeReadJson(STORE_PATH, {
-    version: 2,
+    version: 3,
     guilds: {},
   });
 
   if (!data || typeof data !== "object") {
     return {
-      version: 2,
+      version: 3,
       guilds: {},
     };
   }
@@ -64,8 +64,7 @@ function readAll() {
     data.guilds = {};
   }
 
-  // Passage transparent du format v1 au format v2.
-  data.version = 2;
+  data.version = 3;
 
   return data;
 }
@@ -73,7 +72,7 @@ function readAll() {
 function writeAll(data) {
   ensureFile();
 
-  data.version = 2;
+  data.version = 3;
 
   fs.writeFileSync(
     STORE_PATH,
@@ -94,6 +93,7 @@ function normalizeValue(value, max = 40) {
 
 function stripPlatformPrefix(platform, value) {
   const normalized = normalizeValue(value, 60);
+
   if (!normalized) return "";
 
   const platformName = String(platform || "").toLowerCase();
@@ -116,8 +116,13 @@ function stripPlatformPrefix(platform, value) {
 function ensureGuild(data, guildId) {
   const gid = String(guildId);
 
-  if (!data.guilds[gid] || typeof data.guilds[gid] !== "object") {
-    data.guilds[gid] = { users: {} };
+  if (
+    !data.guilds[gid] ||
+    typeof data.guilds[gid] !== "object"
+  ) {
+    data.guilds[gid] = {
+      users: {},
+    };
   }
 
   if (
@@ -130,28 +135,32 @@ function ensureGuild(data, guildId) {
   return data.guilds[gid];
 }
 
+function normalizeStoredUser(user) {
+  const source =
+    user && typeof user === "object" ? user : {};
+
+  return {
+    pseudo: normalizeValue(source.pseudo, 40),
+    psn: stripPlatformPrefix("psn", source.psn),
+    xbox: stripPlatformPrefix("xbox", source.xbox),
+    ea: stripPlatformPrefix("ea", source.ea),
+
+    sourceMessageId: source.sourceMessageId
+      ? String(source.sourceMessageId)
+      : null,
+
+    updatedAt: source.updatedAt || null,
+  };
+}
+
 function ensureUser(guildObject, userId) {
   const uid = String(userId);
 
-  if (
-    !guildObject.users[uid] ||
-    typeof guildObject.users[uid] !== "object"
-  ) {
-    guildObject.users[uid] = {
-      pseudo: "",
-      psn: "",
-      xbox: "",
-      ea: "",
-      updatedAt: null,
-    };
-  }
+  const current = normalizeStoredUser(
+    guildObject.users[uid]
+  );
 
-  const current = guildObject.users[uid];
-
-  if (typeof current.pseudo !== "string") current.pseudo = "";
-  if (typeof current.psn !== "string") current.psn = "";
-  if (typeof current.xbox !== "string") current.xbox = "";
-  if (typeof current.ea !== "string") current.ea = "";
+  guildObject.users[uid] = current;
 
   return current;
 }
@@ -161,28 +170,19 @@ function getUserPseudos(guildId, userId) {
 
   const data = readAll();
 
-  return (
-    data.guilds?.[String(guildId)]?.users?.[String(userId)] ||
-    null
-  );
+  const user =
+    data.guilds?.[String(guildId)]?.users?.[String(userId)];
+
+  return user ? normalizeStoredUser(user) : null;
 }
 
-/**
- * setUserPseudos(guildId, userId, patch)
- *
- * patch peut contenir :
- * { pseudo?, psn?, xbox?, ea? }
- */
 function setUserPseudos(guildId, userId, patch, opts = {}) {
   if (!guildId || !userId) return null;
-
-  const options = {
-    write: opts.write !== false,
-  };
 
   const data = readAll();
   const guildObject = ensureGuild(data, guildId);
   const current = ensureUser(guildObject, userId);
+
   const incoming =
     patch && typeof patch === "object" ? patch : {};
 
@@ -207,12 +207,19 @@ function setUserPseudos(guildId, userId, patch, opts = {}) {
         ? stripPlatformPrefix("ea", incoming.ea)
         : current.ea,
 
+    sourceMessageId:
+      incoming.sourceMessageId !== undefined
+        ? incoming.sourceMessageId
+          ? String(incoming.sourceMessageId)
+          : null
+        : current.sourceMessageId,
+
     updatedAt: new Date().toISOString(),
   };
 
   guildObject.users[String(userId)] = next;
 
-  if (options.write) {
+  if (opts.write !== false) {
     writeAll(data);
   }
 
@@ -223,25 +230,124 @@ function setUserPseudo(guildId, userId, pseudo, opts = {}) {
   return setUserPseudos(
     guildId,
     userId,
-    { pseudo },
+    {
+      pseudo,
+      sourceMessageId:
+        opts.sourceMessageId !== undefined
+          ? opts.sourceMessageId
+          : undefined,
+    },
     opts
   );
+}
+
+function syncGuildPseudoSnapshot(
+  guildId,
+  snapshot,
+  { clearMissing = true } = {}
+) {
+  if (!guildId) {
+    return {
+      stored: 0,
+      cleared: 0,
+      unchanged: 0,
+      totalFound: 0,
+    };
+  }
+
+  const data = readAll();
+  const guildObject = ensureGuild(data, guildId);
+
+  const incoming = new Map();
+
+  if (snapshot instanceof Map) {
+    for (const [userId, value] of snapshot.entries()) {
+      incoming.set(String(userId), value);
+    }
+  } else if (snapshot && typeof snapshot === "object") {
+    for (const [userId, value] of Object.entries(snapshot)) {
+      incoming.set(String(userId), value);
+    }
+  }
+
+  let stored = 0;
+  let cleared = 0;
+  let unchanged = 0;
+
+  if (clearMissing) {
+    for (const userId of Object.keys(guildObject.users)) {
+      if (incoming.has(String(userId))) continue;
+
+      const current = ensureUser(guildObject, userId);
+
+      if (current.pseudo || current.sourceMessageId) {
+        guildObject.users[String(userId)] = {
+          ...current,
+          pseudo: "",
+          sourceMessageId: null,
+          updatedAt: new Date().toISOString(),
+        };
+
+        cleared++;
+      } else {
+        unchanged++;
+      }
+    }
+  }
+
+  for (const [userId, value] of incoming.entries()) {
+    const current = ensureUser(guildObject, userId);
+
+    const pseudo = normalizeValue(value?.pseudo, 40);
+
+    if (!pseudo) continue;
+
+    const sourceMessageId =
+      value?.messageId || value?.sourceMessageId
+        ? String(value.messageId || value.sourceMessageId)
+        : null;
+
+    const changed =
+      current.pseudo !== pseudo ||
+      current.sourceMessageId !== sourceMessageId;
+
+    guildObject.users[String(userId)] = {
+      ...current,
+      pseudo,
+      sourceMessageId,
+      updatedAt: changed
+        ? new Date().toISOString()
+        : current.updatedAt,
+    };
+
+    if (changed) {
+      stored++;
+    } else {
+      unchanged++;
+    }
+  }
+
+  writeAll(data);
+
+  return {
+    stored,
+    cleared,
+    unchanged,
+    totalFound: incoming.size,
+  };
 }
 
 function exportAllPseudos() {
   const data = readAll();
 
   const output = {
-    version: 2,
+    version: 3,
     guilds: {},
   };
 
-  for (const [guildId, guildObject] of Object.entries(
-    data.guilds || {}
-  )) {
+  for (const [guildId, guildObject] of Object.entries(data.guilds || {})) {
     const users =
-      guildObject?.users &&
-      typeof guildObject.users === "object"
+      guildObject?.users && typeof guildObject.users === "object"
         ? guildObject.users
         : {};
 
@@ -250,13 +356,8 @@ function exportAllPseudos() {
     };
 
     for (const [userId, user] of Object.entries(users)) {
-      output.guilds[guildId].users[userId] = {
-        pseudo: normalizeValue(user?.pseudo),
-        psn: normalizeValue(user?.psn),
-        xbox: normalizeValue(user?.xbox),
-        ea: normalizeValue(user?.ea),
-        updatedAt: user?.updatedAt || null,
-      };
+      output.guilds[guildId].users[userId] =
+        normalizeStoredUser(user);
     }
   }
 
@@ -266,29 +367,20 @@ function exportAllPseudos() {
 function importAllPseudos(payload, { replace = false } = {}) {
   const data = readAll();
 
-  const incoming =
-    payload && typeof payload === "object"
-      ? payload
-      : {};
-
   const incomingGuilds =
-    incoming.guilds &&
-    typeof incoming.guilds === "object"
-      ? incoming.guilds
+    payload?.guilds && typeof payload.guilds === "object"
+      ? payload.guilds
       : {};
 
   if (replace) {
     data.guilds = {};
   }
 
-  for (const [guildId, guildData] of Object.entries(
-    incomingGuilds
-  )) {
+  for (const [guildId, guildData] of Object.entries(incomingGuilds)) {
     const guildObject = ensureGuild(data, guildId);
 
     const users =
-      guildData?.users &&
-      typeof guildData.users === "object"
+      guildData?.users && typeof guildData.users === "object"
         ? guildData.users
         : {};
 
@@ -315,6 +407,11 @@ function importAllPseudos(payload, { replace = false } = {}) {
           user?.ea !== undefined
             ? stripPlatformPrefix("ea", user.ea)
             : current.ea,
+
+        sourceMessageId:
+          user?.sourceMessageId
+            ? String(user.sourceMessageId)
+            : current.sourceMessageId,
 
         updatedAt:
           user?.updatedAt ||
@@ -348,6 +445,7 @@ module.exports = {
   getUserPseudos,
   setUserPseudos,
   setUserPseudo,
+  syncGuildPseudoSnapshot,
 
   exportAllPseudos,
   importAllPseudos,
