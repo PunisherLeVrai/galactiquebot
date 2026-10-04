@@ -1,5 +1,5 @@
 // src/core/guildConfig.js
-// Configuration multi-serveur PROSYNC — CommonJS
+// Configuration multi-serveur PRIME — CommonJS
 
 const fs = require("fs");
 const path = require("path");
@@ -9,12 +9,12 @@ const DATA_DIR = path.join(SRC_DIR, "config");
 const CONFIG_PATH = path.join(DATA_DIR, "servers.json");
 
 const DEFAULT_DATA = {
-  version: 4,
+  version: 5,
   guilds: {},
 };
 
 const DEFAULT_GUILD = {
-  botLabel: "PROSYNC",
+  botLabel: "PRIME",
 
   disposChannelId: null,
   staffReportsChannelId: null,
@@ -23,6 +23,9 @@ const DEFAULT_GUILD = {
   checkDispoChannelId: null,
 
   dispoMessageIds: [null, null, null, null, null, null, null],
+
+  // Plusieurs systèmes de disponibilités peuvent coexister sur un serveur.
+  disponibilites: [],
 
   staffRoleIds: [],
   playerRoleIds: [],
@@ -319,6 +322,131 @@ function buildLegacyPostsFromIds(ids) {
   }));
 }
 
+function normalizeDisponibilite(input, fallbackId = "principal") {
+  const source =
+    input && typeof input === "object"
+      ? input
+      : {};
+
+  const id = String(
+    source.id || fallbackId
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .slice(0, 32) || fallbackId;
+
+  const automations = normalizeAutomations({
+    enabled: true,
+    pseudo: {
+      enabled: false,
+      minute: 10,
+    },
+    checkDispo: source.automations?.checkDispo,
+    rappel: source.automations?.rappel,
+    avertissement: source.automations?.avertissement,
+  });
+
+  return {
+    id,
+    nom: String(source.nom || source.name || id)
+      .replace(/[`|]/g, "")
+      .trim()
+      .slice(0, 50) || id,
+
+    disposChannelId: normalizeOptionalId(
+      source.disposChannelId || source.channelId
+    ),
+
+    checkDispoChannelId: normalizeOptionalId(
+      source.checkDispoChannelId ||
+      source.disposChannelId ||
+      source.channelId
+    ),
+
+    reportChannelId: normalizeOptionalId(
+      source.reportChannelId ||
+      source.staffReportsChannelId
+    ),
+
+    playerRoleIds: uniqIds(
+      source.playerRoleIds,
+      { max: 25 }
+    ),
+
+    dispoMessageIds: normalizeDispoMessageIds(
+      source.dispoMessageIds || source.messageIds
+    ),
+
+    automations: {
+      checkDispo: automations.checkDispo,
+      rappel: automations.rappel,
+      avertissement: automations.avertissement,
+    },
+  };
+}
+
+function buildLegacyDisponibilite(source) {
+  const hasLegacyData =
+    source.disposChannelId ||
+    source.checkDispoChannelId ||
+    source.staffReportsChannelId ||
+    (Array.isArray(source.playerRoleIds) && source.playerRoleIds.length) ||
+    (Array.isArray(source.dispoMessageIds) && source.dispoMessageIds.some(Boolean));
+
+  if (!hasLegacyData) {
+    return null;
+  }
+
+  return normalizeDisponibilite({
+    id: "principal",
+    nom: "Principal",
+    disposChannelId: source.disposChannelId,
+    checkDispoChannelId: source.checkDispoChannelId,
+    reportChannelId: source.staffReportsChannelId,
+    playerRoleIds: source.playerRoleIds,
+    dispoMessageIds: source.dispoMessageIds,
+    automations: {
+      checkDispo: source.automations?.checkDispo,
+      rappel: source.automations?.rappel,
+      avertissement: source.automations?.avertissement,
+    },
+  });
+}
+
+function normalizeDisponibilites(source) {
+  const raw = Array.isArray(source?.disponibilites)
+    ? source.disponibilites
+    : Array.isArray(source?.availabilities)
+      ? source.availabilities
+      : [];
+
+  const output = [];
+  const seen = new Set();
+
+  for (let index = 0; index < raw.length; index++) {
+    const item = normalizeDisponibilite(
+      raw[index],
+      `dispo-${index + 1}`
+    );
+
+    if (seen.has(item.id)) continue;
+
+    seen.add(item.id);
+    output.push(item);
+  }
+
+  if (!output.length) {
+    const legacy = buildLegacyDisponibilite(source || {});
+
+    if (legacy) {
+      output.push(legacy);
+    }
+  }
+
+  return output.slice(0, 20);
+}
+
 function normalizeGuild(config) {
   const source = config && typeof config === "object" ? config : {};
 
@@ -327,8 +455,9 @@ function normalizeGuild(config) {
     ...source,
   };
 
-  output.botLabel = "PROSYNC";
+  output.botLabel = "PRIME";
   output.automations = normalizeAutomations(source.automations);
+  output.disponibilites = normalizeDisponibilites(source);
 
   output.staffRoleIds = uniqIds(output.staffRoleIds);
   output.playerRoleIds = uniqIds(output.playerRoleIds);
@@ -365,6 +494,19 @@ function normalizeGuild(config) {
   output.checkDispoChannelId = normalizeOptionalId(
     source.checkDispoChannelId
   );
+
+  const principal = output.disponibilites[0] || null;
+
+  if (principal) {
+    output.disposChannelId = principal.disposChannelId;
+    output.checkDispoChannelId = principal.checkDispoChannelId;
+    output.staffReportsChannelId = principal.reportChannelId;
+    output.playerRoleIds = [...principal.playerRoleIds];
+    output.dispoMessageIds = [...principal.dispoMessageIds];
+    output.automations.checkDispo = principal.automations.checkDispo;
+    output.automations.rappel = principal.automations.rappel;
+    output.automations.avertissement = principal.automations.avertissement;
+  }
 
   return output;
 }
@@ -416,7 +558,7 @@ function upsertGuildConfig(guildId, patch) {
     ...current,
     ...source,
 
-    botLabel: "PROSYNC",
+    botLabel: "PRIME",
 
     staffRoleIds: Array.isArray(source.staffRoleIds)
       ? source.staffRoleIds
@@ -435,6 +577,12 @@ function upsertGuildConfig(guildId, patch) {
     dispoMessageIds: Array.isArray(source.dispoMessageIds)
       ? source.dispoMessageIds
       : current.dispoMessageIds,
+
+    disponibilites: Array.isArray(source.disponibilites)
+      ? source.disponibilites
+      : Array.isArray(source.availabilities)
+        ? source.availabilities
+        : current.disponibilites,
 
     automations: mergedAutomations,
   });
@@ -512,4 +660,6 @@ module.exports = {
   exportAllConfig,
   importAllConfig,
   resetGuildConfig,
+
+  normalizeDisponibilite,
 };
