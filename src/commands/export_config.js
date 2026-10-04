@@ -1,5 +1,5 @@
 // src/commands/export_config.js
-// Export complet de la configuration PROSYNC
+// Export complet de la configuration PRIME
 // CommonJS — discord.js v14
 
 const {
@@ -53,7 +53,7 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("export_config")
     .setDescription(
-      "Exporter la configuration PROSYNC complète."
+      "Exporter la configuration PRIME complète."
     )
     .setDefaultMemberPermissions(0n),
 
@@ -79,7 +79,7 @@ module.exports = {
       const data = exportAllConfig();
       const json = JSON.stringify(data, null, 2);
 
-      const filename = `prosync_servers_${stamp()}.json`;
+      const filename = `prime_servers_${stamp()}.json`;
 
       const attachment = new AttachmentBuilder(
         Buffer.from(json, "utf8"),
@@ -101,7 +101,7 @@ module.exports = {
 
       return interaction.reply({
         content:
-          `✅ Export PROSYNC effectué.\n` +
+          `✅ Export PRIME effectué.\n` +
           `Fichier : \`${filename}\`\n` +
           `Chemin interne : \`${CONFIG_PATH}\`\n` +
           `Serveurs exportés : **${guildCount}**\n\n` +
@@ -120,7 +120,7 @@ module.exports = {
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
-      console.error("[PROSYNC][EXPORT_CONFIG]", error);
+      console.error("[PRIME][EXPORT_CONFIG]", error);
 
       try {
         if (interaction.deferred) {
