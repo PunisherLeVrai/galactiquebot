@@ -1,5 +1,5 @@
 // src/index.js
-// PROSYNC — Bot Discord multi-serveur de gestion Club Pro
+// PRIME — Bot Discord multi-serveur de gestion Club Pro
 // CommonJS — discord.js v14
 
 require("dotenv").config();
@@ -22,7 +22,7 @@ const { ensureGlobalSetupListener } = require("./commands/setup");
 const TOKEN = process.env.TOKEN;
 
 if (!TOKEN) {
-  console.error("[PROSYNC] TOKEN manquant.");
+  console.error("[PRIME] TOKEN manquant.");
   process.exit(1);
 }
 
@@ -50,7 +50,7 @@ client.commands = new Collection();
 const cmdDir = path.join(__dirname, "commands");
 
 if (!fs.existsSync(cmdDir)) {
-  console.warn("[PROSYNC] Dossier src/commands introuvable.");
+  console.warn("[PRIME] Dossier src/commands introuvable.");
 } else {
   const files = fs.readdirSync(cmdDir).filter((file) => file.endsWith(".js"));
 
@@ -59,14 +59,14 @@ if (!fs.existsSync(cmdDir)) {
       const command = require(path.join(cmdDir, file));
 
       if (!command?.data?.name || typeof command.execute !== "function") {
-        console.warn(`[PROSYNC][CMD_SKIP] ${file}`);
+        console.warn(`[PRIME][CMD_SKIP] ${file}`);
         continue;
       }
 
       client.commands.set(command.data.name, command);
-      console.log(`[PROSYNC][CMD] /${command.data.name}`);
+      console.log(`[PRIME][CMD] /${command.data.name}`);
     } catch (error) {
-      console.error(`[PROSYNC][CMD_LOAD_ERROR] ${file}`, error);
+      console.error(`[PRIME][CMD_LOAD_ERROR] ${file}`, error);
     }
   }
 }
@@ -75,13 +75,13 @@ if (!fs.existsSync(cmdDir)) {
 // Ready
 // --------------------------------------------------
 client.once(Events.ClientReady, () => {
-  console.log(`[PROSYNC] Connecté : ${client.user.tag}`);
+  console.log(`[PRIME] Connecté : ${client.user.tag}`);
 
   try {
     ensureGlobalSetupListener(client);
-    console.log("[PROSYNC][SETUP] Listener global prêt.");
+    console.log("[PRIME][SETUP] Listener global prêt.");
   } catch (error) {
-    console.error("[PROSYNC][SETUP] Installation du listener impossible.", error);
+    console.error("[PRIME][SETUP] Installation du listener impossible.", error);
   }
 
   try {
@@ -96,10 +96,10 @@ client.once(Events.ClientReady, () => {
     });
 
     console.log(
-      "[PROSYNC][AUTO] Runner démarré : pseudo, check_dispo, rappel_dispo, avertissement."
+      "[PRIME][AUTO] Runner démarré : pseudo, check_dispo, rappel_dispo, avertissement."
     );
   } catch (error) {
-    console.error("[PROSYNC][AUTO] Démarrage du runner impossible.", error);
+    console.error("[PRIME][AUTO] Démarrage du runner impossible.", error);
   }
 });
 
@@ -127,7 +127,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     await command.execute(interaction, client);
   } catch (error) {
-    console.error("[PROSYNC][INTERACTION_ERROR]", error);
+    console.error("[PRIME][INTERACTION_ERROR]", error);
 
     try {
       if (interaction.deferred) {
