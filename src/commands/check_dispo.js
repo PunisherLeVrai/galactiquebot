@@ -146,6 +146,37 @@ function resolveDispoChannelId(cfg) {
   return v ? String(v) : null;
 }
 
+
+function resolveSystemConfig(config, systemId) {
+  if (!systemId) return config;
+
+  const system =
+    Array.isArray(config?.disponibilites)
+      ? config.disponibilites.find(
+          (item) => item.id === systemId
+        )
+      : null;
+
+  if (!system) return null;
+
+  return {
+    ...config,
+    disposChannelId: system.disposChannelId,
+    checkDispoChannelId:
+      system.checkDispoChannelId ||
+      system.disposChannelId,
+    staffReportsChannelId: system.reportChannelId,
+    playerRoleIds: system.playerRoleIds,
+    dispoMessageIds: system.dispoMessageIds,
+    automations: {
+      ...config.automations,
+      checkDispo: system.automations?.checkDispo,
+      rappel: system.automations?.rappel,
+      avertissement: system.automations?.avertissement,
+    },
+  };
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("check_dispo")
@@ -165,13 +196,36 @@ module.exports = {
           { name: "Dimanche", value: 6 }
         )
     )
+    .addStringOption((opt) =>
+      opt
+        .setName("systeme")
+        .setDescription("ID du système de disponibilités (ex: equipe1)")
+        .setRequired(false)
+    )
     .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
     try {
       if (!interaction.inGuild()) return interaction.reply("⛔");
 
-      const cfg = getGuildConfig(interaction.guildId) || {};
+      const baseConfig =
+        getGuildConfig(interaction.guildId) || {};
+
+      const systemId =
+        interaction.options.getString("systeme");
+
+      const cfg =
+        resolveSystemConfig(
+          baseConfig,
+          systemId
+        );
+
+      if (!cfg) {
+        return interaction.reply({
+          content: `❌ Système de disponibilités introuvable : \`${systemId}\`.`,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
 
       if (!isStaff(interaction.member, cfg)) {
         return interaction.reply("⛔ Accès réservé au STAFF.");
@@ -217,7 +271,7 @@ module.exports = {
             `Joueurs (pour 'Sans réaction') : **${playerIds.size}**\n\n` +
             `⚠️ ID du message non configuré pour ce jour.`
           )
-          .setFooter({ text: "PROSYNC" });
+          .setFooter({ text: "PRIME" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
@@ -233,7 +287,7 @@ module.exports = {
             `Joueurs (pour 'Sans réaction') : **${playerIds.size}**\n\n` +
             `⚠️ Message introuvable.`
           )
-          .setFooter({ text: "PROSYNC" });
+          .setFooter({ text: "PRIME" });
 
         return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
       }
@@ -254,7 +308,7 @@ module.exports = {
             `🚫 **Impossible de lire les réactions.**\n` +
             `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
           )
-          .setFooter({ text: "PROSYNC" });
+          .setFooter({ text: "PRIME" });
 
         return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
       }
@@ -287,7 +341,7 @@ module.exports = {
           { name: `🟥 ❌ Absents (tous) (${noAll.length})`, value: mentionList(noAll, { max: 60 }) },
           { name: `🟦 ⏳ Sans réaction (Joueurs) (${missingPlayers.length})`, value: mentionList(missingPlayers, { max: 60 }) }
         )
-        .setFooter({ text: "PROSYNC" });
+        .setFooter({ text: "PRIME" });
 
       return interaction.editReply({ content: "✅ Terminé.", embeds: [embed] });
     } catch {
