@@ -46,6 +46,37 @@ function clampText(s, max = 1900) {
   return t.slice(0, max);
 }
 
+
+function resolveSystemConfig(config, systemId) {
+  if (!systemId) return config;
+
+  const system =
+    Array.isArray(config?.disponibilites)
+      ? config.disponibilites.find(
+          (item) => item.id === systemId
+        )
+      : null;
+
+  if (!system) return null;
+
+  return {
+    ...config,
+    disposChannelId: system.disposChannelId,
+    checkDispoChannelId:
+      system.checkDispoChannelId ||
+      system.disposChannelId,
+    staffReportsChannelId: system.reportChannelId,
+    playerRoleIds: system.playerRoleIds,
+    dispoMessageIds: system.dispoMessageIds,
+    automations: {
+      ...config.automations,
+      checkDispo: system.automations?.checkDispo,
+      rappel: system.automations?.rappel,
+      avertissement: system.automations?.avertissement,
+    },
+  };
+}
+
 module.exports.data = new SlashCommandBuilder()
   .setName("create_dispo")
   .setDescription("STAFF: Créer 1..7 messages Dispo (Lun..Dim) dans un salon (sans sauvegarde).")
@@ -157,7 +188,13 @@ module.exports.data = new SlashCommandBuilder()
       .setDescription("Image pour Dimanche (optionnelle)")
       .setRequired(false)
   )
-  .setDefaultMemberPermissions(0n);
+  .addStringOption((opt) =>
+      opt
+        .setName("systeme")
+        .setDescription("ID du système de disponibilités (ex: equipe1)")
+        .setRequired(false)
+    )
+    .setDefaultMemberPermissions(0n);
 
 module.exports.execute = async function execute(interaction) {
   try {
@@ -167,7 +204,24 @@ module.exports.execute = async function execute(interaction) {
 
     const guild = interaction.guild;
     const guildId = guild.id;
-    const cfg = getGuildConfig(guildId) || {};
+    const baseConfig =
+      getGuildConfig(guildId) || {};
+
+    const systemId =
+      interaction.options.getString("systeme");
+
+    const cfg =
+      resolveSystemConfig(
+        baseConfig,
+        systemId
+      );
+
+    if (!cfg) {
+      return interaction.reply({
+        content: `❌ Système de disponibilités introuvable : \`${systemId}\`.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
 
     if (!isStaff(interaction.member, cfg)) {
       return interaction
