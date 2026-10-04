@@ -1,5 +1,5 @@
 // src/commands/cleanup_servers.js
-// PROSYNC — nettoyage des données des serveurs quittés
+// PRIME — nettoyage des données des serveurs quittés
 //
 // Compare :
 // - les serveurs actuellement accessibles par le bot
@@ -75,7 +75,7 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("cleanup_servers")
     .setDescription(
-      "PROSYNC : nettoyer les données des serveurs où le bot n'est plus présent."
+      "PRIME : nettoyer les données des serveurs où le bot n'est plus présent."
     )
     .addStringOption((option) =>
       option
@@ -196,7 +196,7 @@ module.exports = {
 
       if (!allOrphanIds.length) {
         const embed = new EmbedBuilder()
-          .setTitle("🧹 PROSYNC — Nettoyage serveurs")
+          .setTitle("🧹 PRIME — Nettoyage serveurs")
           .setColor(0x57f287)
           .setDescription(
             "✅ Aucune donnée orpheline détectée."
@@ -219,7 +219,7 @@ module.exports = {
             }
           )
           .setFooter({
-            text: "PROSYNC",
+            text: "PRIME",
           })
           .setTimestamp();
 
@@ -234,11 +234,11 @@ module.exports = {
 
       if (mode === "scan") {
         const embed = new EmbedBuilder()
-          .setTitle("🔍 PROSYNC — Scan serveurs")
+          .setTitle("🔍 PRIME — Scan serveurs")
           .setColor(0xfee75c)
           .setDescription(
             [
-              `Serveurs actuellement accessibles par PROSYNC : **${activeGuildIds.size}**`,
+              `Serveurs actuellement accessibles par PRIME : **${activeGuildIds.size}**`,
               "",
               `Données orphelines détectées : **${allOrphanIds.length} serveur(s)**`,
               "",
@@ -265,7 +265,7 @@ module.exports = {
           )
           .setFooter({
             text:
-              "PROSYNC — utilise /cleanup_servers mode:Nettoyer pour confirmer",
+              "PRIME — utilise /cleanup_servers mode:Nettoyer pour confirmer",
           })
           .setTimestamp();
 
@@ -297,7 +297,7 @@ module.exports = {
           }
         } catch (error) {
           console.error(
-            `[PROSYNC][CLEANUP][CONFIG] ${guildId}`,
+            `[PRIME][CLEANUP][CONFIG] ${guildId}`,
             error
           );
 
@@ -318,7 +318,7 @@ module.exports = {
           }
         } catch (error) {
           console.error(
-            `[PROSYNC][CLEANUP][PSEUDOS] ${guildId}`,
+            `[PRIME][CLEANUP][PSEUDOS] ${guildId}`,
             error
           );
 
@@ -335,7 +335,7 @@ module.exports = {
         pseudoFailed.length;
 
       const embed = new EmbedBuilder()
-        .setTitle("🧹 PROSYNC — Nettoyage terminé")
+        .setTitle("🧹 PRIME — Nettoyage terminé")
         .setColor(
           totalFailures > 0
             ? 0xfee75c
@@ -371,7 +371,7 @@ module.exports = {
           }
         )
         .setFooter({
-          text: "PROSYNC",
+          text: "PRIME",
         })
         .setTimestamp();
 
@@ -404,7 +404,7 @@ module.exports = {
       }
 
       console.log(
-        `[PROSYNC][CLEANUP] Config=${configRemoved}, Pseudos=${pseudoRemoved}, Erreurs=${totalFailures}`
+        `[PRIME][CLEANUP] Config=${configRemoved}, Pseudos=${pseudoRemoved}, Erreurs=${totalFailures}`
       );
 
       return interaction.editReply({
@@ -412,7 +412,7 @@ module.exports = {
       });
     } catch (error) {
       console.error(
-        "[PROSYNC][CLEANUP_SERVERS]",
+        "[PRIME][CLEANUP_SERVERS]",
         error
       );
 
