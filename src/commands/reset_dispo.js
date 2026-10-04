@@ -99,6 +99,37 @@ async function ensureReacts(message) {
   await message.react("❌");
 }
 
+
+function resolveSystemConfig(config, systemId) {
+  if (!systemId) return config;
+
+  const system =
+    Array.isArray(config?.disponibilites)
+      ? config.disponibilites.find(
+          (item) => item.id === systemId
+        )
+      : null;
+
+  if (!system) return null;
+
+  return {
+    ...config,
+    disposChannelId: system.disposChannelId,
+    checkDispoChannelId:
+      system.checkDispoChannelId ||
+      system.disposChannelId,
+    staffReportsChannelId: system.reportChannelId,
+    playerRoleIds: system.playerRoleIds,
+    dispoMessageIds: system.dispoMessageIds,
+    automations: {
+      ...config.automations,
+      checkDispo: system.automations?.checkDispo,
+      rappel: system.automations?.rappel,
+      avertissement: system.automations?.avertissement,
+    },
+  };
+}
+
 module.exports.data = new SlashCommandBuilder()
   .setName("reset_dispo")
   .setDescription("Remet les réactions ✅❌ sur les messages de dispo (IDs /setup).")
@@ -118,7 +149,13 @@ module.exports.data = new SlashCommandBuilder()
         { name: "Dim", value: "Dim" }
       )
   )
-  .setDefaultMemberPermissions(0n);
+  .addStringOption((opt) =>
+      opt
+        .setName("systeme")
+        .setDescription("ID du système de disponibilités (ex: equipe1)")
+        .setRequired(false)
+    )
+    .setDefaultMemberPermissions(0n);
 
 module.exports.execute = async function execute(interaction) {
   try {
@@ -127,7 +164,24 @@ module.exports.execute = async function execute(interaction) {
     }
 
     const guild = interaction.guild;
-    const cfg = getGuildConfig(guild.id) || {};
+    const baseConfig =
+      getGuildConfig(guild.id) || {};
+
+    const systemId =
+      interaction.options.getString("systeme");
+
+    const cfg =
+      resolveSystemConfig(
+        baseConfig,
+        systemId
+      );
+
+    if (!cfg) {
+      return interaction.reply({
+        content: `❌ Système de disponibilités introuvable : \`${systemId}\`.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
 
     if (!isStaff(interaction.member, cfg)) {
       return interaction
