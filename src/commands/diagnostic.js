@@ -1,5 +1,5 @@
 // src/commands/diagnostic.js
-// PROSYNC — Diagnostic complet du serveur
+// PRIME — Diagnostic complet du serveur
 //
 // Vérifie :
 // - configuration générale
@@ -332,7 +332,7 @@ async function inspectRole(
       level: "error",
       label,
       detail:
-        `${formatRole(role)} — PROSYNC ne peut pas gérer ce rôle.\n` +
+        `${formatRole(role)} — PRIME ne peut pas gérer ce rôle.\n` +
         "Place le rôle du bot au-dessus de ce rôle dans la hiérarchie Discord.",
     };
   }
@@ -469,7 +469,7 @@ module.exports = {
     new SlashCommandBuilder()
       .setName("diagnostic")
       .setDescription(
-        "PROSYNC : vérifier la configuration et détecter les problèmes."
+        "PRIME : vérifier la configuration et détecter les problèmes."
       )
       .setDefaultMemberPermissions(
         PermissionFlagsBits.Administrator
@@ -497,7 +497,7 @@ module.exports = {
       if (!config) {
         return interaction.reply({
           content:
-            "❌ Aucune configuration PROSYNC trouvée pour ce serveur. Lance `/setup`.",
+            "❌ Aucune configuration PRIME trouvée pour ce serveur. Lance `/setup`.",
           flags:
             MessageFlags.Ephemeral,
         });
@@ -544,7 +544,7 @@ module.exports = {
           checks,
           "error",
           "Bot Discord",
-          "Impossible de récupérer PROSYNC comme membre du serveur."
+          "Impossible de récupérer PRIME comme membre du serveur."
         );
       } else {
         addCheck(
@@ -969,7 +969,7 @@ module.exports = {
             checks,
             "error",
             "Hiérarchie des rôles",
-            `Le rôle PROSYNC doit être placé au-dessus de :\n${problematic
+            `Le rôle PRIME doit être placé au-dessus de :\n${problematic
               .map(
                 (role) =>
                   `• ${formatRole(role)}`
@@ -1320,7 +1320,7 @@ module.exports = {
           checks,
           "warning",
           "Nicknames non modifiables",
-          `PROSYNC ne peut pas modifier **${unmanageable.size}** joueur(s), généralement à cause de la hiérarchie des rôles.\n${unmanageable
+          `PRIME ne peut pas modifier **${unmanageable.size}** joueur(s), généralement à cause de la hiérarchie des rôles.\n${unmanageable
             .map(
               (member) =>
                 `<@${member.id}>`
@@ -1333,7 +1333,7 @@ module.exports = {
           checks,
           "ok",
           "Nicknames modifiables",
-          "Tous les joueurs détectés peuvent être gérés par PROSYNC."
+          "Tous les joueurs détectés peuvent être gérés par PRIME."
         );
       }
 
@@ -1355,7 +1355,7 @@ module.exports = {
       const summaryEmbed =
         new EmbedBuilder()
           .setTitle(
-            "🩺 PROSYNC — Diagnostic"
+            "🩺 PRIME — Diagnostic"
           )
           .setColor(
             getStatusColor(
@@ -1371,7 +1371,7 @@ module.exports = {
               `${STATUS.info} Informations : **${counts.info}**`
           )
           .setFooter({
-            text: "PROSYNC",
+            text: "PRIME",
           })
           .setTimestamp();
 
@@ -1423,7 +1423,7 @@ module.exports = {
                 )
             )
             .setFooter({
-              text: "PROSYNC",
+              text: "PRIME",
             });
 
         embeds.push(
@@ -1452,7 +1452,7 @@ module.exports = {
                 )
             )
             .setFooter({
-              text: "PROSYNC",
+              text: "PRIME",
             });
 
         embeds.push(
@@ -1481,7 +1481,7 @@ module.exports = {
                 )
             )
             .setFooter({
-              text: "PROSYNC",
+              text: "PRIME",
             });
 
         embeds.push(
@@ -1498,7 +1498,7 @@ module.exports = {
       });
     } catch (error) {
       console.error(
-        "[PROSYNC][DIAGNOSTIC]",
+        "[PRIME][DIAGNOSTIC]",
         error
       );
 
@@ -1509,7 +1509,7 @@ module.exports = {
           await interaction
             .editReply({
               content:
-                "⚠️ Erreur pendant le diagnostic PROSYNC.",
+                "⚠️ Erreur pendant le diagnostic PRIME.",
             })
             .catch(() => {});
         } else if (
@@ -1518,7 +1518,7 @@ module.exports = {
           await interaction
             .reply({
               content:
-                "⚠️ Erreur pendant le diagnostic PROSYNC.",
+                "⚠️ Erreur pendant le diagnostic PRIME.",
               flags:
                 MessageFlags.Ephemeral,
             })
