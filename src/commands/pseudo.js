@@ -130,7 +130,7 @@ module.exports = {
           `🚫 Non modifiables : **${result.notManageable}**`,
       });
     } catch (error) {
-      console.error("[PROSYNC][PSEUDO_COMMAND]", error);
+      console.error("[PRIME][PSEUDO_COMMAND]", error);
 
       try {
         if (interaction.deferred || interaction.replied) {
