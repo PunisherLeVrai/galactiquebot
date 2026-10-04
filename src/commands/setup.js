@@ -1,5 +1,5 @@
 // src/commands/setup.js
-// Setup PROSYNC — multi-serveur — STAFF ONLY
+// Setup PRIME — multi-serveur — STAFF ONLY
 // CommonJS — discord.js v14
 
 const {
@@ -271,7 +271,7 @@ function buildEmbed(guild, draft, page, dirty) {
   );
 
   return new EmbedBuilder()
-    .setTitle(`⚙️ PROSYNC Setup — ${guild.name}`)
+    .setTitle(`⚙️ PRIME Setup — ${guild.name}`)
     .setColor(0x1d4ed8)
     .setDescription(
       `${
@@ -389,7 +389,7 @@ function buildEmbed(guild, draft, page, dirty) {
       }
     )
     .setFooter({
-      text: "PROSYNC",
+      text: "PRIME",
     });
 }
 
@@ -439,7 +439,7 @@ function idsModal(customId, days, ids, title) {
 function confirmModal(customId) {
   return new ModalBuilder()
     .setCustomId(customId)
-    .setTitle("Confirmation PROSYNC")
+    .setTitle("Confirmation PRIME")
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
@@ -532,7 +532,7 @@ function ensureGlobalSetupListener(client) {
         await session.handle(interaction);
       } catch (error) {
         console.error(
-          "[PROSYNC][SETUP_LISTENER]",
+          "[PRIME][SETUP_LISTENER]",
           error
         );
       }
@@ -547,7 +547,7 @@ module.exports.data =
   new SlashCommandBuilder()
     .setName("setup")
     .setDescription(
-      "Configurer PROSYNC : salons, rôles, pseudos, IDs et automations."
+      "Configurer PRIME : salons, rôles, pseudos, IDs et automations."
     )
     .setDefaultMemberPermissions(0n);
 
@@ -1375,7 +1375,7 @@ module.exports.execute =
           upsertGuildConfig(
             interaction.guildId,
             {
-              botLabel: "PROSYNC",
+              botLabel: "PRIME",
 
               disposChannelId:
                 draft.disposChannelId,
@@ -1455,7 +1455,7 @@ module.exports.execute =
 
           await i.reply({
             content:
-              "💾 Configuration PROSYNC sauvegardée.",
+              "💾 Configuration PRIME sauvegardée.",
             flags:
               MessageFlags.Ephemeral,
           });
