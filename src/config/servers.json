@@ -1,8 +1,8 @@
 {
-  "version": 4,
+  "version": 5,
   "guilds": {
     "1410246320324870217": {
-      "botLabel": "PROSYNC",
+      "botLabel": "PRIME",
       "disposChannelId": "1535202479216660581",
       "staffReportsChannelId": "1448731756478857337",
       "pseudoScanChannelId": null,
@@ -63,7 +63,7 @@
       "staffRoleId": "1414648635437617263"
     },
     "1532480277149126948": {
-      "botLabel": "PROSYNC",
+      "botLabel": "PRIME",
       "disposChannelId": "1532480277589266472",
       "staffReportsChannelId": "1532480277161705589",
       "pseudoScanChannelId": "1532486149099229344",
