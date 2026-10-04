@@ -1,5 +1,5 @@
 // src/automations/runner.js
-// Runner des automations PROSYNC — CommonJS
+// Runner des automations PRIME — CommonJS
 //
 // PSEUDO :
 // - rescane obligatoirement le salon pseudo avant synchronisation
@@ -348,13 +348,13 @@ async function applyPseudoMessage(message) {
       try {
         await member.setNickname(
           nickname,
-          "PROSYNC — pseudo validé"
+          "PRIME — pseudo validé"
         );
       } catch (error) {
         nicknameApplied = false;
 
         console.error(
-          `[PROSYNC][PSEUDO_CHANNEL] Nickname impossible pour ${message.author.tag}:`,
+          `[PRIME][PSEUDO_CHANNEL] Nickname impossible pour ${message.author.tag}:`,
           error?.message || error
         );
       }
@@ -385,7 +385,7 @@ function ensurePseudoChannelListener(client) {
         await applyPseudoMessage(message);
       } catch (error) {
         console.error(
-          "[PROSYNC][PSEUDO_CHANNEL]",
+          "[PRIME][PSEUDO_CHANNEL]",
           error
         );
       }
@@ -492,13 +492,13 @@ async function runPseudoForGuild(
     try {
       await member.setNickname(
         nickname,
-        "PROSYNC — synchronisation pseudo"
+        "PRIME — synchronisation pseudo"
       );
 
       okCount++;
     } catch (error) {
       console.error(
-        `[PROSYNC][PSEUDO_AUTO] ${member.user?.tag || member.id}:`,
+        `[PRIME][PSEUDO_AUTO] ${member.user?.tag || member.id}:`,
         error?.message || error
       );
 
@@ -909,7 +909,7 @@ async function runCheckDispoForGuild(
       )
       .setColor(0xed4245)
       .setFooter({
-        text: "PROSYNC",
+        text: "PRIME",
       });
 
   if (!result.ok) {
@@ -1158,7 +1158,7 @@ async function runAvertissementForGuild(
               (index) =>
                 warningRoleIds[index]
             ),
-            `PROSYNC — disponibilité renseignée (${result.dayLabel})`
+            `PRIME — disponibilité renseignée (${result.dayLabel})`
           );
 
           regularizedIds.push(member.id);
@@ -1195,7 +1195,7 @@ async function runAvertissementForGuild(
           if (lowerRoles.length) {
             await member.roles.remove(
               lowerRoles,
-              "PROSYNC — nettoyage anciens niveaux"
+              "PRIME — nettoyage anciens niveaux"
             );
           }
 
@@ -1207,13 +1207,13 @@ async function runAvertissementForGuild(
                 (index) =>
                   warningRoleIds[index]
               ),
-              `PROSYNC — montée niveau ${targetLevel + 1}`
+              `PRIME — montée niveau ${targetLevel + 1}`
             );
           }
 
           await member.roles.add(
             warningRoleIds[targetLevel],
-            `PROSYNC — disponibilité non renseignée (${result.dayLabel})`
+            `PRIME — disponibilité non renseignée (${result.dayLabel})`
           );
 
           levelAddedIds[targetLevel].push(
@@ -1231,19 +1231,52 @@ async function runAvertissementForGuild(
   }
 
   const {
+    getGuildConfig,
     upsertGuildConfig,
   } = require("../core/guildConfig");
 
-  upsertGuildConfig(
-    guild.id,
-    {
-      automations: {
-        avertissement: {
-          lastProcessedDate: today,
+  if (config?._dispoId) {
+    const currentGuildConfig =
+      getGuildConfig(guild.id);
+
+    const disponibilites =
+      Array.isArray(currentGuildConfig?.disponibilites)
+        ? currentGuildConfig.disponibilites.map((dispo) => {
+            if (dispo.id !== config._dispoId) {
+              return dispo;
+            }
+
+            return {
+              ...dispo,
+              automations: {
+                ...dispo.automations,
+                avertissement: {
+                  ...dispo.automations?.avertissement,
+                  lastProcessedDate: today,
+                },
+              },
+            };
+          })
+        : [];
+
+    upsertGuildConfig(
+      guild.id,
+      {
+        disponibilites,
+      }
+    );
+  } else {
+    upsertGuildConfig(
+      guild.id,
+      {
+        automations: {
+          avertissement: {
+            lastProcessedDate: today,
+          },
         },
-      },
-    }
-  );
+      }
+    );
+  }
 
   const reportChannel =
     config?.staffReportsChannelId
@@ -1323,7 +1356,7 @@ async function runAvertissementForGuild(
         }
       )
       .setFooter({
-        text: "PROSYNC",
+        text: "PRIME",
       });
 
     await reportChannel
@@ -1466,114 +1499,161 @@ function startAutomationRunner(
           }
         }
 
-        for (const [
-          name,
-          enabled,
-          times,
-          runner,
-        ] of [
-          [
-            "check",
-            config.automations.checkDispo?.enabled,
-            config.automations.checkDispo?.times,
-            runCheckDispoForGuild,
-          ],
-          [
-            "rappel",
-            config.automations.rappel?.enabled,
-            config.automations.rappel?.times,
-            runRappelDispoForGuild,
-          ],
-        ]) {
-          if (!enabled) continue;
+        const disponibilites =
+          Array.isArray(config.disponibilites) &&
+          config.disponibilites.length
+            ? config.disponibilites
+            : [];
 
-          for (const time of Array.isArray(times) ? times : []) {
-            const parsed =
-              parseHHMM(time);
+        for (const dispo of disponibilites) {
+          const dispoConfig = {
+            ...config,
+            _dispoId: dispo.id,
+            disposChannelId: dispo.disposChannelId,
+            checkDispoChannelId:
+              dispo.checkDispoChannelId ||
+              dispo.disposChannelId,
+            staffReportsChannelId:
+              dispo.reportChannelId,
+            playerRoleIds:
+              Array.isArray(dispo.playerRoleIds)
+                ? dispo.playerRoleIds
+                : [],
+            dispoMessageIds:
+              Array.isArray(dispo.dispoMessageIds)
+                ? dispo.dispoMessageIds
+                : [],
+            automations: {
+              ...config.automations,
+              checkDispo:
+                dispo.automations?.checkDispo || {
+                  enabled: false,
+                  times: [],
+                },
+              rappel:
+                dispo.automations?.rappel || {
+                  enabled: false,
+                  times: [],
+                },
+              avertissement:
+                dispo.automations?.avertissement || {
+                  enabled: false,
+                  roleIds: [null, null, null],
+                  roleId: null,
+                  lastProcessedDate: null,
+                },
+            },
+          };
 
-            if (
-              !parsed ||
-              parsed.hours !== now.getHours() ||
-              parsed.minutes !== now.getMinutes()
-            ) {
-              continue;
-            }
+          for (const [
+            name,
+            enabled,
+            times,
+            runner,
+          ] of [
+            [
+              "check",
+              dispoConfig.automations.checkDispo?.enabled,
+              dispoConfig.automations.checkDispo?.times,
+              runCheckDispoForGuild,
+            ],
+            [
+              "rappel",
+              dispoConfig.automations.rappel?.enabled,
+              dispoConfig.automations.rappel?.times,
+              runRappelDispoForGuild,
+            ],
+          ]) {
+            if (!enabled) continue;
 
-            const key =
-              `${guild.id}:${name}:${time}`;
+            for (const time of Array.isArray(times) ? times : []) {
+              const parsed =
+                parseHHMM(time);
 
-            if (
-              lastRun.get(key) !==
-              keyNow
-            ) {
-              lastRun.set(
-                key,
+              if (
+                !parsed ||
+                parsed.hours !== now.getHours() ||
+                parsed.minutes !== now.getMinutes()
+              ) {
+                continue;
+              }
+
+              const key =
+                `${guild.id}:${dispo.id}:${name}:${time}`;
+
+              if (
+                lastRun.get(key) !==
                 keyNow
-              );
+              ) {
+                lastRun.set(
+                  key,
+                  keyNow
+                );
 
-              await runner(
-                guild,
-                config
-              );
+                await runner(
+                  guild,
+                  dispoConfig
+                );
+              }
             }
           }
-        }
-
-        if (
-          config.automations.avertissement?.enabled
-        ) {
-          const times =
-            Array.isArray(
-              config.automations.checkDispo?.times
-            )
-              ? [
-                  ...config.automations.checkDispo.times,
-                ].sort(
-                  (a, b) =>
-                    String(a).localeCompare(
-                      String(b)
-                    )
-                )
-              : [];
-
-          const lastTime =
-            times.at(-1);
-
-          const parsed =
-            parseHHMM(lastTime);
 
           if (
-            parsed &&
-            parsed.hours === now.getHours() &&
-            parsed.minutes === now.getMinutes()
+            dispoConfig.automations.avertissement?.enabled
           ) {
-            const key =
-              `${guild.id}:avertissement:${lastTime}`;
+            const times =
+              Array.isArray(
+                dispoConfig.automations.checkDispo?.times
+              )
+                ? [
+                    ...dispoConfig.automations.checkDispo.times,
+                  ].sort(
+                    (a, b) =>
+                      String(a).localeCompare(
+                        String(b)
+                      )
+                  )
+                : [];
+
+            const lastTime =
+              times.at(-1);
+
+            const parsed =
+              parseHHMM(lastTime);
 
             if (
-              lastRun.get(key) !==
-              keyNow
+              parsed &&
+              parsed.hours === now.getHours() &&
+              parsed.minutes === now.getMinutes()
             ) {
-              lastRun.set(
-                key,
-                keyNow
-              );
+              const key =
+                `${guild.id}:${dispo.id}:avertissement:${lastTime}`;
 
-              await runAvertissementForGuild(
-                guild,
-                config,
-                {
-                  throttleMs:
-                    throttleMsAvertissement,
-                }
-              );
+              if (
+                lastRun.get(key) !==
+                keyNow
+              ) {
+                lastRun.set(
+                  key,
+                  keyNow
+                );
+
+                await runAvertissementForGuild(
+                  guild,
+                  dispoConfig,
+                  {
+                    throttleMs:
+                      throttleMsAvertissement,
+                  }
+                );
+              }
             }
           }
         }
       }
     } catch (error) {
       console.error(
-        "[PROSYNC][AUTOMATION_TICK]",
+        "[PRIME][AUTOMATION_TICK]",
         error
       );
     }
