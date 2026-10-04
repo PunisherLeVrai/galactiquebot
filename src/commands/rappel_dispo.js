@@ -185,6 +185,37 @@ function buildMessageLink(guildId, channelId, messageId) {
   return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
 }
 
+
+function resolveSystemConfig(config, systemId) {
+  if (!systemId) return config;
+
+  const system =
+    Array.isArray(config?.disponibilites)
+      ? config.disponibilites.find(
+          (item) => item.id === systemId
+        )
+      : null;
+
+  if (!system) return null;
+
+  return {
+    ...config,
+    disposChannelId: system.disposChannelId,
+    checkDispoChannelId:
+      system.checkDispoChannelId ||
+      system.disposChannelId,
+    staffReportsChannelId: system.reportChannelId,
+    playerRoleIds: system.playerRoleIds,
+    dispoMessageIds: system.dispoMessageIds,
+    automations: {
+      ...config.automations,
+      checkDispo: system.automations?.checkDispo,
+      rappel: system.automations?.rappel,
+      avertissement: system.automations?.avertissement,
+    },
+  };
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("rappel_dispo")
@@ -228,13 +259,36 @@ module.exports = {
         .setDescription("Message personnalisé (optionnel)")
         .setRequired(false)
     )
+    .addStringOption((opt) =>
+      opt
+        .setName("systeme")
+        .setDescription("ID du système de disponibilités (ex: equipe1)")
+        .setRequired(false)
+    )
     .setDefaultMemberPermissions(0n),
 
   async execute(interaction) {
     try {
       if (!interaction.inGuild()) return interaction.reply("⛔");
 
-      const cfg = getGuildConfig(interaction.guildId) || {};
+      const baseConfig =
+        getGuildConfig(interaction.guildId) || {};
+
+      const systemId =
+        interaction.options.getString("systeme");
+
+      const cfg =
+        resolveSystemConfig(
+          baseConfig,
+          systemId
+        );
+
+      if (!cfg) {
+        return interaction.reply({
+          content: `❌ Système de disponibilités introuvable : \`${systemId}\`.`,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
 
       // STAFF ONLY
       if (!isStaff(interaction.member, cfg)) {
@@ -301,7 +355,7 @@ module.exports = {
             `🚫 **Impossible de lire les réactions.**\n` +
             `Vérifie: **ViewChannel + ReadMessageHistory** sur ce salon, et l’intent **GuildMessageReactions**.`
           )
-          .setFooter({ text: "PROSYNC" });
+          .setFooter({ text: "PRIME" });
 
         return interaction.editReply({ content: "⚠️ Terminé (réactions indisponibles).", embeds: [embed] });
       }
@@ -385,7 +439,7 @@ module.exports = {
           { name: `🟦 Sans réaction (${missing.length})`, value: mentionList(missing) },
           { name: "Envoi", value: `Salon: **${salonSent ? "oui" : "non"}**\nMP: **${dmOk} ok / ${dmFail} échec**` }
         )
-        .setFooter({ text: "PROSYNC" });
+        .setFooter({ text: "PRIME" });
 
       return interaction.editReply({ content: "✅ Rappel envoyé.", embeds: [embed] });
 
