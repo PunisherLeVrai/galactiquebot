@@ -7,7 +7,8 @@
 // 1) pseudo enregistré depuis le salon pseudo
 // 2) sinon username Discord
 //
-// Tout le nickname est en MAJUSCULES.
+// Le pseudo conserve sa casse d’origine.
+// Les postes et le rôle restent en MAJUSCULES.
 
 const { getUserPseudos } = require("./pseudoStore");
 
@@ -299,10 +300,11 @@ function buildMemberLine(
   cfg
 ) {
   const pseudo =
-    upper(
+    cleanValue(
       pickBestPseudo(
         member
-      )
+      ),
+      40
     );
 
   const role =
