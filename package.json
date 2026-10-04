@@ -1,7 +1,7 @@
 {
-  "name": "prosync",
+  "name": "primebot",
   "version": "1.1.0",
-  "description": "PROSYNC — Bot Discord de gestion Club Pro",
+  "description": "PrimeBot — Bot Discord de gestion Club Pro",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
