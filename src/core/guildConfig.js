@@ -554,6 +554,89 @@ function upsertGuildConfig(guildId, patch) {
     },
   });
 
+  const hasExplicitDisponibilites =
+    Array.isArray(source.disponibilites) ||
+    Array.isArray(source.availabilities);
+
+  let mergedDisponibilites = hasExplicitDisponibilites
+    ? (Array.isArray(source.disponibilites)
+        ? source.disponibilites
+        : source.availabilities)
+    : current.disponibilites;
+
+  if (!hasExplicitDisponibilites) {
+    const hasPrincipalPatch =
+      Object.prototype.hasOwnProperty.call(source, "disposChannelId") ||
+      Object.prototype.hasOwnProperty.call(source, "checkDispoChannelId") ||
+      Object.prototype.hasOwnProperty.call(source, "staffReportsChannelId") ||
+      Object.prototype.hasOwnProperty.call(source, "playerRoleIds") ||
+      Object.prototype.hasOwnProperty.call(source, "dispoMessageIds") ||
+      source.automations?.checkDispo !== undefined ||
+      source.automations?.rappel !== undefined ||
+      source.automations?.avertissement !== undefined;
+
+    if (hasPrincipalPatch) {
+      const currentPrincipal =
+        current.disponibilites[0] ||
+        normalizeDisponibilite(
+          {
+            id: "principal",
+            nom: "Principal",
+          },
+          "principal"
+        );
+
+      const updatedPrincipal = normalizeDisponibilite(
+        {
+          ...currentPrincipal,
+
+          disposChannelId:
+            Object.prototype.hasOwnProperty.call(source, "disposChannelId")
+              ? source.disposChannelId
+              : currentPrincipal.disposChannelId,
+
+          checkDispoChannelId:
+            Object.prototype.hasOwnProperty.call(source, "checkDispoChannelId")
+              ? source.checkDispoChannelId
+              : currentPrincipal.checkDispoChannelId,
+
+          reportChannelId:
+            Object.prototype.hasOwnProperty.call(source, "staffReportsChannelId")
+              ? source.staffReportsChannelId
+              : currentPrincipal.reportChannelId,
+
+          playerRoleIds: Array.isArray(source.playerRoleIds)
+            ? source.playerRoleIds
+            : currentPrincipal.playerRoleIds,
+
+          dispoMessageIds: Array.isArray(source.dispoMessageIds)
+            ? source.dispoMessageIds
+            : currentPrincipal.dispoMessageIds,
+
+          automations: {
+            checkDispo: source.automations?.checkDispo !== undefined
+              ? mergedAutomations.checkDispo
+              : currentPrincipal.automations.checkDispo,
+
+            rappel: source.automations?.rappel !== undefined
+              ? mergedAutomations.rappel
+              : currentPrincipal.automations.rappel,
+
+            avertissement: source.automations?.avertissement !== undefined
+              ? mergedAutomations.avertissement
+              : currentPrincipal.automations.avertissement,
+          },
+        },
+        currentPrincipal.id || "principal"
+      );
+
+      mergedDisponibilites = [
+        updatedPrincipal,
+        ...current.disponibilites.slice(1),
+      ];
+    }
+  }
+
   const merged = normalizeGuild({
     ...current,
     ...source,
@@ -578,11 +661,7 @@ function upsertGuildConfig(guildId, patch) {
       ? source.dispoMessageIds
       : current.dispoMessageIds,
 
-    disponibilites: Array.isArray(source.disponibilites)
-      ? source.disponibilites
-      : Array.isArray(source.availabilities)
-        ? source.availabilities
-        : current.disponibilites,
+    disponibilites: mergedDisponibilites,
 
     automations: mergedAutomations,
   });
